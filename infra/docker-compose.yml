@@ -1,0 +1,125 @@
+# vLLM inference lanes for GX10 (GB10, unified memory).
+#   docker compose --profile coder up -d          # lane 8001
+#   docker compose --profile judge up -d          # lane 8003 (Gemma 4)
+#   docker compose --profile all up -d            # all lanes (~60 GB+ weights)
+
+x-vllm-common: &vllm-common
+  image: nvcr.io/nvidia/vllm:26.04-py3
+  restart: unless-stopped
+  ipc: host
+  shm_size: "16gb"
+  volumes:
+    - ${HF_HOME:-/home/maciek/vllm-models}:/models
+    # Reuse `hf auth login` token (avoids stale placeholder in .env)
+    - ${HF_CACHE_DIR:-/home/maciek/.cache/huggingface}:/root/.cache/huggingface
+  environment: &vllm-env
+    HF_HOME: /models
+    HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    HF_TOKEN: ${HF_TOKEN:-}
+    NVIDIA_VISIBLE_DEVICES: all
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  vllm-coder:
+    <<: *vllm-common
+    profiles: [coder, all]
+    ports:
+      - "8001:8000"
+    command:
+      - vllm
+      - serve
+      - QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --served-model-name
+      - qwen3-coder-30b
+      - --trust-remote-code
+      - --tensor-parallel-size
+      - "1"
+      - --max-model-len
+      - "65536"
+      - --gpu-memory-utilization
+      - "0.28"
+      - --enforce-eager
+      - --kv-cache-dtype
+      - fp8
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 600s
+
+  vllm-planner:
+    <<: *vllm-common
+    profiles: [all]
+    ports:
+      - "8002:8000"
+    command:
+      - vllm
+      - serve
+      - Qwen/Qwen3-14B
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --served-model-name
+      - qwen3-14b
+      - --trust-remote-code
+      - --tensor-parallel-size
+      - "1"
+      - --max-model-len
+      - "32768"
+      - --gpu-memory-utilization
+      - "0.28"
+      - --enforce-eager
+      - --kv-cache-dtype
+      - fp8
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 600s
+
+  vllm-judge:
+    <<: *vllm-common
+    # Gemma 4 Unified needs vLLM >=0.23; NGC 26.04 (0.19) is too old
+    image: vllm/vllm-openai:gemma4-unified
+    profiles: [judge, all]
+    ports:
+      - "8003:8000"
+    command:
+      - --model
+      - google/gemma-4-12B-it
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --served-model-name
+      - gemma-4-12b
+      - --trust-remote-code
+      - --tensor-parallel-size
+      - "1"
+      - --max-model-len
+      - "16384"
+      - --gpu-memory-utilization
+      - "0.28"
+      - --enforce-eager
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 600s

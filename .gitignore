@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+*.egg-info/
+dist/
+build/
+infra/logs/
+benchmarks/results/*.json
+*.log
+# Local GPU / suite run artifacts
+.*.out
+.full-suite-all-*.log
+.all-layers-*.log
+.trap-*.out
+*.sqlite
+*.db
+.cursor/
+.DS_Store
+Thumbs.db
+.coverage
+htmlcov/

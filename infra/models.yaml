@@ -1,0 +1,36 @@
+# Role → lane mapping. Served names must match OpenAI API `model` field.
+lanes:
+  coding:
+    port: 8001
+    base_url: http://127.0.0.1:8001/v1
+    # P0 baseline — AWQ MoE, ~16 GB weights
+    model_id: QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
+    served_name: qwen3-coder-30b
+    max_model_len: 65536
+    gpu_memory_utilization: 0.28
+    tool_call_parser: qwen3_coder
+    enable_auto_tool_choice: true
+    is_moe: true
+
+  planning:
+    port: 8002
+    base_url: http://127.0.0.1:8002/v1
+    model_id: Qwen/Qwen3-14B
+    served_name: qwen3-14b
+    max_model_len: 32768
+    gpu_memory_utilization: 0.28
+    is_moe: false
+
+  reviewing:
+    port: 8003
+    base_url: http://127.0.0.1:8003/v1
+    model_id: google/gemma-4-12B-it
+    served_name: gemma-4-12b
+    max_model_len: 16384
+    gpu_memory_utilization: 0.28
+    is_moe: false
+
+embeddings:
+  # TEI has no ARM64 image — use sentence-transformers sidecar (Phase 5) or CPU script
+  model_id: nomic-ai/nomic-embed-text-v1.5
+  port: 8080
