@@ -2,6 +2,7 @@
 name = "sprint-crew-v2"
 version = "0.1.0"
 description = "Sprint crew agents: Pydantic AI + LangGraph + vLLM"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
@@ -10,23 +11,22 @@ dependencies = [
     "pydantic-settings",
     "pydantic-ai[openai]",
     "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "aiosqlite",
     "openai",
     "httpx",
     "atlassian-python-api",
     "PyGithub",
-    "tiktoken",
-    "tree-sitter",
-    "tree-sitter-python",
-    "sqlite-vec",
-    "huggingface-hub",
-    "sentence-transformers",
+    "pyyaml",
+    "qdrant-client",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-asyncio",
-    "respx",
+    "pytest-timeout",
+    "ruff",
 ]
 
 [build-system]
@@ -37,8 +37,28 @@ build-backend = "hatchling.build"
 packages = ["src/sprint_crew"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
 markers = [
     "preflight: live vLLM model probes (opt-in PREFLIGHT_LIVE=1)",
-    "live_agent: single agent with mocked IO",
-    "live_e2e: full graph with mocked Jira/GitHub",
+    "agent_live: single-agent tests on fixture repo (opt-in VLLM_LIVE=1 for GPU agents)",
+    "integration_live: real Jira/GitHub (INTEGRATION_LIVE=1)",
+    "vllm_live: real vLLM lanes (VLLM_LIVE=1)",
+    "vector_live: live Qdrant + embed sidecar (VECTOR_LIVE=1)",
+    "vector_agent_live: full sprint cycle vector on/off A/B and from-prompt e2e (VECTOR_AGENT_LIVE=1 + VLLM_LIVE=1)",
+    "agent_capability: single-story sprint cycle benchmarks on vector fixtures",
+    "agent_integration: multi-story chained/from-prompt integration (vector)",
+    "agent_trap: adversarial fixtures — stdlib shadow, decoys (opt-in SOFT)",
+    "nightly: long-running GPU e2e gates (opt-in)",
 ]
+timeout = 1200
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501", "UP042", "UP047"]
