@@ -21,7 +21,9 @@ class ApplyPatchTool:
     def execute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult:
         assert isinstance(args, ApplyPatchArgs)
         root = workspace_root.resolve(strict=False)
-        with tempfile.NamedTemporaryFile("w", suffix=".patch", delete=False, encoding="utf-8") as fh:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".patch", delete=False, encoding="utf-8"
+        ) as fh:
             fh.write(args.patch)
             patch_path = fh.name
         try:
@@ -49,7 +51,9 @@ class ApplyPatchTool:
         out = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:
             return ToolResult(ok=False, output=out or "patch failed.", error="patch failed")
-        return ToolResult(ok=True, output=out or "Patch applied.", data={"returncode": proc.returncode})
+        return ToolResult(
+            ok=True, output=out or "Patch applied.", data={"returncode": proc.returncode}
+        )
 
 
 apply_patch_tool = ApplyPatchTool()

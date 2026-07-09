@@ -28,8 +28,7 @@ class Tool(Protocol):
     description: str
     args_schema: type[BaseModel]
 
-    def execute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult:
-        ...
+    def execute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult: ...
 
 
 class ToolRegistry:
@@ -50,7 +49,9 @@ class ToolRegistry:
         if not isinstance(tool.description, str) or not tool.description.strip():
             raise ValueError(f"Tool {tool.name!r}.description must be non-empty.")
         if not (isinstance(tool.args_schema, type) and issubclass(tool.args_schema, BaseModel)):
-            raise TypeError(f"Tool {tool.name!r}.args_schema must be a Pydantic BaseModel subclass.")
+            raise TypeError(
+                f"Tool {tool.name!r}.args_schema must be a Pydantic BaseModel subclass."
+            )
         if tool.name in self._tools:
             raise ValueError(f"Tool {tool.name!r} is already registered.")
         self._tools[tool.name] = tool

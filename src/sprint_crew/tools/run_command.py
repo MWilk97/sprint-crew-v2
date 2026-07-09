@@ -47,6 +47,8 @@ def _resolve_executable(argv0: str) -> str:
     if os.path.sep in argv0 or (os.path.altsep and os.path.altsep in argv0):
         raise ToolError(f"Executable must be a bare command name, got {argv0!r}.")
     resolved = shutil.which(argv0)
+    if resolved is None and argv0 == "python":
+        resolved = shutil.which("python3")
     if resolved is None:
         raise ToolError(f"Command not found on PATH: {argv0!r}.")
     return resolved
@@ -92,7 +94,11 @@ class RunCommandTool:
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            return ToolResult(ok=False, output=f"Command timed out after {_DEFAULT_TIMEOUT_SECONDS}s.", error="timeout")
+            return ToolResult(
+                ok=False,
+                output=f"Command timed out after {_DEFAULT_TIMEOUT_SECONDS}s.",
+                error="timeout",
+            )
 
         combined = (proc.stdout or "") + (proc.stderr or "")
         ok = proc.returncode == 0

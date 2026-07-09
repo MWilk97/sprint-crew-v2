@@ -1,0 +1,740 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+from sprint_crew.agents.coder import _normalize_change, run_coder_with_coverage
+from sprint_crew.agents.formatter import run_formatter
+from sprint_crew.agents.reviewer import run_reviewer
+from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated
+from sprint_crew.agents.tester import run_tester_loop, run_tester_reporter
+from sprint_crew.agents.tool_events import tool_call_events
+from sprint_crew.config import Role, get_settings
+from sprint_crew.graph.lanes import ensure_lane, stop_lane
+from sprint_crew.graph.state import SprintState
+from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
+from sprint_crew.orchestrator.merge_gate import review_accepted
+from sprint_crew.orchestrator.plan_coverage import (
+    PlanCoverageResult,
+    coverage_improved,
+    should_invoke_tester,
+)
+from sprint_crew.orchestrator.plan_validation import snapshot_baseline_paths
+from sprint_crew.orchestrator.retry import (
+    format_review_feedback,
+    resolve_failure_feedback,
+    resolve_retry_scope,
+)
+from sprint_crew.orchestrator.ship_cycle import orchestrator_ship
+from sprint_crew.orchestrator.template_plan import work_lane_required_for_ticket
+from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
+from sprint_crew.schemas.change import CodeChange, ReviewOutcome
+from sprint_crew.schemas.session import AgentEvent, SessionStatus
+from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
+from sprint_crew.vector.context import enrich_repo_context_with_hits, pre_search_agent_event
+from sprint_crew.vector.indexer import maybe_index_workspace
+
+
+def _event(agent: str, event_type: str, summary: str, **detail: Any) -> AgentEvent:
+    payload = detail or None
+    return AgentEvent(agent=agent, event_type=event_type, summary=summary, detail=payload)
+
+
+def _timed_detail(started: float, **extra: Any) -> dict[str, Any]:
+    return {"duration_ms": int((time.monotonic() - started) * 1000), **extra}
+
+
+def _ticket(state: SprintState) -> JiraTicket:
+    return JiraTicket.model_validate(state["selected_ticket"])
+
+
+def _task_plan(state: SprintState) -> TaskPlan:
+    return TaskPlan.model_validate(state["task_plan"])
+
+
+def _code_change(state: SprintState) -> CodeChange:
+    return CodeChange.model_validate(state["code_change"])
+
+
+def _workspace(state: SprintState) -> Path:
+    return Path(state["workspace_root"])
+
+
+def _coverage_satisfied(state: SprintState) -> bool:
+    coverage = state.get("plan_coverage")
+    if not isinstance(coverage, dict):
+        return True
+    return bool(coverage.get("satisfied", True))
+
+
+def _deadline_epoch(state: SprintState) -> float:
+    raw = state.get("deadline_epoch", 0.0)
+    try:
+        return float(raw or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _deadline_exceeded(state: SprintState) -> bool:
+    """True when a per-cycle wall-clock budget is set and already elapsed."""
+    deadline = _deadline_epoch(state)
+    return deadline > 0.0 and time.time() >= deadline
+
+
+def _in_backlog_batch(state: SprintState) -> bool:
+    return bool(state.get("backlog_run_id"))
+
+
+async def _stop_lane_after_cycle(state: SprintState, role: Role) -> None:
+    if _in_backlog_batch(state):
+        return
+    await stop_lane(role)
+
+
+async def init_session(state: SprintState) -> dict[str, Any]:
+    started = time.monotonic()
+    workspace = _workspace(state)
+    git_dir = workspace / ".git"
+    if not git_dir.exists():
+        raise ValueError(f"Workspace is not a git repo: {workspace}")
+    return {
+        "attempt": state.get("attempt", 0),
+        "status": SessionStatus.RUNNING,
+        "prior_review_feedback": state.get("prior_review_feedback", ""),
+        "plan_retries": state.get("plan_retries", 0),
+        "skip_tester_this_attempt": False,
+        "tests_run_this_cycle": False,
+        "events": [
+            _event(
+                "orchestrator",
+                "session_started",
+                f"Session {state['session_id']} started",
+                **_timed_detail(started),
+            ),
+        ],
+    }
+
+
+async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
+    started = time.monotonic()
+    ticket = _ticket(state)
+    workspace = _workspace(state)
+    session_id = state["session_id"]
+    baseline = frozenset(state.get("baseline_paths") or snapshot_baseline_paths(workspace))
+
+    index_result = await asyncio.to_thread(
+        maybe_index_workspace,
+        workspace,
+        session_id,
+        ticket=ticket,
+    )
+
+    work_lane_required = work_lane_required_for_ticket(ticket)
+
+    if work_lane_required:
+        await ensure_lane(Role.WORK)
+
+    events: list[AgentEvent] = []
+    plan_query = f"{ticket.summary}\n{ticket.description}"
+    _context_text, pre_hits = enrich_repo_context_with_hits(
+        workspace,
+        session_id,
+        plan_query,
+        ticket=ticket,
+    )
+    if pre_hits:
+        events.append(pre_search_agent_event(plan_query, pre_hits))
+    try:
+        plan, planning_mode, tech_lead_tool_log = await run_tech_lead_validated(
+            ticket,
+            workspace,
+            session_id=session_id,
+            prior_review_feedback=state.get("prior_review_feedback", ""),
+            baseline_paths=baseline,
+        )
+    except RuntimeError as exc:
+        events.append(
+            _event(
+                "orchestrator",
+                "plan_aborted",
+                f"TechLead planning failed for {ticket.key}",
+                error=str(exc),
+            ),
+        )
+        return {
+            "status": SessionStatus.FAILED,
+            "error": str(exc),
+            "baseline_paths": sorted(baseline),
+            "events": events,
+        }
+    finally:
+        if work_lane_required:
+            await stop_lane(Role.WORK)
+
+    detail: dict[str, Any] = {
+        "mode": planning_mode,
+        "steps": len(plan.steps),
+        **_timed_detail(started),
+    }
+    if work_lane_required:
+        detail["lane"] = "work"
+
+    events.extend(tool_call_events("tech_lead", tech_lead_tool_log))
+    if index_result is not None:
+        events.append(
+            _event(
+                "orchestrator",
+                "vector_indexed",
+                f"Indexed {index_result.chunks} chunks from {index_result.files} files",
+                chunks=index_result.chunks,
+                files=index_result.files,
+                seconds=index_result.seconds,
+            ),
+        )
+
+    events.append(
+        _event(
+            "tech_lead",
+            "plan_created",
+            f"TaskPlan for {plan.ticket_key}: {plan.summary}",
+            **detail,
+        ),
+    )
+
+    return {
+        "task_plan": plan.model_dump(),
+        "baseline_paths": sorted(baseline),
+        "events": events,
+    }
+
+
+async def code_implement(state: SprintState) -> dict[str, Any]:
+    started = time.monotonic()
+    plan = _task_plan(state)
+    workspace = _workspace(state)
+    baseline = frozenset(state.get("baseline_paths") or ())
+
+    await ensure_lane(Role.CODING)
+    raw_output, tool_log, coverage = await run_coder_with_coverage(
+        plan,
+        workspace,
+        prior_review_feedback=state.get("prior_review_feedback", ""),
+        baseline_paths=baseline or None,
+        deadline_epoch=_deadline_epoch(state),
+    )
+    workspace_diff = gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
+
+    await stop_lane(Role.CODING)
+    await ensure_lane(Role.WORK)
+    change = await run_formatter(
+        task_plan=plan,
+        raw_output=raw_output,
+        git_diff=workspace_diff,
+    )
+    change = _normalize_change(change, plan)
+
+    events: list[AgentEvent] = [
+        *tool_call_events("coder", tool_log),
+        _event(
+            "coder",
+            "code_change",
+            f"CodeChange for {change.ticket_key}: tests_passed={change.tests_passed}",
+            **_timed_detail(started, lane="coding+work"),
+        ),
+    ]
+    if not coverage.satisfied:
+        events.append(
+            _event(
+                "orchestrator",
+                "plan_coverage_incomplete",
+                "Plan coverage incomplete after continuation rounds",
+                missing=coverage.missing,
+                unexpected=coverage.unexpected,
+                out_of_scope_hits=coverage.out_of_scope_hits,
+                phantom_paths=coverage.phantom_paths,
+            ),
+        )
+
+    return {
+        "code_change": change.model_dump(),
+        "workspace_diff": workspace_diff,
+        "branch": change.branch,
+        "plan_coverage": {
+            "satisfied": coverage.satisfied,
+            "missing": coverage.missing,
+            "unexpected": coverage.unexpected,
+            "out_of_scope_hits": coverage.out_of_scope_hits,
+            "blocking_unexpected": coverage.blocking_unexpected,
+            "phantom_paths": coverage.phantom_paths,
+        },
+        "tests_run_this_cycle": change.tests_passed,
+        "events": events,
+    }
+
+
+async def test_implement(state: SprintState) -> dict[str, Any]:
+    started = time.monotonic()
+    plan = _task_plan(state)
+    change = _code_change(state)
+    workspace = _workspace(state)
+
+    if state.get("skip_tester_this_attempt"):
+        workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
+            workspace, priority_paths=plan.files_to_touch
+        )
+        return {
+            "workspace_diff": workspace_diff,
+            "skip_tester_this_attempt": False,
+            "events": [
+                _event(
+                    "tester",
+                    "skipped",
+                    "Code retry with green tests — tester not needed",
+                    **_timed_detail(started),
+                ),
+            ],
+        }
+
+    from sprint_crew.agents.reviewer import _run_acceptance_tests
+
+    acceptance_output, acceptance_green = _run_acceptance_tests(workspace, plan.acceptance_tests)
+    failure_analysis = (
+        analyze_acceptance_output(acceptance_output) if acceptance_output.strip() else None
+    )
+
+    if not should_invoke_tester(
+        plan,
+        workspace,
+        acceptance_green=acceptance_green,
+        acceptance_output=acceptance_output,
+    ):
+        workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
+            workspace, priority_paths=plan.files_to_touch
+        )
+        if acceptance_green:
+            skip_reason = "Acceptance tests green — tester skipped"
+        elif failure_analysis is not None and not failure_analysis.tester_can_help:
+            skip_reason = "Source/build failure — tester cannot edit src/; coder must fix first"
+        else:
+            skip_reason = "No test gap — tester skipped"
+        result: dict[str, Any] = {
+            "workspace_diff": workspace_diff,
+            "tests_run_this_cycle": acceptance_green,
+            "events": [
+                _event(
+                    "tester",
+                    "skipped",
+                    skip_reason,
+                    **_timed_detail(started),
+                ),
+            ],
+        }
+        if failure_analysis is not None and failure_analysis.kind != "none":
+            result["acceptance_failure"] = {
+                "kind": failure_analysis.kind,
+                "tester_can_help": failure_analysis.tester_can_help,
+                "source_paths": list(failure_analysis.source_paths),
+                "test_paths": list(failure_analysis.test_paths),
+                "summary": failure_analysis.summary,
+                "detail_excerpt": failure_analysis.detail_excerpt,
+            }
+        return result
+
+    await stop_lane(Role.WORK)
+    await ensure_lane(Role.CODING)
+    raw_output, tool_log = await run_tester_loop(
+        plan,
+        change,
+        workspace,
+        acceptance_green=acceptance_green,
+        acceptance_output=acceptance_output,
+    )
+    workspace_diff = gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
+
+    await stop_lane(Role.CODING)
+    await ensure_lane(Role.WORK)
+    additions = await run_tester_reporter(plan, raw_output)
+
+    if additions is None:
+        return {
+            "workspace_diff": workspace_diff,
+            "tests_run_this_cycle": True,
+            "events": [
+                *tool_call_events("tester", tool_log),
+                _event(
+                    "tester",
+                    "skipped",
+                    "No additional tests required by plan",
+                    **_timed_detail(started, lane="coding+work"),
+                ),
+            ],
+        }
+    return {
+        "test_additions": additions.model_dump(),
+        "workspace_diff": workspace_diff,
+        "tests_run_this_cycle": additions.tests_passed,
+        "events": [
+            *tool_call_events("tester", tool_log),
+            _event(
+                "tester",
+                "tests_added",
+                f"TestAdditions: {len(additions.tests_added)} files, passed={additions.tests_passed}",
+                **_timed_detail(started, lane="coding+work"),
+            ),
+        ],
+    }
+
+
+async def review(state: SprintState) -> dict[str, Any]:
+    started = time.monotonic()
+    await stop_lane(Role.CODING)
+    await ensure_lane(Role.WORK)
+    plan = _task_plan(state)
+    change = _code_change(state)
+    workspace = _workspace(state)
+    workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
+        workspace, priority_paths=plan.files_to_touch
+    )
+    test_additions_json = ""
+    if raw_additions := state.get("test_additions"):
+        test_additions_json = json.dumps(raw_additions, indent=2)
+
+    coverage = state.get("plan_coverage", {})
+    coverage_summary = ""
+    if isinstance(coverage, dict) and not coverage.get("satisfied", True):
+        coverage_summary = (
+            f"missing={coverage.get('missing', [])}; unexpected={coverage.get('unexpected', [])}"
+        )
+
+    tests_already_run = bool(state.get("tests_run_this_cycle", False) and change.tests_passed)
+    outcome = await run_reviewer(
+        plan,
+        change,
+        workspace,
+        workspace_diff=workspace_diff,
+        test_additions_json=test_additions_json,
+        ticket_acceptance_criteria=_ticket(state).acceptance_criteria,
+        tests_already_run=tests_already_run,
+        coverage_summary=coverage_summary,
+        files_to_touch=plan.files_to_touch,
+    )
+    await _stop_lane_after_cycle(state, Role.WORK)
+    return {
+        "review_outcome": outcome.model_dump(),
+        "workspace_diff": workspace_diff,
+        "events": [
+            _event(
+                "reviewer",
+                "review_complete",
+                f"ReviewOutcome passed={outcome.passed} tests_passed={outcome.tests_passed}",
+                findings=len(outcome.findings),
+                **_timed_detail(started, lane="work"),
+            ),
+        ],
+    }
+
+
+async def merge_gate(state: SprintState) -> dict[str, Any]:
+    started = time.monotonic()
+    outcome = ReviewOutcome.model_validate(state["review_outcome"])
+    coverage_ok = _coverage_satisfied(state)
+    accepted = review_accepted(outcome, coverage_satisfied=coverage_ok)
+    block_reason: str | None = None
+    if not accepted:
+        if not coverage_ok:
+            block_reason = "coverage"
+        elif not outcome.tests_passed:
+            block_reason = "tests"
+        elif not outcome.passed:
+            block_reason = "review"
+        else:
+            block_reason = "unknown"
+    return {
+        "events": [
+            _event(
+                "merge_gate",
+                "gate_result",
+                "accepted" if accepted else "rejected",
+                accepted=accepted,
+                attempt=state.get("attempt", 0),
+                coverage_satisfied=coverage_ok,
+                block_reason=block_reason,
+                **_timed_detail(started),
+            ),
+        ],
+    }
+
+
+def route_after_plan(state: SprintState) -> str:
+    if state.get("status") == SessionStatus.FAILED:
+        return "failed"
+    if _deadline_exceeded(state):
+        return "failed"
+    return "code"
+
+
+def route_after_gate(state: SprintState) -> str:
+    outcome = ReviewOutcome.model_validate(state["review_outcome"])
+    if review_accepted(outcome, coverage_satisfied=_coverage_satisfied(state)):
+        return "ship"
+    attempt = state.get("attempt", 0)
+    if attempt >= get_settings().max_review_retries:
+        return "failed"
+    if state.get("coverage_stall_count", 0) >= 2:
+        return "failed"
+    if _deadline_exceeded(state):
+        return "failed"
+    return "retry"
+
+
+async def prepare_retry(state: SprintState) -> dict[str, Any]:
+    started = time.monotonic()
+    from sprint_crew.agents.reviewer import _run_acceptance_tests
+
+    outcome = ReviewOutcome.model_validate(state["review_outcome"])
+    plan = _task_plan(state)
+    workspace_diff = state.get("workspace_diff", "")
+    change = _code_change(state) if state.get("code_change") else None
+    coverage_raw = state.get("plan_coverage")
+    coverage: PlanCoverageResult | None = None
+    if isinstance(coverage_raw, dict):
+        coverage = PlanCoverageResult(
+            missing=list(coverage_raw.get("missing", [])),
+            unexpected=list(coverage_raw.get("unexpected", [])),
+            out_of_scope_hits=list(coverage_raw.get("out_of_scope_hits", [])),
+            blocking_unexpected=list(coverage_raw.get("blocking_unexpected", [])),
+            phantom_paths=list(coverage_raw.get("phantom_paths", [])),
+            satisfied=bool(coverage_raw.get("satisfied", True)),
+        )
+    scope = resolve_retry_scope(
+        outcome,
+        coverage=coverage,
+        workspace_root=_workspace(state),
+    )
+
+    plan_retries = state.get("plan_retries", 0)
+    if scope == "plan":
+        plan_retries += 1
+
+    stall_count = state.get("coverage_stall_count", 0)
+    prev_raw = state.get("plan_coverage_prev")
+    if coverage is not None:
+        prev: PlanCoverageResult | None = None
+        if isinstance(prev_raw, dict):
+            prev = PlanCoverageResult(
+                missing=list(prev_raw.get("missing", [])),
+                unexpected=list(prev_raw.get("unexpected", [])),
+                out_of_scope_hits=list(prev_raw.get("out_of_scope_hits", [])),
+                blocking_unexpected=list(prev_raw.get("blocking_unexpected", [])),
+                phantom_paths=list(prev_raw.get("phantom_paths", [])),
+                satisfied=bool(prev_raw.get("satisfied", True)),
+            )
+        if prev is not None and not coverage_improved(prev, coverage):
+            stall_count += 1
+        else:
+            stall_count = 0
+
+    skip_tester = (
+        scope == "code"
+        and state.get("tests_run_this_cycle", False)
+        and change is not None
+        and change.tests_passed
+    )
+
+    test_output = ""
+    if not skip_tester:
+        test_output, _ = _run_acceptance_tests(_workspace(state), plan.acceptance_tests)
+
+    failure_analysis, bugs_observed = resolve_failure_feedback(
+        test_output=test_output,
+        acceptance_failure=state.get("acceptance_failure"),
+        test_additions=state.get("test_additions")
+        if isinstance(state.get("test_additions"), dict)
+        else None,
+    )
+
+    feedback = format_review_feedback(
+        outcome,
+        workspace_diff=workspace_diff,
+        test_output=test_output,
+        coverage=coverage,
+        workspace_root=_workspace(state),
+        failure_analysis=failure_analysis,
+        bugs_observed=bugs_observed,
+    )
+    return {
+        "attempt": state.get("attempt", 0) + 1,
+        "prior_review_feedback": feedback,
+        "plan_retries": plan_retries,
+        "skip_tester_this_attempt": skip_tester,
+        "retry_scope": scope,
+        "coverage_stall_count": stall_count,
+        "plan_coverage_prev": coverage_raw if isinstance(coverage_raw, dict) else {},
+        "events": [
+            _event(
+                "orchestrator",
+                "retry_prepared",
+                f"Retry attempt {state.get('attempt', 0) + 1} scope={scope}",
+                feedback_preview=feedback[:500],
+                retry_scope=scope,
+                skip_tester=skip_tester,
+                coverage_stall_count=stall_count,
+                **_timed_detail(started),
+            ),
+        ],
+    }
+
+
+def route_after_retry(state: SprintState) -> str:
+    if _deadline_exceeded(state):
+        return "failed"
+    scope = state.get("retry_scope")
+    if scope not in {"plan", "code"}:
+        outcome = ReviewOutcome.model_validate(state["review_outcome"])
+        coverage_raw = state.get("plan_coverage")
+        coverage: PlanCoverageResult | None = None
+        if isinstance(coverage_raw, dict):
+            coverage = PlanCoverageResult(
+                missing=list(coverage_raw.get("missing", [])),
+                unexpected=list(coverage_raw.get("unexpected", [])),
+                out_of_scope_hits=list(coverage_raw.get("out_of_scope_hits", [])),
+                blocking_unexpected=list(coverage_raw.get("blocking_unexpected", [])),
+                phantom_paths=list(coverage_raw.get("phantom_paths", [])),
+                satisfied=bool(coverage_raw.get("satisfied", True)),
+            )
+        scope = resolve_retry_scope(
+            outcome,
+            coverage=coverage,
+            workspace_root=_workspace(state),
+        )
+    if scope == "plan" and state.get("plan_retries", 0) > get_settings().max_plan_retries:
+        return "code"
+    return scope
+
+
+async def awaiting_human(state: SprintState) -> dict[str, Any]:
+    return {
+        "status": SessionStatus.AWAITING_HUMAN,
+        "events": [_event("orchestrator", "awaiting_human", "Ready for human PR review/merge")],
+    }
+
+
+async def failed(state: SprintState) -> dict[str, Any]:
+    outcome = ReviewOutcome.model_validate(state.get("review_outcome", {}))
+    coverage_raw = state.get("plan_coverage")
+    coverage: PlanCoverageResult | None = None
+    if isinstance(coverage_raw, dict):
+        coverage = PlanCoverageResult(
+            missing=list(coverage_raw.get("missing", [])),
+            unexpected=list(coverage_raw.get("unexpected", [])),
+            out_of_scope_hits=list(coverage_raw.get("out_of_scope_hits", [])),
+            blocking_unexpected=list(coverage_raw.get("blocking_unexpected", [])),
+            phantom_paths=list(coverage_raw.get("phantom_paths", [])),
+            satisfied=bool(coverage_raw.get("satisfied", True)),
+        )
+    if _deadline_exceeded(state):
+        summary = "Per-cycle wall-clock budget exceeded"
+    elif state.get("coverage_stall_count", 0) >= 2:
+        summary = "Coverage stalled across retries"
+    else:
+        summary = "Max review retries exceeded"
+    return {
+        "status": SessionStatus.FAILED,
+        "error": format_review_feedback(
+            outcome,
+            workspace_diff=state.get("workspace_diff", ""),
+            coverage=coverage,
+        ),
+        "events": [
+            _event(
+                "orchestrator",
+                "failed",
+                summary,
+                coverage_stall_count=state.get("coverage_stall_count", 0),
+                deadline_exceeded=_deadline_exceeded(state),
+            )
+        ],
+    }
+
+
+def build_sprint_graph(*, checkpointer: Any | None = None) -> CompiledStateGraph:
+    graph: StateGraph = StateGraph(SprintState)
+    graph.add_node("initSession", init_session)
+    graph.add_node("techLeadPlan", tech_lead_plan)
+    graph.add_node("codeImplement", code_implement)
+    graph.add_node("testImplement", test_implement)
+    graph.add_node("review", review)
+    graph.add_node("mergeGate", merge_gate)
+    graph.add_node("prepareRetry", prepare_retry)
+    graph.add_node("orchestratorShip", orchestrator_ship)
+    graph.add_node("awaitingHuman", awaiting_human)
+    graph.add_node("failed", failed)
+
+    graph.add_edge(START, "initSession")
+    graph.add_edge("initSession", "techLeadPlan")
+    graph.add_conditional_edges(
+        "techLeadPlan",
+        route_after_plan,
+        {
+            "code": "codeImplement",
+            "failed": "failed",
+        },
+    )
+    graph.add_edge("codeImplement", "testImplement")
+    graph.add_edge("testImplement", "review")
+    graph.add_edge("review", "mergeGate")
+    graph.add_conditional_edges(
+        "mergeGate",
+        route_after_gate,
+        {
+            "ship": "orchestratorShip",
+            "retry": "prepareRetry",
+            "failed": "failed",
+        },
+    )
+    graph.add_conditional_edges(
+        "prepareRetry",
+        route_after_retry,
+        {
+            "plan": "techLeadPlan",
+            "code": "codeImplement",
+            "failed": "failed",
+        },
+    )
+    graph.add_edge("orchestratorShip", "awaitingHuman")
+    graph.add_edge("awaitingHuman", END)
+    graph.add_edge("failed", END)
+
+    return graph.compile(checkpointer=checkpointer)
+
+
+async def run_sprint_cycle(
+    state: SprintState,
+    *,
+    on_node_complete: Any | None = None,
+) -> SprintState:
+    settings = get_settings()
+    settings.checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_db)) as checkpointer:
+        app = build_sprint_graph(checkpointer=checkpointer)
+        config = {"configurable": {"thread_id": state["session_id"]}}
+        accumulated: dict[str, Any] = dict(state)
+        async for chunk in app.astream(state, config, stream_mode="updates"):
+            for _node_name, update in chunk.items():
+                if not isinstance(update, dict):
+                    continue
+                for key, value in update.items():
+                    if key == "events" and key in accumulated and isinstance(value, list):
+                        accumulated["events"] = list(accumulated.get("events", [])) + value
+                    else:
+                        accumulated[key] = value
+                if on_node_complete is not None:
+                    await on_node_complete(dict(accumulated))
+        return accumulated  # type: ignore[return-value]

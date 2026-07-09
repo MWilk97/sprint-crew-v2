@@ -57,6 +57,9 @@ class ReviewFinding(BaseModel):
         return value
 
 
+RetryScope = Literal["code", "plan"]
+
+
 class ReviewOutcome(BaseModel):
     model_config = _STRICT
 
@@ -66,15 +69,7 @@ class ReviewOutcome(BaseModel):
     findings: list[ReviewFinding] = Field(default_factory=list)
     tests_run: list[str] = Field(default_factory=list)
     tests_passed: bool
-
-
-class SecurityReviewOutcome(ReviewOutcome):
-    model_config = _STRICT
-
-
-class ReviewConsensus(BaseModel):
-    model_config = _STRICT
-
-    reviews: list[ReviewOutcome] = Field(..., min_length=1)
-    canonical: ReviewOutcome
-    agreed: bool
+    retry_scope: RetryScope = Field(
+        default="code",
+        description="When passed=false: code=fix implementation only; plan=replan with TechLead.",
+    )

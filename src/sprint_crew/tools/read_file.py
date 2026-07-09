@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from sprint_crew.tools._safety import resolve_safe_path
-from sprint_crew.tools.base import Tool, ToolResult
+from sprint_crew.tools.base import ToolResult
 
 
 class ReadFileArgs(BaseModel):
@@ -30,7 +30,9 @@ class ReadFileTool:
             start = (args.start_line or 1) - 1
             end = args.end_line if args.end_line is not None else len(lines)
             snippet = "".join(lines[start:end])
-            return ToolResult(ok=True, output=snippet, data={"path": args.path, "lines": len(lines)})
+            return ToolResult(
+                ok=True, output=snippet, data={"path": args.path, "lines": len(lines)}
+            )
         return ToolResult(ok=True, output=text, data={"path": args.path, "lines": len(lines)})
 
 

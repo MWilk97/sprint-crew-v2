@@ -23,7 +23,9 @@ class ListDirectoryTool:
         if not target.exists():
             return ToolResult(ok=False, output=f"Path not found: {args.path!r}", error="not found")
         if not target.is_dir():
-            return ToolResult(ok=False, output=f"Not a directory: {args.path!r}", error="not a directory")
+            return ToolResult(
+                ok=False, output=f"Not a directory: {args.path!r}", error="not a directory"
+            )
         entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         lines = []
         for entry in entries:

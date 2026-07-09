@@ -18,15 +18,6 @@ class JiraTicket(BaseModel):
     acceptance_criteria: str = Field(default="")
 
 
-class TicketSelection(BaseModel):
-    model_config = _STRICT
-
-    ticket: JiraTicket
-    sprint_id: str = Field(default="")
-    rationale: str = Field(..., min_length=1)
-    risk_flags: list[str] = Field(default_factory=list)
-
-
 class PlanStep(BaseModel):
     model_config = _STRICT
 

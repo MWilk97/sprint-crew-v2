@@ -31,8 +31,6 @@ READONLY_TOOLS: list[Tool] = [
     git_log_tool,
 ]
 
-MUTATE_TOOLS: list[Tool] = ALL_TOOLS
-
 
 def build_registry(tools: list[Tool] | None = None) -> ToolRegistry:
     registry = ToolRegistry()

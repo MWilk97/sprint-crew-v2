@@ -38,7 +38,9 @@ class GitStatusTool:
         if ctx is None:
             return ToolResult(ok=False, output="Not a git repository.", error="no git")
         work_tree, git_dir = ctx
-        code, out, err = run_git(["status", "--short", "--branch"], work_tree=work_tree, git_dir=git_dir)
+        code, out, err = run_git(
+            ["status", "--short", "--branch"], work_tree=work_tree, git_dir=git_dir
+        )
         body = out + err
         return ToolResult(ok=code == 0, output=body or "(clean)", data={"returncode": code})
 

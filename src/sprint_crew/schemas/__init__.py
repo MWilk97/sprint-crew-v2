@@ -1,26 +1,45 @@
+from sprint_crew.schemas.backlog import (
+    BacklogIssueType,
+    BacklogPlan,
+    BacklogStory,
+    ProductBrief,
+    ProjectMode,
+)
 from sprint_crew.schemas.change import (
     CodeChange,
     FileChange,
-    ReviewConsensus,
     ReviewFinding,
     ReviewOutcome,
     ReviewSeverity,
-    SecurityReviewOutcome,
     TestAdditions,
 )
-from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan, TicketSelection
+from sprint_crew.schemas.session import (
+    AgentEvent,
+    BacklogRun,
+    BacklogRunStatus,
+    SessionStatus,
+    SprintSession,
+)
+from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
 
 __all__ = [
+    "AgentEvent",
+    "BacklogIssueType",
+    "BacklogPlan",
+    "BacklogRun",
+    "BacklogRunStatus",
+    "BacklogStory",
     "CodeChange",
     "FileChange",
     "JiraTicket",
     "PlanStep",
-    "ReviewConsensus",
+    "ProductBrief",
+    "ProjectMode",
     "ReviewFinding",
     "ReviewOutcome",
     "ReviewSeverity",
-    "SecurityReviewOutcome",
+    "SessionStatus",
+    "SprintSession",
     "TaskPlan",
     "TestAdditions",
-    "TicketSelection",
 ]
