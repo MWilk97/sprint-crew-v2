@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Preflight A+B: vLLM must emit structured tool_calls (Coder lane)."""
+"""Preflight A+B+C: vLLM must emit structured tool_calls (Coder or Work lane)."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 
 from openai import OpenAI
 
 LANES = {
-    "coder": ("http://127.0.0.1:8001/v1", "qwen3-coder-30b"),
-    "planner": ("http://127.0.0.1:8002/v1", "qwen3-14b"),
-    "judge": ("http://127.0.0.1:8003/v1", "gemma-4-12b"),
+    "coder": ("http://127.0.0.1:8001/v1", "qwen3-coder-next-nvfp4"),
+    "work": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking"),
 }
 
 READ_FILE_TOOL = {
@@ -129,6 +127,17 @@ MULTI_TOOLS = [
 CODER_SYSTEM = """You are a coding agent. Use tools to inspect and modify the repo.
 Always prefer tools over guessing. One tool call per turn when possible."""
 
+TECHLEAD_READONLY_TOOLS = [
+    READ_FILE_TOOL,
+    MULTI_TOOLS[2],  # grep
+    MULTI_TOOLS[3],  # list_directory
+    MULTI_TOOLS[6],  # git_status
+    MULTI_TOOLS[8],  # git_log
+]
+
+TECHLEAD_SYSTEM = """You are a Tech Lead planning agent. Use read-only tools to explore the repo.
+Prefer list_directory, read_file, grep, and git_* before answering. One tool call per turn when possible."""
+
 
 def client_for(lane: str) -> tuple[OpenAI, str]:
     base_url, model = LANES[lane]
@@ -145,7 +154,9 @@ def probe_a(lane: str) -> bool:
     )
     msg = resp.choices[0].message
     calls = msg.tool_calls or []
-    ok = bool(calls) and calls[0].function.name == "read_file" and not (msg.content or "").strip()
+    ok = bool(calls) and calls[0].function.name == "read_file"
+    if lane == "coder":
+        ok = ok and not (msg.content or "").strip()
     print(f"A tool_probe: {'PASS' if ok else 'FAIL'}")
     if calls:
         print(f"  tool_calls[0].name = {calls[0].function.name!r}")
@@ -180,10 +191,44 @@ def probe_b(lane: str) -> bool:
     return ok
 
 
+def probe_c(lane: str) -> bool:
+    """TechLead-like read-only exploration (Work lane)."""
+    client, model = client_for(lane)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": TECHLEAD_SYSTEM},
+            {
+                "role": "user",
+                "content": (
+                    "Explore this repo for planning: list the project root, read README if present, "
+                    "and grep for validate_email."
+                ),
+            },
+        ],
+        tools=TECHLEAD_READONLY_TOOLS,
+        temperature=0,
+    )
+    msg = resp.choices[0].message
+    calls = msg.tool_calls or []
+    names = {call.function.name for call in calls}
+    ok = len(calls) >= 1 and names & {
+        "list_directory",
+        "read_file",
+        "grep",
+        "git_status",
+        "git_log",
+    }
+    print(f"C techlead_probe: {'PASS' if ok else 'FAIL'} ({len(calls)} tool_calls)")
+    for i, call in enumerate(calls[:3]):
+        print(f"  [{i}] {call.function.name}")
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lane", choices=LANES, default="coder")
-    parser.add_argument("--test", choices=["a", "b", "all"], default="all")
+    parser.add_argument("--test", choices=["a", "b", "c", "all"], default="all")
     args = parser.parse_args()
 
     results: list[bool] = []
@@ -191,6 +236,8 @@ def main() -> int:
         results.append(probe_a(args.lane))
     if args.test in ("b", "all"):
         results.append(probe_b(args.lane))
+    if args.test in ("c", "all"):
+        results.append(probe_c(args.lane))
 
     return 0 if all(results) else 1
 

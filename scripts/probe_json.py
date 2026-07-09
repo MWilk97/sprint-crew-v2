@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight C / C': structured JSON on Planner and Judge lanes."""
+"""Preflight C / C': structured JSON on Work lane."""
 
 from __future__ import annotations
 
@@ -10,27 +10,38 @@ import sys
 
 from openai import OpenAI
 
+from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.ticket import TaskPlan
 
 LANES = {
-    "planner": ("http://127.0.0.1:8002/v1", "qwen3-14b", TaskPlan),
-    "judge": ("http://127.0.0.1:8003/v1", "gemma-4-12b", ReviewOutcome),
+    "work": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking", TaskPlan),
+    "work-review": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking", ReviewOutcome),
+    "backlog": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking", BacklogPlan),
 }
 
-PLANNER_PROMPT = """Produce a TaskPlan JSON for ticket DEMO-1.
+WORK_PROMPT = """Produce a TaskPlan JSON for ticket DEMO-1.
 Summary: add hello() to greeter.py and test it.
 Include steps, files_to_touch, acceptance_tests with pytest, and out_of_scope."""
 
-JUDGE_PROMPT = """Produce a ReviewOutcome JSON for ticket DEMO-1.
+REVIEW_PROMPT = """Produce a ReviewOutcome JSON for ticket DEMO-1.
 passed=true, tests_passed=true, summary='Looks good', findings=[]."""
+
+BACKLOG_PROMPT = """Produce a BacklogPlan JSON decomposing: Add hello() to greeter.py with pytest.
+Include product_brief, one story STORY-1, recommended_first STORY-1."""
 
 
 def probe(lane: str) -> bool:
     base_url, model, schema_cls = LANES[lane]
     client = OpenAI(base_url=base_url, api_key=os.environ.get("OPENAI_API_KEY", "local"))
     schema = schema_cls.model_json_schema()
-    prompt = PLANNER_PROMPT if lane == "planner" else JUDGE_PROMPT
+    prompt = (
+        WORK_PROMPT
+        if lane == "work"
+        else REVIEW_PROMPT
+        if lane == "work-review"
+        else BACKLOG_PROMPT
+    )
 
     resp = client.chat.completions.create(
         model=model,
