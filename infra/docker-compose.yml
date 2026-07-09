@@ -1,17 +1,18 @@
 # vLLM inference lanes for GX10 (GB10, unified memory).
 #   docker compose --profile coder up -d          # lane 8001
-#   docker compose --profile judge up -d          # lane 8003 (Gemma 4)
-#   docker compose --profile all up -d            # all lanes (~60 GB+ weights)
+#   docker compose --profile work up -d           # lane 8002 (ScrumMaster + TechLead + Reviewer)
+#   docker compose --profile all up -d            # coder + work
+#   docker compose --profile vector up -d         # qdrant + embed-sidecar
 
 x-vllm-common: &vllm-common
   image: nvcr.io/nvidia/vllm:26.04-py3
-  restart: unless-stopped
+  restart: "no"
   ipc: host
   shm_size: "16gb"
   volumes:
-    - ${HF_HOME:-/home/maciek/vllm-models}:/models
+    - ${HF_HOME:-${HOME}/vllm-models}:/models
     # Reuse `hf auth login` token (avoids stale placeholder in .env)
-    - ${HF_CACHE_DIR:-/home/maciek/.cache/huggingface}:/root/.cache/huggingface
+    - ${HF_CACHE_DIR:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
   environment: &vllm-env
     HF_HOME: /models
     HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
@@ -29,25 +30,38 @@ services:
   vllm-coder:
     <<: *vllm-common
     profiles: [coder, all]
+    # NVFP4 MoE on GB10 (sm121): force Marlin FP4/FP8 GEMM (FlashInfer FP4 MoE off)
+    environment:
+      <<: *vllm-env
+      VLLM_NVFP4_GEMM_BACKEND: marlin
+      VLLM_TEST_FORCE_FP8_MARLIN: "1"
+      VLLM_USE_FLASHINFER_MOE_FP4: "0"
+      VLLM_MARLIN_USE_ATOMIC_ADD: "1"
     ports:
       - "8001:8000"
     command:
       - vllm
       - serve
-      - QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
+      - gdubicki/Qwen3-Coder-Next-NVFP4-GB10
       - --host
       - "0.0.0.0"
       - --port
       - "8000"
       - --served-model-name
-      - qwen3-coder-30b
+      - qwen3-coder-next-nvfp4
       - --trust-remote-code
       - --tensor-parallel-size
       - "1"
+      - --dtype
+      - auto
       - --max-model-len
-      - "65536"
+      - "131072"
       - --gpu-memory-utilization
-      - "0.28"
+      - "0.85"
+      - --attention-backend
+      - flashinfer
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
       - --enforce-eager
       - --kv-cache-dtype
       - fp8
@@ -61,31 +75,49 @@ services:
       retries: 30
       start_period: 600s
 
-  vllm-planner:
+  vllm-work:
     <<: *vllm-common
-    profiles: [all]
+    profiles: [work, all]
+    # NVFP4 MoE on GB10 (sm121): force Marlin FP4/FP8 GEMM (FlashInfer FP4 MoE off)
+    environment:
+      <<: *vllm-env
+      VLLM_NVFP4_GEMM_BACKEND: marlin
+      VLLM_TEST_FORCE_FP8_MARLIN: "1"
+      VLLM_USE_FLASHINFER_MOE_FP4: "0"
+      VLLM_MARLIN_USE_ATOMIC_ADD: "1"
     ports:
       - "8002:8000"
     command:
       - vllm
       - serve
-      - Qwen/Qwen3-14B
+      - NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4
       - --host
       - "0.0.0.0"
       - --port
       - "8000"
       - --served-model-name
-      - qwen3-14b
+      - qwen3-30b-a3b-thinking
       - --trust-remote-code
       - --tensor-parallel-size
       - "1"
+      - --dtype
+      - auto
       - --max-model-len
-      - "32768"
+      - "131072"
       - --gpu-memory-utilization
-      - "0.28"
+      - "0.50"
+      - --attention-backend
+      - flashinfer
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
       - --enforce-eager
       - --kv-cache-dtype
       - fp8
+      - --reasoning-parser
+      - qwen3
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 30s
@@ -93,33 +125,42 @@ services:
       retries: 30
       start_period: 600s
 
-  vllm-judge:
-    <<: *vllm-common
-    # Gemma 4 Unified needs vLLM >=0.23; NGC 26.04 (0.19) is too old
-    image: vllm/vllm-openai:gemma4-unified
-    profiles: [judge, all]
+  qdrant:
+    image: qdrant/qdrant:latest
+    profiles: [vector]
+    restart: "no"
     ports:
-      - "8003:8000"
-    command:
-      - --model
-      - google/gemma-4-12B-it
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8000"
-      - --served-model-name
-      - gemma-4-12b
-      - --trust-remote-code
-      - --tensor-parallel-size
-      - "1"
-      - --max-model-len
-      - "16384"
-      - --gpu-memory-utilization
-      - "0.28"
-      - --enforce-eager
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:6333/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  embed-sidecar:
+    build:
+      context: ./embed-sidecar
+    profiles: [vector]
+    restart: "no"
+    ports:
+      - "8080:8080"
+    environment:
+      EMBED_MODEL_ID: ${EMBED_MODEL_ID:-jinaai/jina-embeddings-v2-base-code}
+      HF_HOME: /models
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ${HF_CACHE_DIR:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 10s
-      retries: 30
-      start_period: 600s
+      retries: 20
+      start_period: 180s
+
+volumes:
+  qdrant_data:

@@ -1,36 +1,52 @@
 # Role → lane mapping. Served names must match OpenAI API `model` field.
+#
+# Rollback coder baseline (FP8, small context):
+#   model_id: Qwen/Qwen3-Coder-Next-FP8
+#   served_name: qwen3-coder-next
+#   max_model_len: 12288
+#   gpu_memory_utilization: 0.78
+#
+# gpu_memory_utilization assumes ONE lane loaded at a time (sequential pipeline).
+# GX10/GB10 unified memory — per-lane tuning (128 GB unified), NVFP4 weights:
+#   coding  MoE 80B NVFP4 (~46 GB): ~0.85 leaves ample KV for 131k+ context
+#   work    MoE 30B/3B NVFP4 (~18 GB): ~0.50 covers weights + KV @ 131k
+# NVFP4 MoE on GB10 (sm121) needs Marlin GEMM env flags — see infra/docker-compose.yml.
+# See https://github.com/shamily/vllm-gb10 — do not use 0.95+ like on discrete VRAM GPUs.
 lanes:
   coding:
     port: 8001
     base_url: http://127.0.0.1:8001/v1
-    # P0 baseline — AWQ MoE, ~16 GB weights
-    model_id: QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
-    served_name: qwen3-coder-30b
-    max_model_len: 65536
-    gpu_memory_utilization: 0.28
+    # Qwen3-Coder-Next — 80B MoE / ~3B active, NVFP4 (GB10) for 262k-capable context
+    # Ungated byte-identical mirror of gated saricles/Qwen3-Coder-Next-NVFP4-GB10
+    model_id: gdubicki/Qwen3-Coder-Next-NVFP4-GB10
+    served_name: qwen3-coder-next-nvfp4
+    max_model_len: 131072
+    gpu_memory_utilization: 0.85
     tool_call_parser: qwen3_coder
     enable_auto_tool_choice: true
     is_moe: true
+    request_limit_multiplier: 1.25
 
-  planning:
+  work:
     port: 8002
     base_url: http://127.0.0.1:8002/v1
-    model_id: Qwen/Qwen3-14B
-    served_name: qwen3-14b
-    max_model_len: 32768
-    gpu_memory_utilization: 0.28
-    is_moe: false
-
-  reviewing:
-    port: 8003
-    base_url: http://127.0.0.1:8003/v1
-    model_id: google/gemma-4-12B-it
-    served_name: gemma-4-12b
-    max_model_len: 16384
-    gpu_memory_utilization: 0.28
-    is_moe: false
+    # Work lane — ScrumMaster (prep), TechLead, Formatter, Reviewer, Tester reporter
+    # Qwen3-30B-A3B-Thinking-2507 NVFP4 (qwen3_moe, text-only, ~18 GB, 3B active) — reasoning + tools
+    # Plain qwen3_moe (full attention, Qwen2Tokenizer): no tokenizer patch, no Mamba flags.
+    # Runtime tool/reasoning flags: infra/docker-compose.yml (LaneConfig ignores these YAML fields)
+    # SETUP: after `hf download`, run scripts/patch_work_quant.py once — the ModelOpt ckpt
+    # omits `quant_method` in config.json, so vLLM 26.04 won't auto-detect NVFP4 without it.
+    model_id: NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4
+    served_name: qwen3-30b-a3b-thinking
+    max_model_len: 131072
+    gpu_memory_utilization: 0.50
+    tool_call_parser: hermes
+    enable_auto_tool_choice: true
+    is_moe: true
+    request_limit_multiplier: 1.0
 
 embeddings:
-  # TEI has no ARM64 image — use sentence-transformers sidecar (Phase 5) or CPU script
-  model_id: nomic-ai/nomic-embed-text-v1.5
+  # Apache 2.0 — CPU sidecar (profile vector), not loaded with vLLM lanes
+  model_id: jinaai/jina-embeddings-v2-base-code
   port: 8080
+  # Optional upgrade (7B, Apache 2.0): nomic-ai/nomic-embed-code via EMBED_MODEL_ID
