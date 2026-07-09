@@ -1,0 +1,90 @@
+scenarios:
+  - id: greeter_hello
+    fixture: fixtures/repo
+    tier: capability
+    ticket:
+      key: DEMO-1
+      summary: "Add hello() to greeter module"
+      description: "Implement hello() returning 'hello' and ensure pytest passes."
+      acceptance_criteria: |
+        - Unit tests pass
+        - hello() returns 'hello'
+    complexity: trivial
+    gates:
+      merge_gate: true
+      pytest_green: true
+      max_attempts: 4
+
+  - id: email_validation
+    fixture: fixtures/repo
+    tier: capability
+    ticket:
+      key: DEMO-2
+      summary: "Add validate_email() to validators module"
+      description: "Implement validate_email(address) for simple email addresses."
+      acceptance_criteria: |
+        - Unit tests pass
+        - validate_email() accepts simple addresses
+    gates:
+      merge_gate: true
+      pytest_green: true
+      max_attempts: 4
+
+  - id: vector_story1_queue
+    tier: capability
+    fixture: fixtures/vector_repo
+    ticket:
+      key: SCRUM-1
+      summary: "Persistent outbound message queue using ferry dispatch layer"
+      description: "SQLite-backed queue + QueueWorker wired to MessageFerry."
+      acceptance_criteria: "pytest -q tests/test_ferry_queue.py passes"
+    gates:
+      merge_gate: true
+      pytest_green: true
+      max_attempts: 4
+
+  - id: vector_story2_retry
+    tier: capability
+    fixture: fixtures/vector_repo
+    ticket:
+      key: SCRUM-2
+      summary: "Exponential backoff retry when adapter handoff fails"
+      description: "retry_policy.py — 3 attempts, 100ms base."
+      acceptance_criteria: "pytest -q tests/test_ferry_retry.py passes"
+    gates:
+      merge_gate: true
+      pytest_green: true
+      max_attempts: 4
+
+  - id: vector_story3_notify_clean
+    tier: capability
+    fixture: fixtures/vector_repo
+    fixture_overlay: story3_clean
+    ticket:
+      key: SCRUM-3
+      summary: "REST endpoints to enqueue notifications and query delivery status"
+      description: "Notification routes in src/api/routes.py."
+      acceptance_criteria: "pytest -q tests/test_notify_routes.py passes"
+    gates:
+      merge_gate: true
+      pytest_green: true
+      max_attempts: 4
+
+  - id: from_prompt_2story
+    tier: integration
+    fixture: fixtures/vector_repo
+    prompt: integration
+    gates:
+      story_count: 2
+      merge_gate: true
+      semantic_retrieval_min: 1
+
+  - id: vector_story3_stdlib_trap
+    tier: trap
+    fixture: fixtures/vector_repo
+    ticket:
+      key: SCRUM-3
+      summary: "REST endpoints (stdlib platform shadow trap)"
+      acceptance_criteria: "pytest -q tests/test_notify_routes.py passes"
+    gates:
+      soft: true
