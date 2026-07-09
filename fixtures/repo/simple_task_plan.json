@@ -1,0 +1,21 @@
+{
+  "ticket_key": "DEMO-1",
+  "summary": "Add hello() to greeter module",
+  "steps": [
+    {
+      "description": "Read greeter.py and tests/test_greeter.py",
+      "files": ["greeter.py", "tests/test_greeter.py"]
+    },
+    {
+      "description": "Implement hello() returning 'hello'",
+      "files": ["greeter.py"]
+    },
+    {
+      "description": "Run pytest to verify",
+      "files": []
+    }
+  ],
+  "files_to_touch": ["greeter.py"],
+  "acceptance_tests": ["pytest -q"],
+  "out_of_scope": ["README.md"]
+}
