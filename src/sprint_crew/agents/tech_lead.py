@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from pydantic_ai import Agent
@@ -17,16 +16,12 @@ from sprint_crew.agents.tool_events import ToolCallLog
 from sprint_crew.config import Role, get_settings
 from sprint_crew.inference.router import pydantic_ai_model
 from sprint_crew.inference.structured import structured_completion
-from sprint_crew.orchestrator.complexity import tech_lead_mode
+from sprint_crew.orchestrator.complexity import _paths_in_text, tech_lead_mode
 from sprint_crew.orchestrator.plan_coverage import normalize_path, step_file_paths
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
 from sprint_crew.tools import READONLY_TOOLS, build_registry
 from sprint_crew.tools.pydantic_ai import WorkspaceDeps, build_readonly_toolset, workspace_deps
 
-_PATH_RE = re.compile(
-    r"[\w./-]+\.(?:py|js|ts|tsx|jsx|go|rs|md|yaml|yml|json|toml|txt|sh)",
-    re.IGNORECASE,
-)
 _MAX_FILE_SNIPPET = 4000
 
 
@@ -38,14 +33,7 @@ def _paths_from_ticket(ticket: JiraTicket) -> list[str]:
             ticket.acceptance_criteria,
         ]
     )
-    seen: set[str] = set()
-    paths: list[str] = []
-    for match in _PATH_RE.findall(text):
-        normalized = match.lstrip("./")
-        if normalized not in seen:
-            seen.add(normalized)
-            paths.append(normalized)
-    return paths[:8]
+    return _paths_in_text(text)[:8]
 
 
 def _gather_repo_context(workspace_root: Path, ticket: JiraTicket | None = None) -> str:
@@ -70,16 +58,6 @@ def _gather_repo_context(workspace_root: Path, ticket: JiraTicket | None = None)
             if len(content) > _MAX_FILE_SNIPPET:
                 content = content[:_MAX_FILE_SNIPPET] + "\n... (truncated)"
             parts.append(content)
-
-        keywords = [
-            word
-            for word in re.findall(r"[A-Za-z_]{4,}", ticket.summary)
-            if word.lower() not in {"with", "from", "that", "this"}
-        ]
-        if keywords:
-            pattern = keywords[0]
-            parts.append(f"=== grep: {pattern!r} ===")
-            parts.append(run_tool("grep", {"pattern": pattern, "path": "."}))
 
     readme = workspace_root / "README.md"
     if readme.exists() and (ticket is None or "README.md" not in _paths_from_ticket(ticket)):
@@ -117,6 +95,7 @@ async def run_tech_lead_loop(
     session_id: str | None = None,
     prior_review_feedback: str = "",
     tool_call_log: ToolCallLog | None = None,
+    repo_context: str | None = None,
 ) -> str:
     """Explore the repo with read-only tools; return a plain-text planning handoff."""
     root = workspace_root.resolve()
@@ -137,7 +116,8 @@ async def run_tech_lead_loop(
         retries=3,
         model_settings=ModelSettings(temperature=0),
     )
-    repo_context = _repo_context_for_ticket(root, ticket, session_id=sid)
+    if repo_context is None:
+        repo_context = _repo_context_for_ticket(root, ticket, session_id=sid)
     prompt = build_tech_lead_loop_user_prompt(
         ticket_json=ticket.model_dump_json(indent=2),
         repo_context=repo_context,
@@ -230,8 +210,14 @@ async def run_tech_lead(
     prior_review_feedback: str = "",
     tool_call_log: ToolCallLog | None = None,
     pre_search_hit_count: int = 0,
+    repo_context: str | None = None,
 ) -> tuple[TaskPlan, str]:
-    """Run TechLead planning ladder; returns (TaskPlan, planning_mode)."""
+    """Run TechLead planning ladder; returns (TaskPlan, planning_mode).
+
+    ``repo_context`` lets the orchestrator pass in an already-gathered context
+    (the graph node computes it for pre_search) so the ladder doesn't re-run the
+    manifest build + semantic_search for every planning step.
+    """
     from sprint_crew.orchestrator.template_plan import build_template_task_plan_validated
 
     root = workspace_root.resolve()
@@ -241,6 +227,14 @@ async def run_tech_lead(
         return build_template_task_plan_validated(ticket), "template"
     except RuntimeError:
         pass
+
+    # Repo context is static for this planning attempt — gather it once (or reuse the
+    # orchestrator-provided context) and share it across the tool loop and structured plan.
+    context = (
+        repo_context
+        if repo_context is not None
+        else _repo_context_for_ticket(root, ticket, session_id=sid)
+    )
 
     if tech_lead_mode(ticket) == "tool_loop":
         from sprint_crew.vector.indexer import should_use_vector
@@ -252,6 +246,7 @@ async def run_tech_lead(
             session_id=sid,
             prior_review_feedback=prior_review_feedback,
             tool_call_log=log,
+            repo_context=context,
         )
         if should_use_vector(ticket=ticket) and not _semantic_retrieval_satisfied(
             log, pre_search_hits=pre_search_hit_count
@@ -267,6 +262,7 @@ async def run_tech_lead(
                 session_id=sid,
                 prior_review_feedback=nudge_feedback,
                 tool_call_log=log,
+                repo_context=context,
             )
             if nudge_handoff:
                 handoff = nudge_handoff
@@ -280,26 +276,23 @@ async def run_tech_lead(
                 tool_log=log,
             )
         if handoff:
-            repo_context = _repo_context_for_ticket(root, ticket, session_id=sid)
             plan = _structured_plan_from_context(
                 ticket,
-                repo_context=repo_context,
+                repo_context=context,
                 planning_handoff=handoff,
                 prior_review_feedback=prior_review_feedback,
             )
             return plan, "tool_loop"
-        repo_context = _repo_context_for_ticket(root, ticket, session_id=sid)
         plan = _structured_plan_from_context(
             ticket,
-            repo_context=repo_context,
+            repo_context=context,
             prior_review_feedback=prior_review_feedback,
         )
         return plan, "static"
 
-    repo_context = _repo_context_for_ticket(root, ticket, session_id=sid)
     plan = _structured_plan_from_context(
         ticket,
-        repo_context=repo_context,
+        repo_context=context,
         prior_review_feedback=prior_review_feedback,
     )
     return plan, "static"

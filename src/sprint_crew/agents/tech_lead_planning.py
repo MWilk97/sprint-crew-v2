@@ -31,8 +31,16 @@ async def run_tech_lead_validated(
     prior_review_feedback: str = "",
     baseline_paths: frozenset[str] | None = None,
     pre_search_hit_count: int = 0,
+    repo_context: str | None = None,
 ) -> tuple[TaskPlan, str, ToolCallLog]:
-    """Run TechLead and validate acceptance_tests, structure, and path existence."""
+    """Run TechLead and validate acceptance_tests, structure, and path existence.
+
+    Flow: retry ``run_tech_lead`` up to ``max_attempts`` times, feeding each
+    validation failure (acceptance_tests / structure / phantom paths / scope) back
+    as targeted feedback; on exhaustion fall back to the deterministic template plan.
+    ``repo_context`` (gathered once by the graph node) is reused across every retry
+    since the workspace is unchanged within a single planning attempt.
+    """
     settings = get_settings()
     max_attempts = max(3, settings.max_plan_retries + 2)
     feedback = prior_review_feedback
@@ -49,6 +57,7 @@ async def run_tech_lead_validated(
             prior_review_feedback=feedback,
             tool_call_log=tool_log,
             pre_search_hit_count=pre_search_hit_count,
+            repo_context=repo_context,
         )
         if baseline is None:
             from sprint_crew.orchestrator.plan_validation import snapshot_baseline_paths

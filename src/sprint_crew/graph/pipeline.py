@@ -179,7 +179,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
 
     events: list[AgentEvent] = []
     plan_query = f"{ticket.summary}\n{ticket.description}"
-    _context_text, pre_hits = enrich_repo_context_with_hits(
+    context_text, pre_hits = enrich_repo_context_with_hits(
         workspace,
         session_id,
         plan_query,
@@ -195,6 +195,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
             prior_review_feedback=state.get("prior_review_feedback", ""),
             baseline_paths=baseline,
             pre_search_hit_count=len(pre_hits),
+            repo_context=context_text,
         )
     except RuntimeError as exc:
         events.append(
