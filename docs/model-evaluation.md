@@ -4,9 +4,9 @@ Production = rows with A+B+C+D = PASS.
 
 | Model | Slot | A | B | C | D | TTFT ms | Tok/s | Verdict |
 |-------|------|---|---|---|---|---------|-------|---------|
-| saricles/Qwen3-Coder-Next-NVFP4-GB10 | Coder :8001 | | | — | | | | candidate (max_len 131072, gpu util 0.85, Marlin NVFP4) |
+| saricles/Qwen3-Coder-Next-NVFP4-GB10 | Coder :8001 | ? | ? | — | ? | | | candidate — preflight pending re-run (max_len 131072, gpu util 0.85, Marlin NVFP4) |
 | Qwen/Qwen3-Coder-Next-FP8 | Coder :8001 | PASS | PASS | — | PASS | | | rollback baseline (max_len 12288, gpu util 0.78) |
-| NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4 | Work :8002 | n/a | n/a | | — | | | candidate (max_len 131072, gpu util 0.50, qwen3_moe text-only, hermes parser, prep + TechLead + reviewer) |
+| NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4 | Work :8002 | n/a | n/a | ? | — | | | candidate — preflight pending re-run (max_len 131072, gpu util 0.50, qwen3_moe text-only, hermes parser, prep + TechLead + reviewer) |
 | RedHatAI/Qwen3.6-35B-A3B-NVFP4 | Work :8002 | n/a | n/a | | — | | | prior candidate (needed tokenizer patch + Mamba flag) |
 | Qwen/Qwen3-14B | Work :8002 | n/a | n/a | PASS | — | | | rollback baseline (max_len 16384, gpu util 0.40) |
 
