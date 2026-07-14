@@ -52,6 +52,22 @@ class QdrantStore:
         if self._client.collection_exists(name):
             self._client.delete_collection(name)
 
+    def get_collection_git_sha(self, name: str) -> str | None:
+        """Return stored git SHA when collection exists and has at least one point."""
+        if not self._client.collection_exists(name):
+            return None
+        points, _ = self._client.scroll(
+            collection_name=name,
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not points:
+            return None
+        payload = points[0].payload or {}
+        sha = payload.get("git_sha")
+        return str(sha) if sha else None
+
     def upsert_chunks(
         self,
         collection: str,

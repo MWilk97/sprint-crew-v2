@@ -232,7 +232,7 @@ async def run_coder_with_coverage(
     prior_review_feedback: str = "",
     baseline_paths: frozenset[str] | None = None,
     deadline_epoch: float = 0.0,
-) -> tuple[str, list[dict], PlanCoverageResult]:
+) -> tuple[str, list[dict], PlanCoverageResult, str, bool]:
     """Run step-aware Coder, then continuation rounds until coverage satisfied or cap hit."""
     settings = get_settings()
     raw_output, tool_log = await run_coder_plan(
@@ -281,11 +281,14 @@ async def run_coder_with_coverage(
         prior_coverage = coverage
         coverage = new_coverage
 
+    acceptance_output = ""
+    acceptance_verified = False
     if coverage.satisfied and not _deadline_reached(deadline_epoch):
         acceptance_output, acceptance_green = run_acceptance_tests(
             workspace_root,
             task_plan.acceptance_tests,
         )
+        acceptance_verified = acceptance_green
         if not acceptance_green and acceptance_output.strip():
             analysis = analyze_acceptance_output(acceptance_output)
             if analysis.kind != "none" and not analysis.tester_can_help:
@@ -302,24 +305,4 @@ async def run_coder_with_coverage(
                 raw_output = continuation_output
                 tool_log.extend(continuation_log)
 
-    return raw_output, tool_log, coverage
-
-
-async def run_coder(
-    task_plan: TaskPlan,
-    workspace_root: Path,
-    *,
-    role_specialization: str | None = None,
-    prior_review_feedback: str = "",
-    git_diff: str = "",
-) -> CodeChange:
-    from sprint_crew.agents.formatter import run_formatter
-
-    raw_output, _tool_log, _coverage = await run_coder_with_coverage(
-        task_plan,
-        workspace_root,
-        role_specialization=role_specialization,
-        prior_review_feedback=prior_review_feedback,
-    )
-    change = await run_formatter(task_plan=task_plan, raw_output=raw_output, git_diff=git_diff)
-    return _normalize_change(change, task_plan)
+    return raw_output, tool_log, coverage, acceptance_output, acceptance_verified

@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from sprint_crew.orchestrator.plan_coverage import normalize_path
-from sprint_crew.schemas.ticket import TaskPlan
+from sprint_crew.orchestrator.complexity import tech_lead_mode
+from sprint_crew.orchestrator.plan_coverage import normalize_path, step_file_paths
+from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
 from sprint_crew.vector.chunker import INDEXABLE_SUFFIXES
 from sprint_crew.vector.chunker import _should_skip_path as _chunker_should_skip_path
 
@@ -139,3 +140,60 @@ def validate_plan_paths_exist(
             phantom.append(path)
     if phantom:
         raise PlanPathValidationError(phantom)
+
+
+class PlanStructureValidationError(ValueError):
+    pass
+
+
+def validate_plan_structure(
+    plan: TaskPlan,
+    ticket: JiraTicket,
+    *,
+    workspace_root: Path | None = None,
+    baseline_paths: frozenset[str] | None = None,
+) -> None:
+    """Ensure TaskPlan file lists are coherent for multi-step / non-trivial work."""
+    if tech_lead_mode(ticket) == "static" and len(plan.steps) <= 1:
+        return
+
+    if len(plan.steps) > 1 and not plan.files_to_touch:
+        raise PlanStructureValidationError(
+            "files_to_touch must be non-empty when the plan has multiple steps."
+        )
+
+    if not plan.files_to_touch:
+        return
+
+    allowed = {normalize_path(path) for path in plan.files_to_touch}
+    step_paths = step_file_paths(plan)
+    for step in plan.steps:
+        for raw in step.files:
+            normalized = normalize_path(raw)
+            if normalized and normalized not in allowed:
+                raise PlanStructureValidationError(
+                    f"step file {raw!r} is not listed in files_to_touch."
+                )
+
+    if workspace_root is not None and baseline_paths is not None:
+        for step in plan.steps:
+            for raw in step.files:
+                normalized = normalize_path(raw)
+                if not normalized.startswith("tests/"):
+                    continue
+                if normalized in baseline_paths and not step_requires_test_edit(plan, normalized):
+                    raise PlanStructureValidationError(
+                        f"step lists existing test {raw!r} as an edit target; "
+                        "use acceptance_tests only — include tests/ in steps only when "
+                        "creating a new test file."
+                    )
+
+    unused = sorted(
+        path for path in allowed if path not in step_paths and not path.startswith("tests/")
+    )
+    if unused:
+        joined = ", ".join(unused)
+        raise PlanStructureValidationError(
+            f"files_to_touch lists paths not assigned to any step: {joined}. "
+            "Remove unused paths from files_to_touch or add a step that edits them."
+        )

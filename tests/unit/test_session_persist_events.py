@@ -21,12 +21,17 @@ def _make_base(initial_events: list[AgentEvent]) -> SprintSession:
 def test_session_from_state_preserves_initial_events_across_repeated_calls() -> None:
     """Regression test: a node emitting events must not drop pre-run initial_events
     (e.g. a vector_indexed event set before the graph run starts)."""
-    initial_events = [AgentEvent(agent="orchestrator", event_type="vector_indexed", summary="indexed")]
+    initial_events = [
+        AgentEvent(agent="orchestrator", event_type="vector_indexed", summary="indexed")
+    ]
     base = _make_base(initial_events)
 
     run_events: list[AgentEvent] = []
     for i in range(3):
-        run_events = [*run_events, AgentEvent(agent="node", event_type=f"step{i}", summary=f"step {i}")]
+        run_events = [
+            *run_events,
+            AgentEvent(agent="node", event_type=f"step{i}", summary=f"step {i}"),
+        ]
         base = _session_from_state({"events": run_events}, base, initial_events=initial_events)
         assert initial_events[0] in base.events
 
@@ -39,7 +44,10 @@ def test_session_from_state_never_duplicates_events() -> None:
 
     run_events: list[AgentEvent] = []
     for i in range(4):
-        run_events = [*run_events, AgentEvent(agent="node", event_type=f"step{i}", summary=f"step {i}")]
+        run_events = [
+            *run_events,
+            AgentEvent(agent="node", event_type=f"step{i}", summary=f"step {i}"),
+        ]
         base = _session_from_state({"events": run_events}, base, initial_events=initial_events)
 
     assert len(base.events) == len(run_events)

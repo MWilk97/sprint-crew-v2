@@ -170,7 +170,7 @@ class BacklogRunStore:
         return BacklogRun.model_validate(json.loads(row["payload"]))
 
 
-def _backlog_store() -> BacklogRunStore:
+def backlog_store() -> BacklogRunStore:
     return BacklogRunStore(get_settings().session_db)
 
 
@@ -210,4 +210,4 @@ async def run_backlog(
 
 
 def get_backlog_run(run_id: str) -> BacklogRun | None:
-    return _backlog_store().load(run_id)
+    return backlog_store().load(run_id)

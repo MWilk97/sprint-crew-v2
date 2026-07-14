@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from sprint_crew.tools._safety import UnsafePathError, resolve_safe_path
 from sprint_crew.tools.base import ToolResult
+
+_PATCH_PATH_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+
+
+def _validate_patch_paths(patch: str, *, workspace_root: Path) -> str | None:
+    for match in _PATCH_PATH_RE.finditer(patch):
+        rel = match.group(1).strip()
+        if rel in {"/dev/null", "dev/null"}:
+            continue
+        try:
+            resolve_safe_path(rel, root=workspace_root)
+        except UnsafePathError as exc:
+            return str(exc)
+    return None
 
 
 class ApplyPatchArgs(BaseModel):
@@ -21,6 +37,9 @@ class ApplyPatchTool:
     def execute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult:
         assert isinstance(args, ApplyPatchArgs)
         root = workspace_root.resolve(strict=False)
+        path_error = _validate_patch_paths(args.patch, workspace_root=root)
+        if path_error:
+            return ToolResult(ok=False, output=path_error, error="unsafe path")
         with tempfile.NamedTemporaryFile(
             "w", suffix=".patch", delete=False, encoding="utf-8"
         ) as fh:

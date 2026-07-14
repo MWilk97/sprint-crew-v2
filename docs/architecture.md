@@ -6,7 +6,7 @@ Sprint Crew v2 automates the software delivery loop for a single ticket at a tim
 
 | Layer | Responsibility |
 |-------|----------------|
-| **API** (`api/app.py`) | HTTP entry points: from-prompt, from-ticket, session status |
+| **API** (`src/sprint_crew/api/app.py`) | HTTP entry points: from-prompt, from-ticket, session status, approve |
 | **Orchestrator** (`orchestrator/`) | Workspace prep, git push, Jira transitions, GitHub PR creation |
 | **LangGraph** (`graph/pipeline.py`) | State machine: plan → code → test → review → ship node |
 | **Agents** (`agents/`) | TechLead, Coder, Tester, Formatter, Reviewer, ScrumMaster |
@@ -22,6 +22,8 @@ Two vLLM containers share one GPU with **mutual exclusion**:
 - **Work lane** (:8002) — structured JSON (TaskPlan, ReviewOutcome, BacklogPlan) and TechLead exploration
 
 Lanes start on demand via `scripts/lane-ctl.sh` and stop before swapping models.
+
+**Model serving:** vLLM container flags and HF model IDs live in [`infra/docker-compose.yml`](../infra/docker-compose.yml). [`infra/models.yaml`](../infra/models.yaml) is the Python client config (ports, `served_name`); YAML `tool_call_parser` fields are documentation-only.
 
 ## Side-effect boundary
 

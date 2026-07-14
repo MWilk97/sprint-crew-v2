@@ -39,6 +39,8 @@ async def test_graph_happy_path_mocked(
             "handoff",
             [],
             MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
+            "",
+            False,
         ),
         formatter_result=code_change,
         reviewer=AsyncMock(return_value=passing_review),
@@ -81,6 +83,8 @@ async def test_graph_simple_ticket_uses_template_via_tech_lead(
             "handoff",
             [],
             MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
+            "",
+            False,
         ),
         formatter_result=code_change,
         reviewer=AsyncMock(return_value=passing_review),
@@ -111,6 +115,27 @@ def test_graph_has_direct_init_to_tech_lead_edge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_test_implement_skips_acceptance_when_coder_verified(
+    base_state: dict,
+    task_plan: TaskPlan,
+    code_change: CodeChange,
+) -> None:
+    from sprint_crew.graph.pipeline import test_implement
+
+    base_state["task_plan"] = task_plan.model_dump()
+    base_state["code_change"] = code_change.model_dump()
+    base_state["tests_run_this_cycle"] = True
+    base_state["acceptance_test_output"] = "pytest ok"
+
+    with patch(
+        "sprint_crew.graph.pipeline.run_cycle_acceptance_tests",
+    ) as run_ac:
+        await test_implement(base_state)  # type: ignore[arg-type]
+
+    run_ac.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_test_implement_keeps_work_lane_warm_after_reporter(
     base_state: dict,
     task_plan: TaskPlan,
@@ -134,7 +159,7 @@ async def test_test_implement_keeps_work_lane_warm_after_reporter(
         ),
         patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="diff"),
         patch("sprint_crew.graph.pipeline.run_tester_reporter", new=AsyncMock(return_value=None)),
-        patch("sprint_crew.agents.reviewer._run_acceptance_tests", return_value=("", False)),
+        patch("sprint_crew.graph.pipeline.run_cycle_acceptance_tests", return_value=("", False)),
         patch("sprint_crew.graph.pipeline.should_invoke_tester", return_value=True),
     ):
         await test_implement(base_state)  # type: ignore[arg-type]
@@ -299,6 +324,8 @@ async def test_code_implement_stops_coder_before_work_lane(
                     "handoff",
                     [],
                     MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
+                    "",
+                    False,
                 )
             ),
         ),

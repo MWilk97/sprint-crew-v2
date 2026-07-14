@@ -120,9 +120,7 @@ def build_scorecard(reports: list[dict]) -> dict:
             if isinstance(r.get("total_tool_calls"), (int, float))
         ]
         failure_classes = Counter(
-            str(r.get("failure_class") or "unknown")
-            for r in items
-            if not _passed(r)
+            str(r.get("failure_class") or "unknown") for r in items if not _passed(r)
         )
         pipeline_only = sum(1 for r in items if _pipeline_only_ok(r))
         tiers[tier] = {

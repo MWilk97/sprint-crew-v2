@@ -13,11 +13,11 @@ from sprint_crew.orchestrator.backlog import BacklogRunStore, normalize_backlog_
 from sprint_crew.orchestrator.session import SessionStore, prepare_workspace
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SprintSession
-from tests.helpers.vector_tiers import failure_class_from_session, last_gate_result
 from sprint_crew.vector.context import enrich_repo_context_with_hits
 from sprint_crew.vector.indexer import maybe_index_workspace
 from sprint_crew.vector.search import semantic_search
 from tests.helpers.vector_ab import copy_fixture_workspace
+from tests.helpers.vector_tiers import failure_class_from_session, last_gate_result
 
 VECTOR_INTEGRATION_PROMPT = """\
 We have an internal task platform with SQLite storage and partial HTTP routes.

@@ -40,3 +40,18 @@ def test_semantic_search_uses_session_id(tmp_path: Path, monkeypatch) -> None:
     tool = SemanticSearchTool(session_id="explicit-id")
     tool.execute(SemanticSearchArgs(query="auth"), workspace_root=tmp_path)
     assert calls == ["explicit-id"]
+
+
+def test_semantic_search_rejects_unsafe_path_prefix(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VECTOR_INDEX_ENABLED", "true")
+    from sprint_crew.config import get_settings
+
+    get_settings.cache_clear()
+
+    tool = SemanticSearchTool(session_id="sess-1")
+    result = tool.execute(
+        SemanticSearchArgs(query="hello", path_prefix="../.git"),
+        workspace_root=tmp_path,
+    )
+    assert result.ok is False
+    assert result.error == "unsafe path"

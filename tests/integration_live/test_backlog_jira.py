@@ -73,7 +73,6 @@ async def test_run_backlog_creates_jira_without_vllm(
             "sprint_crew.orchestrator.batch_cycle.create_and_run_cycle",
             side_effect=fake_create_and_run_cycle,
         ),
-        patch("sprint_crew.orchestrator.batch_cycle.maybe_index_workspace", return_value=None),
         patch("sprint_crew.orchestrator.batch_cycle._stop_all_lanes", new=AsyncMock()),
     ):
         get_settings.cache_clear()

@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from sprint_crew.config import Role, get_settings
+from sprint_crew.config import Role
 from sprint_crew.graph.lanes import stop_lane
 from sprint_crew.orchestrator.backlog import (
-    BacklogRunStore,
+    backlog_store,
     create_jira_tickets,
     sort_stories,
 )
@@ -16,8 +16,8 @@ from sprint_crew.orchestrator.session import (
     prepare_workspace,
 )
 from sprint_crew.schemas.backlog import BacklogPlan
-from sprint_crew.schemas.session import AgentEvent, BacklogRun, BacklogRunStatus, SessionStatus
-from sprint_crew.vector.indexer import delete_workspace_index, maybe_index_workspace
+from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus
+from sprint_crew.vector.indexer import delete_workspace_index
 
 
 async def _stop_all_lanes() -> None:
@@ -26,19 +26,6 @@ async def _stop_all_lanes() -> None:
             await stop_lane(role)
         except Exception:
             pass
-
-
-def _index_session_event(index_result) -> AgentEvent:
-    return AgentEvent(
-        agent="orchestrator",
-        event_type="vector_indexed",
-        summary=(f"Indexed {index_result.chunks} chunks from {index_result.files} files"),
-        detail={
-            "chunks": index_result.chunks,
-            "files": index_result.files,
-            "seconds": index_result.seconds,
-        },
-    )
 
 
 def _cleanup_vector_indexes(session_ids: list[str], run_id: str) -> None:
@@ -53,10 +40,6 @@ def _cleanup_vector_indexes(session_ids: list[str], run_id: str) -> None:
         pass
 
 
-def _backlog_store() -> BacklogRunStore:
-    return BacklogRunStore(get_settings().session_db)
-
-
 async def run_backlog_batched(
     *,
     run_id: str,
@@ -65,7 +48,7 @@ async def run_backlog_batched(
     repo_url: str | None = None,
     use_real_ship: bool = False,
 ) -> BacklogRun:
-    store = _backlog_store()
+    store = backlog_store()
     run = BacklogRun(
         run_id=run_id,
         status=BacklogRunStatus.RUNNING,
@@ -88,16 +71,6 @@ async def run_backlog_batched(
             else:
                 workspace = prepare_chained_workspace(parent_workspace, session_id)
 
-            index_result = maybe_index_workspace(
-                workspace,
-                session_id,
-                prompt=user_prompt,
-                ticket=ticket,
-            )
-            initial_events: list[AgentEvent] = []
-            if index_result is not None:
-                initial_events.append(_index_session_event(index_result))
-
             session_ids.append(session_id)
             session = await create_and_run_cycle(
                 ticket=ticket,
@@ -106,7 +79,6 @@ async def run_backlog_batched(
                 user_prompt=user_prompt,
                 use_real_ship=use_real_ship,
                 backlog_run_id=run_id,
-                initial_events=initial_events,
             )
 
             if session.status == SessionStatus.AWAITING_HUMAN:

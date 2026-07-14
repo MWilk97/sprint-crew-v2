@@ -47,6 +47,20 @@ def test_apply_patch_fails_on_conflict(tmp_path: Path, patch_available: None) ->
     assert result.ok is False
 
 
+def test_apply_patch_rejects_unsafe_path(tmp_path: Path) -> None:
+    diff = """\
+--- a/.git/config
++++ b/.git/config
+@@ -1,1 +1,1 @@
+ x
++y
+"""
+    tool = ApplyPatchTool()
+    result = tool.execute(ApplyPatchArgs(patch=diff), workspace_root=tmp_path)
+    assert result.ok is False
+    assert "forbidden" in result.output.lower() or "escapes" in result.output.lower()
+
+
 def test_apply_patch_missing_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise_not_found(*_args, **_kwargs):
         raise FileNotFoundError

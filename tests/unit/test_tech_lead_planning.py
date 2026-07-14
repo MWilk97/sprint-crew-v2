@@ -5,11 +5,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from sprint_crew.agents.tech_lead import PlanStructureValidationError, validate_plan_structure
 from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated
 from sprint_crew.orchestrator.plan_validation import (
     PlanScopeValidationError,
+    PlanStructureValidationError,
     validate_plan_scope_conflicts,
+    validate_plan_structure,
 )
 from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
 

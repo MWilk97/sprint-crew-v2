@@ -117,7 +117,3 @@ async def stop_lane(role: Role) -> None:
         msg = stderr.decode() or stdout.decode() or f"lane-ctl stop {lane_name} failed"
         raise RuntimeError(msg)
     await wait_lane_stopped(role)
-
-
-def ensure_lane_sync(role: Role) -> None:
-    asyncio.run(ensure_lane(role))

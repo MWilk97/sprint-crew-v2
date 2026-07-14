@@ -25,6 +25,4 @@ def test_postcheck_contract_on_vector_repo_fixture(
     assert result.fragments_found.get("ferry") is True
     assert result.collection_id.startswith("postcheck-")
     assert result.hits_by_fragment["ferry"]
-    assert POSTCHECK_QUERIES["ferry"] in (
-        "ferry dispatch outbound queue worker",
-    )
+    assert POSTCHECK_QUERIES["ferry"] in ("ferry dispatch outbound queue worker",)

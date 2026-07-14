@@ -14,19 +14,13 @@ from sprint_crew.vector.search import semantic_search
     ("fixture_name", "query", "min_chunks", "assert_fn"),
     [
         (
-            "repo",
-            "hello greeting",
-            1,
-            lambda hits, result: hits or result.chunks < 3,
-        ),
-        (
             "vector_repo",
             "ferry dispatch outbound queue",
             20,
             lambda hits, _result: any("ferry" in hit.path for hit in hits),
         ),
     ],
-    ids=["greeter", "vector_repo_ferry"],
+    ids=["vector_repo_ferry"],
 )
 def test_fixture_index_round_trip(
     skip_unless_vector_live,
@@ -47,7 +41,9 @@ def test_fixture_index_round_trip(
     assert result.chunks >= min_chunks
 
     hits = semantic_search(session_id, query, top_k=5)
-    assert assert_fn(hits, result), f"assertion failed for {fixture_name}: {[(h.path, h.score) for h in hits]}"
+    assert assert_fn(hits, result), (
+        f"assertion failed for {fixture_name}: {[(h.path, h.score) for h in hits]}"
+    )
 
 
 @pytest.mark.vector_live

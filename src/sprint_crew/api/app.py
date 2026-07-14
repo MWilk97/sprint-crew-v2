@@ -123,12 +123,6 @@ async def sprint_from_ticket(
 
     session_id = str(uuid4())
     workspace = prepare_workspace(session_id, repo_url=body.repo_url)
-    await asyncio.to_thread(
-        maybe_index_workspace,
-        workspace,
-        session_id,
-        ticket=ticket,
-    )
     pending = SprintSession(
         session_id=session_id,
         status=SessionStatus.PENDING,

@@ -25,7 +25,7 @@ flowchart TD
   StepCoder --> CoverageGate[Plan coverage gate]
   CoverageGate -->|missing files| ContinueCoder[Coder continuation rounds]
   ContinueCoder --> CoverageGate
-  CoverageGate --> Formatter[Formatter to CodeChange]
+  CoverageGate -->|satisfied| Formatter[Formatter inside codeImplement]
   Formatter --> TesterRule{Tester required?}
   TesterRule -->|invoke| Tester[Coder lane tests/ only]
   TesterRule -->|skip| Reviewer[Reviewer on Work lane]

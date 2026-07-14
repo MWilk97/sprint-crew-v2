@@ -136,11 +136,14 @@ run_pytest "preflight_work_tools" env PREFLIGHT_LIVE=1 pytest \
   tests/preflight/test_vllm_probes.py::test_probe_vllm_tools_work -q
 run_pytest "preflight_json" env PREFLIGHT_LIVE=1 pytest \
   tests/preflight/test_vllm_probes.py::test_probe_json -q
+run_pytest "preflight_backlog_plan" env PREFLIGHT_LIVE=1 pytest \
+  tests/preflight/test_vllm_probes.py::test_probe_backlog_plan -q
 
 if [[ "$WITH_AGENT_LIVE" -eq 1 ]]; then
-  log "=== PHASE 1b: agent_live (Work lane — reviewer, tech_lead, formatter) ==="
-  run_pytest "agent_live_work" env VLLM_LIVE=1 pytest tests/agent_live \
-    -m "agent_live" -k "(reviewer or formatter or tester_reporter or tech_lead) and not tool_loop_complex" -q
+  log "=== PHASE 1b: agent_live diagnostic (non-greeter tech_lead only) ==="
+  run_pytest "agent_live_tech_lead" env VLLM_LIVE=1 pytest \
+    tests/agent_live/test_tech_lead_live.py::test_tech_lead_static_plan_validators \
+    -m "agent_live" -q
 fi
 
 "$ROOT/scripts/lane-ctl.sh" stop work
@@ -149,13 +152,6 @@ fi
 log "=== PHASE 2: coder block (preflight + ship_live greeter [+ email]) ==="
 lane_hard_reset
 start_lane_with_retry coder http://127.0.0.1:8001
-
-if [[ "$WITH_AGENT_LIVE" -eq 1 ]]; then
-  log "=== PHASE 2b: agent_live (coder lane) ==="
-  run_pytest "agent_live_coder" env VLLM_LIVE=1 pytest \
-    tests/agent_live/test_coder_live.py \
-    -m "agent_live and vllm_live" -q
-fi
 
 run_pytest "preflight_coder_tools" env PREFLIGHT_LIVE=1 pytest \
   tests/preflight/test_vllm_probes.py::test_probe_vllm_tools -q

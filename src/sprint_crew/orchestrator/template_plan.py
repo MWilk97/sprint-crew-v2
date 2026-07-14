@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import re
 
-from sprint_crew.agents.tech_lead import PlanStructureValidationError, validate_plan_structure
 from sprint_crew.orchestrator.acceptance_tests import (
     AcceptanceTestsValidationError,
     validate_acceptance_tests,
 )
 from sprint_crew.orchestrator.complexity import _paths_in_text
+from sprint_crew.orchestrator.plan_validation import (
+    PlanStructureValidationError,
+    validate_plan_structure,
+)
 from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
 
 _MODULE_RE = re.compile(r"\b(\w+)\s+module\b", re.IGNORECASE)

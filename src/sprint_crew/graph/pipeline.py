@@ -23,6 +23,7 @@ from sprint_crew.orchestrator.acceptance_failure import (
     AcceptanceFailureAnalysis,
     analyze_acceptance_output,
 )
+from sprint_crew.orchestrator.cycle_acceptance import run_cycle_acceptance_tests
 from sprint_crew.orchestrator.merge_gate import review_accepted
 from sprint_crew.orchestrator.plan_coverage import (
     PlanCoverageResult,
@@ -36,7 +37,7 @@ from sprint_crew.orchestrator.retry import (
     resolve_retry_scope,
 )
 from sprint_crew.orchestrator.ship_cycle import orchestrator_ship
-from sprint_crew.orchestrator.template_plan import work_lane_required_for_ticket
+from sprint_crew.orchestrator.template_plan import build_template_task_plan_validated
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome
 from sprint_crew.schemas.session import AgentEvent, SessionStatus
@@ -140,6 +141,54 @@ async def init_session(state: SprintState) -> dict[str, Any]:
     git_dir = workspace / ".git"
     if not git_dir.exists():
         raise ValueError(f"Workspace is not a git repo: {workspace}")
+    ticket = _ticket(state)
+    template_fast_path = False
+    try:
+        build_template_task_plan_validated(ticket)
+        template_fast_path = True
+    except RuntimeError:
+        pass
+
+    session_id = state["session_id"]
+    index_result = await asyncio.to_thread(
+        maybe_index_workspace,
+        workspace,
+        session_id,
+        ticket=ticket,
+    )
+    events: list[AgentEvent] = []
+    if index_result is not None:
+        if index_result.chunks >= 0:
+            events.append(
+                _event(
+                    "orchestrator",
+                    "vector_indexed",
+                    f"Indexed {index_result.chunks} chunks from {index_result.files} files",
+                    chunks=index_result.chunks,
+                    files=index_result.files,
+                    seconds=index_result.seconds,
+                    git_sha=index_result.git_sha,
+                ),
+            )
+        else:
+            events.append(
+                _event(
+                    "orchestrator",
+                    "vector_index_skipped",
+                    "Vector index unchanged — git SHA matches existing collection",
+                    git_sha=index_result.git_sha,
+                ),
+            )
+
+    events.append(
+        _event(
+            "orchestrator",
+            "session_started",
+            f"Session {state['session_id']} started",
+            **_timed_detail(started),
+        ),
+    )
+
     return {
         "attempt": state.get("attempt", 0),
         "status": SessionStatus.RUNNING,
@@ -147,14 +196,9 @@ async def init_session(state: SprintState) -> dict[str, Any]:
         "plan_retries": state.get("plan_retries", 0),
         "skip_tester_this_attempt": False,
         "tests_run_this_cycle": False,
-        "events": [
-            _event(
-                "orchestrator",
-                "session_started",
-                f"Session {state['session_id']} started",
-                **_timed_detail(started),
-            ),
-        ],
+        "acceptance_test_output": "",
+        "template_fast_path": template_fast_path,
+        "events": events,
     }
 
 
@@ -165,14 +209,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
     session_id = state["session_id"]
     baseline = frozenset(state.get("baseline_paths") or snapshot_baseline_paths(workspace))
 
-    index_result = await asyncio.to_thread(
-        maybe_index_workspace,
-        workspace,
-        session_id,
-        ticket=ticket,
-    )
-
-    work_lane_required = work_lane_required_for_ticket(ticket)
+    work_lane_required = not state.get("template_fast_path", False)
 
     if work_lane_required:
         await ensure_lane(Role.WORK)
@@ -225,17 +262,6 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
         detail["lane"] = "work"
 
     events.extend(tool_call_events("tech_lead", tech_lead_tool_log))
-    if index_result is not None:
-        events.append(
-            _event(
-                "orchestrator",
-                "vector_indexed",
-                f"Indexed {index_result.chunks} chunks from {index_result.files} files",
-                chunks=index_result.chunks,
-                files=index_result.files,
-                seconds=index_result.seconds,
-            ),
-        )
 
     events.append(
         _event(
@@ -260,7 +286,13 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
     baseline = frozenset(state.get("baseline_paths") or ())
 
     await ensure_lane(Role.CODING)
-    raw_output, tool_log, coverage = await run_coder_with_coverage(
+    (
+        raw_output,
+        tool_log,
+        coverage,
+        acceptance_output,
+        acceptance_verified,
+    ) = await run_coder_with_coverage(
         plan,
         workspace,
         prior_review_feedback=state.get("prior_review_feedback", ""),
@@ -300,7 +332,8 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
             ),
         )
 
-    return {
+    tests_run = acceptance_verified or change.tests_passed
+    result: dict[str, Any] = {
         "code_change": change.model_dump(),
         "workspace_diff": workspace_diff,
         "branch": change.branch,
@@ -312,9 +345,12 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
             "blocking_unexpected": coverage.blocking_unexpected,
             "phantom_paths": coverage.phantom_paths,
         },
-        "tests_run_this_cycle": change.tests_passed,
+        "tests_run_this_cycle": tests_run,
         "events": events,
     }
+    if acceptance_output:
+        result["acceptance_test_output"] = acceptance_output
+    return result
 
 
 async def test_implement(state: SprintState) -> dict[str, Any]:
@@ -341,9 +377,15 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
             ],
         }
 
-    from sprint_crew.agents.reviewer import _run_acceptance_tests
-
-    acceptance_output, acceptance_green = _run_acceptance_tests(workspace, plan.acceptance_tests)
+    if state.get("tests_run_this_cycle") and state.get("acceptance_test_output"):
+        acceptance_output = str(state["acceptance_test_output"])
+        acceptance_green = True
+    else:
+        acceptance_output, acceptance_green = await asyncio.to_thread(
+            run_cycle_acceptance_tests,
+            workspace,
+            plan.acceptance_tests,
+        )
     failure_analysis = (
         analyze_acceptance_output(acceptance_output) if acceptance_output.strip() else None
     )
@@ -366,6 +408,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         return {
             "workspace_diff": workspace_diff,
             "tests_run_this_cycle": acceptance_green,
+            "acceptance_test_output": acceptance_output,
             "acceptance_failure": _acceptance_failure_dict(failure_analysis),
             "events": [
                 _event(
@@ -528,7 +571,6 @@ def route_after_gate(state: SprintState) -> str:
 
 async def prepare_retry(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
-    from sprint_crew.agents.reviewer import _run_acceptance_tests
 
     outcome = ReviewOutcome.model_validate(state["review_outcome"])
     plan = _task_plan(state)
@@ -564,7 +606,15 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
 
     test_output = ""
     if not skip_tester:
-        test_output, _ = _run_acceptance_tests(_workspace(state), plan.acceptance_tests)
+        cached = state.get("acceptance_test_output", "")
+        if state.get("tests_run_this_cycle") and cached:
+            test_output = str(cached)
+        else:
+            test_output, _ = await asyncio.to_thread(
+                run_cycle_acceptance_tests,
+                _workspace(state),
+                plan.acceptance_tests,
+            )
 
     failure_analysis, bugs_observed = resolve_failure_feedback(
         test_output=test_output,

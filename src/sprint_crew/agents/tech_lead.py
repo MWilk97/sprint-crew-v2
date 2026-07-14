@@ -16,58 +16,18 @@ from sprint_crew.agents.tool_events import ToolCallLog
 from sprint_crew.config import Role, get_settings
 from sprint_crew.inference.router import pydantic_ai_model
 from sprint_crew.inference.structured import structured_completion
-from sprint_crew.orchestrator.complexity import _paths_in_text, tech_lead_mode
-from sprint_crew.orchestrator.plan_coverage import normalize_path, step_file_paths
+from sprint_crew.orchestrator.complexity import tech_lead_mode
+from sprint_crew.orchestrator.repo_context import gather_repo_context, paths_from_ticket
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
-from sprint_crew.tools import READONLY_TOOLS, build_registry
 from sprint_crew.tools.pydantic_ai import WorkspaceDeps, build_readonly_toolset, workspace_deps
-
-_MAX_FILE_SNIPPET = 4000
 
 
 def _paths_from_ticket(ticket: JiraTicket) -> list[str]:
-    text = "\n".join(
-        [
-            ticket.summary,
-            ticket.description,
-            ticket.acceptance_criteria,
-        ]
-    )
-    return _paths_in_text(text)[:8]
+    return paths_from_ticket(ticket)
 
 
 def _gather_repo_context(workspace_root: Path, ticket: JiraTicket | None = None) -> str:
-    registry = build_registry(READONLY_TOOLS)
-    parts: list[str] = []
-
-    def run_tool(name: str, args: dict | None = None) -> str:
-        result = registry.dispatch(name, args or {}, workspace_root=workspace_root)
-        return result.output if result.ok else f"[{name} error] {result.output}"
-
-    parts.append("=== git status ===")
-    parts.append(run_tool("git_status"))
-    parts.append("=== directory listing (.) ===")
-    parts.append(run_tool("list_directory", {"path": "."}))
-    parts.append("=== recent git log ===")
-    parts.append(run_tool("git_log", {"n": 5}))
-
-    if ticket is not None:
-        for rel_path in _paths_from_ticket(ticket):
-            parts.append(f"=== read_file: {rel_path} ===")
-            content = run_tool("read_file", {"path": rel_path})
-            if len(content) > _MAX_FILE_SNIPPET:
-                content = content[:_MAX_FILE_SNIPPET] + "\n... (truncated)"
-            parts.append(content)
-
-    readme = workspace_root / "README.md"
-    if readme.exists() and (ticket is None or "README.md" not in _paths_from_ticket(ticket)):
-        parts.append("=== read_file: README.md ===")
-        content = run_tool("read_file", {"path": "README.md"})
-        if len(content) > _MAX_FILE_SNIPPET:
-            content = content[:_MAX_FILE_SNIPPET] + "\n... (truncated)"
-        parts.append(content)
-
-    return "\n".join(parts)
+    return gather_repo_context(workspace_root, ticket)
 
 
 def _repo_context_for_ticket(
@@ -296,62 +256,3 @@ async def run_tech_lead(
         prior_review_feedback=prior_review_feedback,
     )
     return plan, "static"
-
-
-class PlanStructureValidationError(ValueError):
-    pass
-
-
-def validate_plan_structure(
-    plan: TaskPlan,
-    ticket: JiraTicket,
-    *,
-    workspace_root: Path | None = None,
-    baseline_paths: frozenset[str] | None = None,
-) -> None:
-    """Ensure TaskPlan file lists are coherent for multi-step / non-trivial work."""
-    from sprint_crew.orchestrator.plan_validation import step_requires_test_edit
-
-    if tech_lead_mode(ticket) == "static" and len(plan.steps) <= 1:
-        return
-
-    if len(plan.steps) > 1 and not plan.files_to_touch:
-        raise PlanStructureValidationError(
-            "files_to_touch must be non-empty when the plan has multiple steps."
-        )
-
-    if not plan.files_to_touch:
-        return
-
-    allowed = {normalize_path(path) for path in plan.files_to_touch}
-    step_paths = step_file_paths(plan)
-    for step in plan.steps:
-        for raw in step.files:
-            normalized = normalize_path(raw)
-            if normalized and normalized not in allowed:
-                raise PlanStructureValidationError(
-                    f"step file {raw!r} is not listed in files_to_touch."
-                )
-
-    if workspace_root is not None and baseline_paths is not None:
-        for step in plan.steps:
-            for raw in step.files:
-                normalized = normalize_path(raw)
-                if not normalized.startswith("tests/"):
-                    continue
-                if normalized in baseline_paths and not step_requires_test_edit(plan, normalized):
-                    raise PlanStructureValidationError(
-                        f"step lists existing test {raw!r} as an edit target; "
-                        "use acceptance_tests only — include tests/ in steps only when "
-                        "creating a new test file."
-                    )
-
-    unused = sorted(
-        path for path in allowed if path not in step_paths and not path.startswith("tests/")
-    )
-    if unused:
-        joined = ", ".join(unused)
-        raise PlanStructureValidationError(
-            f"files_to_touch lists paths not assigned to any step: {joined}. "
-            "Remove unused paths from files_to_touch or add a step that edits them."
-        )

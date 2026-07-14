@@ -79,12 +79,28 @@ def index_workspace(workspace: Path, session_id: str) -> IndexResult:
 
     started = time.perf_counter()
     root = workspace.resolve()
-    chunks = iter_workspace_chunks(root)
     file_count = count_indexable_files(root)
     git_sha = _git_head_sha(root)
     coll = collection_name(session_id)
 
     store = QdrantStore()
+    if git_sha and store.get_collection_git_sha(coll) == git_sha:
+        elapsed = time.perf_counter() - started
+        log.info(
+            "Skipping re-index for %s — git SHA unchanged (%s)",
+            session_id,
+            git_sha[:8],
+        )
+        return IndexResult(
+            session_id=session_id,
+            collection=coll,
+            files=file_count,
+            chunks=-1,
+            seconds=elapsed,
+            git_sha=git_sha,
+        )
+
+    chunks = iter_workspace_chunks(root)
     store.delete_collection(coll)
 
     if not chunks:

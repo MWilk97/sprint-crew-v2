@@ -22,10 +22,6 @@ EOF
 
 normalize_lane() {
   case "$1" in
-    planner)
-      echo "DEPRECATED: use 'work' instead of 'planner'" >&2
-      echo "work"
-      ;;
     work|coder|qdrant|embed|vector|all) echo "$1" ;;
     *) return 1 ;;
   esac

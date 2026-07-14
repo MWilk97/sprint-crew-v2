@@ -172,7 +172,7 @@ VECTOR_LIVE=1 pytest tests/vector_live/test_postcheck_contract.py -q   # ~15s pr
 VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/integration/ -m "vector_agent_live and agent_integration and nightly" -v
 
 # Vector trap tier — adversarial (SOFT; set VECTOR_TRAP_STRICT=1 to hard-fail)
-VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m agent_trap -v
+VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m "vector_agent_live and agent_trap" -v
 
 # Benchmark scorecard from JSON reports
 python scripts/agent_scorecard.py

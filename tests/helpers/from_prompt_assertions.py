@@ -206,7 +206,9 @@ def assert_per_session_cycles(sessions: list[SprintSession]) -> str | None:
     return None
 
 
-def assert_per_session_semantic(sessions: list[SprintSession], *, min_per_story: int = 1) -> str | None:
+def assert_per_session_semantic(
+    sessions: list[SprintSession], *, min_per_story: int = 1
+) -> str | None:
     for session in sessions:
         semantic_calls = count_semantic_retrieval_events(session)
         if semantic_calls < min_per_story:

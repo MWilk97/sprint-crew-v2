@@ -26,5 +26,3 @@ async def test_scrum_master_returns_valid_backlog_plan_schema() -> None:
     assert completion_mock.call_args.args[0] == Role.WORK
     assert len(result.stories) >= 1
     assert result.recommended_first
-
-

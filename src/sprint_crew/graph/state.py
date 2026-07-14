@@ -32,4 +32,6 @@ class SprintState(TypedDict, total=False):
     plan_coverage_prev: dict[str, Any]
     coverage_stall_count: int
     acceptance_failure: dict[str, Any]
+    acceptance_test_output: str
     backlog_run_id: str | None
+    template_fast_path: bool

@@ -2,13 +2,11 @@
 
 > Autonomous sprint agents: Jira ticket → plan → code → test → review → PR
 
-![unit tests](https://github.com/YOUR_GITHUB_USER/sprint-crew-v2/actions/workflows/test.yml/badge.svg)
-
 LangGraph-orchestrated multi-agent pipeline that turns Jira tickets (or natural-language prompts) into reviewed pull requests. Built with **Pydantic AI**, **LangGraph**, and **vLLM** on a dual-lane GPU setup with on-demand model loading.
 
 ## Highlights
 
-- **LangGraph state machine** — TechLead → Coder → Tester → Reviewer → merge gate → ship
+- **LangGraph state machine** — TechLead → Coder+Formatter (inside `codeImplement`) → Tester (conditional) → Reviewer → merge gate → ship
 - **Strict Pydantic v2 schemas** — all agent contracts use `extra="forbid"`
 - **Dual vLLM lanes** — Coder (:8001) and Work (:8002); only one loaded at a time on 128 GB unified memory
 - **Tiered test pyramid** — unit → sandbox integration → GPU agent_live → vector tiers
@@ -20,10 +18,14 @@ LangGraph-orchestrated multi-agent pipeline that turns Jira tickets (or natural-
 flowchart TD
   Ticket[Jira ticket] --> TechLeadPlan[techLeadPlan]
   TechLeadPlan --> TaskPlan[TaskPlan]
-  TaskPlan --> Coder[Coder on Coder lane]
-  Coder --> Coverage[Plan coverage gate]
-  Coverage --> Formatter[Formatter]
-  Formatter --> Tester{Tester required?}
+  TaskPlan --> CodeImplement[codeImplement node]
+  subgraph codeImplement [codeImplement]
+    Coder[Coder on Coder lane]
+    Coverage[Plan coverage gate]
+    Formatter[Formatter on Work lane]
+    Coder --> Coverage --> Formatter
+  end
+  CodeImplement --> Tester{testImplement required?}
   Tester -->|yes| TestAgent[Tester]
   Tester -->|no| Reviewer[Reviewer on Work lane]
   TestAgent --> Reviewer
@@ -70,6 +72,7 @@ GX10 test suite (preflight + real ship cycle):
 | `POST /sprint/from-ticket` | Existing Jira ticket → single sprint cycle |
 | `GET /sprint/session/{id}` | Session status and event timeline |
 | `GET /sprint/backlog/{run_id}` | Backlog orchestration status |
+| `POST /sprint/session/{id}/approve` | Record human approval (no auto-merge) |
 | `GET /health` | API health + vLLM lane status |
 
 Start the API:

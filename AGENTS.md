@@ -28,11 +28,11 @@ Policies for autonomous sprint agents on GX10 (Pydantic AI + LangGraph + vLLM).
 ### 4.1 GX10 unified memory (128 GB)
 
 - Never keep 2+ vLLM lanes with weights loaded simultaneously in production/dev.
-- **from-prompt API:** ScrumMaster prep runs on Work lane in `api/app.py` before backlog orchestration (BacklogPlan → Jira tickets).
+- **from-prompt API:** ScrumMaster prep runs on Work lane in [`src/sprint_crew/api/app.py`](src/sprint_crew/api/app.py) before backlog orchestration (BacklogPlan → Jira tickets).
 - **Per-ticket LangGraph cycle:** `techLeadPlan` → `codeImplement` → `testImplement` (when required) → `review` → merge gate → ship; lane swaps: Work → Coder → Work within each cycle.
 - `smoke_cycle` / API: do **not** call `lane-ctl start all` before a cycle (optional `--preflight-lanes` starts coder only).
 - Target `gpu_memory_utilization` per lane (one lane loaded at a time) — **per-lane tuning** on GX10/GB10 ([`infra/models.yaml`](infra/models.yaml)), NVFP4 weights: coding **0.85** (~46 GB weights, 131k+ context), work **0.50** (~20 GB weights, 131k context). NVFP4 MoE on GB10 (sm121) needs Marlin GEMM env flags (`VLLM_NVFP4_GEMM_BACKEND=marlin`) — see [`infra/docker-compose.yml`](infra/docker-compose.yml); 0.90+ still risks wedging the host ([vLLM #46307](https://github.com/vllm-project/vllm/issues/46307), [vllm-gb10](https://github.com/shamily/vllm-gb10)). Do not sum utilization across containers.
-- Backlog runs: `run_backlog_batched` creates Jira tickets and sequentially calls `create_and_run_cycle` (same LangGraph as from-ticket). `backlog_run_id` keeps the Work lane warm between tickets; `_stop_all_lanes` runs in `finally`.
+- Backlog runs: `run_backlog_batched` creates Jira tickets and sequentially calls `create_and_run_cycle` (same LangGraph as from-ticket). `backlog_run_id` skips stopping the Work lane after review within a cycle; `_stop_all_lanes` runs in `finally`.
 - After a failed lane test, always `./scripts/lane-ctl.sh stop all` before retrying.
 - If a lane is slow despite health=OK, check whether another vLLM container is still running (`docker ps`, `nvidia-smi`).
 
@@ -48,13 +48,14 @@ Git clone, branch, commit, push, Jira transitions, and GitHub PR creation are **
 - `GET /sprint/backlog/{run_id}` — backlog orchestration status and session IDs.
 - `POST /sprint/from-ticket` — existing Jira ticket → sprint cycle (skips ScrumMaster).
 - `GET /sprint/session/{id}` — status and event timeline.
+- `POST /sprint/session/{id}/approve` — record human approval (no auto-merge).
 - Manual merge gate: human approves PR after `awaiting_human`.
 
 ### 5.3 Acceptance criteria vs test commands
 
 - Jira `acceptance_criteria` is **human prose** (bullets, behavior) — never executed as shell.
 - TechLead interprets AC + repo context → `TaskPlan.acceptance_tests` (allowlisted commands only).
-- Every sprint cycle runs **Coder → Tester → Review**. All tickets use **TechLead** via `techLeadPlan`; planning mode is selected internally (`template`, `static`, `tool_loop`, `template_fallback`).
+- Every sprint cycle runs **TechLead → Coder+Formatter → Tester (conditional) → Review**. All tickets use **TechLead** via `techLeadPlan`; planning mode is selected internally (`template`, `static`, `tool_loop`, `template_fallback`).
 - Ticket complexity uses `assess_ticket_complexity` (COMPLEX → tool_loop; TRIVIAL/SIMPLE → template fast-path then static). `assess_prompt_complexity` gates backlog normalization (story merge/cap) and vector indexing — not lane routing.
 - Reviewer receives original ticket AC for behavioral/scope review; `tests_passed` from orchestrator exit codes.
 
@@ -77,7 +78,7 @@ See [`docs/agent-orchestration.md`](docs/agent-orchestration.md) for the full fl
 
 | Marker | Purpose |
 |--------|---------|
-| `preflight` | Live vLLM probes A–D (`PREFLIGHT_LIVE=1`) |
+| `preflight` | Live vLLM probes A–C via pytest; probe D = `scripts/smoke_cycle.py --coder-only` (manual) |
 | `agent_live` | Single-agent tests on fixture repo (`VLLM_LIVE=1` for GPU agents) |
 | `integration_live` | Real sandbox Jira + GitHub (`INTEGRATION_LIVE=1`) |
 | `vllm_live` | Real vLLM lanes (`VLLM_LIVE=1`) |
@@ -87,7 +88,7 @@ See [`docs/agent-orchestration.md`](docs/agent-orchestration.md) for the full fl
 | `pytest tests/unit -q` | Logic, tools, routing, agent unit tests (`tests/unit/agents/`) |
 | `INTEGRATION_LIVE=1 pytest tests/integration_live -m "integration_live and not vllm_live" -q` | Sandbox Jira/GitHub + API routes (no GPU) |
 | `./scripts/run_gx10_test_suite.sh` | Work lane preflight → coder block (preflight + greeter ship_live); lane timeout **1200 s** |
-| `./scripts/run_gx10_test_suite.sh --with-agent-live` | Adds `tests/agent_live/` on warm work + coder lanes |
+| `./scripts/run_gx10_test_suite.sh --with-agent-live` | Adds diagnostic tech_lead static plan test (non-greeter; ship_live covers full pipeline) |
 | `./scripts/run_gx10_test_suite.sh --with-email` | Same coder block + email ship_live |
 | `PREFLIGHT_LIVE=1 pytest -m preflight` | vLLM probe scripts via pytest (work lane tools + JSON + backlog) |
 | `scripts/smoke_cycle.py` | Manual reference baseline |
@@ -96,7 +97,7 @@ See [`docs/agent-orchestration.md`](docs/agent-orchestration.md) for the full fl
 
 See [`docs/integration-testing.md`](docs/integration-testing.md) for sandbox setup and cleanup.
 
-Preflight scripts: `scripts/probe_vllm_tools.py` (A+B), `scripts/probe_json.py` (C/C' on work lane).
+Preflight scripts: `scripts/probe_vllm_tools.py` (A+B+C on work/coder lanes), `scripts/probe_json.py` (structured JSON on work lane), `test_probe_backlog_plan` (BacklogPlan JSON). Probe D: `scripts/smoke_cycle.py --coder-only`.
 
 ## 8. Agent roles
 
@@ -105,7 +106,7 @@ Preflight scripts: `scripts/probe_vllm_tools.py` (A+B), `scripts/probe_json.py` 
 Review is **accepted** iff:
 
 ```python
-review.passed and review.tests_passed and no finding.severity == "blocker"
+review.passed and review.tests_passed and no finding.severity == "blocker" and plan_coverage.satisfied
 ```
 
 Implemented in `sprint_crew.orchestrator.merge_gate.review_accepted`.

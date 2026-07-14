@@ -47,9 +47,9 @@ def enrich_repo_context_with_hits(
     ticket: JiraTicket | None = None,
 ) -> tuple[str, list[SearchHit]]:
     """Gather repo context, manifest, hybrid retrieval, and semantic pre-search."""
-    from sprint_crew.agents.tech_lead import _gather_repo_context
+    from sprint_crew.orchestrator.repo_context import gather_repo_context
 
-    base = _gather_repo_context(workspace, ticket)
+    base = gather_repo_context(workspace, ticket)
     parts = [base]
     hits: list[SearchHit] = []
 

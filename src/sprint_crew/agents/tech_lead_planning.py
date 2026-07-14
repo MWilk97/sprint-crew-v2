@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sprint_crew.agents.tech_lead import (
-    PlanStructureValidationError,
-    run_tech_lead,
-    validate_plan_structure,
-)
+from sprint_crew.agents.tech_lead import run_tech_lead
 from sprint_crew.agents.tool_events import ToolCallLog
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.acceptance_tests import (
@@ -16,8 +12,10 @@ from sprint_crew.orchestrator.acceptance_tests import (
 from sprint_crew.orchestrator.plan_validation import (
     PlanPathValidationError,
     PlanScopeValidationError,
+    PlanStructureValidationError,
     validate_plan_paths_exist,
     validate_plan_scope_conflicts,
+    validate_plan_structure,
 )
 from sprint_crew.orchestrator.template_plan import build_template_task_plan_validated
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan

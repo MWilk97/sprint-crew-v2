@@ -39,7 +39,9 @@ async def test_run_coder_with_coverage_skips_unfixable_continuation(
         patch.object(coder, "continuation_makes_sense", return_value=False),
         patch.object(coder, "run_coder_loop", new=AsyncMock()) as loop_mock,
     ):
-        _, _, coverage = await coder.run_coder_with_coverage(plan_with_missing_source, tmp_path)
+        _, _, coverage, _, _ = await coder.run_coder_with_coverage(
+            plan_with_missing_source, tmp_path
+        )
 
     loop_mock.assert_not_awaited()
     assert coverage.satisfied is False
@@ -66,7 +68,9 @@ async def test_run_coder_with_coverage_stops_on_stall(
             coder, "run_coder_loop", new=AsyncMock(return_value=("still missing", []))
         ) as loop_mock,
     ):
-        _, _, coverage = await coder.run_coder_with_coverage(plan_with_missing_source, tmp_path)
+        _, _, coverage, _, _ = await coder.run_coder_with_coverage(
+            plan_with_missing_source, tmp_path
+        )
 
     loop_mock.assert_awaited_once()
     assert coverage.satisfied is False

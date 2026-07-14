@@ -35,7 +35,9 @@ def test_verify_prompt_surfaces_path_reindexes_and_searches(tmp_path: Path) -> N
         chunks = 42
 
     with (
-        patch("tests.helpers.from_prompt_live.maybe_index_workspace", return_value=FakeIndexResult()) as index_mock,
+        patch(
+            "tests.helpers.from_prompt_live.maybe_index_workspace", return_value=FakeIndexResult()
+        ) as index_mock,
         patch(
             "tests.helpers.from_prompt_live.semantic_search",
             return_value=[ferry_hit],

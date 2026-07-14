@@ -5,6 +5,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from sprint_crew.config import get_settings
+from sprint_crew.tools._safety import UnsafePathError, resolve_safe_path
 from sprint_crew.tools.base import ToolResult
 from sprint_crew.vector.search import format_search_hits, semantic_search
 
@@ -32,6 +33,12 @@ class SemanticSearchTool:
         settings = get_settings()
         if not settings.vector_index_enabled:
             return ToolResult(ok=True, output="(semantic search unavailable)")
+
+        if args.path_prefix:
+            try:
+                resolve_safe_path(args.path_prefix, root=workspace_root.resolve(strict=False))
+            except UnsafePathError as exc:
+                return ToolResult(ok=False, output=str(exc), error="unsafe path")
 
         session_id = self._session_id or workspace_root.name
         hits = semantic_search(
