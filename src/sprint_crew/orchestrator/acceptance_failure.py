@@ -111,9 +111,6 @@ def _failure_excerpt(output: str, *, max_lines: int = 30) -> str:
 
 
 def _detect_kind(lowered: str, *, has_source: bool) -> FailureKind:
-    if "exit_code=0" in lowered and "exit_code=" in lowered:
-        # Single green command in a multi-command block is handled by caller via all_passed.
-        pass
     if any(marker in lowered for marker in _COLLECTION_MARKERS):
         return "collection_error"
     if any(marker in lowered for marker in _SYNTAX_MARKERS):

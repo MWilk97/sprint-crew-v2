@@ -71,7 +71,7 @@ async def test_from_prompt_route_persists_backlog_run(
         recommended_first="STORY-1",
     )
 
-    async def fake_run_backlog(**kwargs) -> None:
+    async def fake_run_backlog_batched(**kwargs) -> None:
         store = BacklogRunStore(api_db)
         run = store.load(kwargs["run_id"])
         if run is not None:
@@ -81,7 +81,10 @@ async def test_from_prompt_route_persists_backlog_run(
         patch("sprint_crew.api.app.run_scrum_master", new=AsyncMock(return_value=plan)),
         patch("sprint_crew.api.app.ensure_lane", new=AsyncMock()),
         patch("sprint_crew.api.app.stop_lane", new=AsyncMock()),
-        patch("sprint_crew.api.app.run_backlog", new=AsyncMock(side_effect=fake_run_backlog)),
+        patch(
+            "sprint_crew.api.app.run_backlog_batched",
+            new=AsyncMock(side_effect=fake_run_backlog_batched),
+        ),
         patch("sprint_crew.api.app.prepare_workspace", return_value=api_db.parent / "ws"),
     ):
         transport = ASGITransport(app=app)

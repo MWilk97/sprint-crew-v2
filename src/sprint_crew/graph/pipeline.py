@@ -23,7 +23,7 @@ from sprint_crew.orchestrator.acceptance_failure import (
     AcceptanceFailureAnalysis,
     analyze_acceptance_output,
 )
-from sprint_crew.orchestrator.cycle_acceptance import run_cycle_acceptance_tests
+from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
 from sprint_crew.orchestrator.merge_gate import review_accepted
 from sprint_crew.orchestrator.plan_coverage import (
     PlanCoverageResult,
@@ -382,7 +382,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         acceptance_green = True
     else:
         acceptance_output, acceptance_green = await asyncio.to_thread(
-            run_cycle_acceptance_tests,
+            run_acceptance_tests,
             workspace,
             plan.acceptance_tests,
         )
@@ -611,7 +611,7 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
             test_output = str(cached)
         else:
             test_output, _ = await asyncio.to_thread(
-                run_cycle_acceptance_tests,
+                run_acceptance_tests,
                 _workspace(state),
                 plan.acceptance_tests,
             )

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from sprint_crew.agents.reviewer import _run_acceptance_tests
 from sprint_crew.agents.tester import run_tester_loop
+from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
 from sprint_crew.orchestrator.template_plan import build_template_task_plan_validated
 from sprint_crew.schemas.change import CodeChange
 from tests.helpers.agent_live_tickets import greeter_ticket
@@ -82,7 +82,7 @@ async def test_tester_writes_tests_when_ac_red(
         tests_passed=False,
     )
 
-    acceptance_output, acceptance_green = _run_acceptance_tests(
+    acceptance_output, acceptance_green = run_acceptance_tests(
         tmp_workspace,
         plan.acceptance_tests,
     )

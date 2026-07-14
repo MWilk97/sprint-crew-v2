@@ -190,24 +190,5 @@ def create_jira_tickets(plan: BacklogPlan) -> dict[str, JiraTicket]:
     return tickets
 
 
-async def run_backlog(
-    *,
-    run_id: str,
-    plan: BacklogPlan,
-    user_prompt: str,
-    repo_url: str | None = None,
-    use_real_ship: bool = False,
-) -> BacklogRun:
-    from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
-
-    return await run_backlog_batched(
-        run_id=run_id,
-        plan=plan,
-        user_prompt=user_prompt,
-        repo_url=repo_url,
-        use_real_ship=use_real_ship,
-    )
-
-
 def get_backlog_run(run_id: str) -> BacklogRun | None:
     return backlog_store().load(run_id)

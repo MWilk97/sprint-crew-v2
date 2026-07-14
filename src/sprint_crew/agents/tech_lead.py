@@ -17,17 +17,9 @@ from sprint_crew.config import Role, get_settings
 from sprint_crew.inference.router import pydantic_ai_model
 from sprint_crew.inference.structured import structured_completion
 from sprint_crew.orchestrator.complexity import tech_lead_mode
-from sprint_crew.orchestrator.repo_context import gather_repo_context, paths_from_ticket
+from sprint_crew.orchestrator.repo_context import gather_repo_context
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
 from sprint_crew.tools.pydantic_ai import WorkspaceDeps, build_readonly_toolset, workspace_deps
-
-
-def _paths_from_ticket(ticket: JiraTicket) -> list[str]:
-    return paths_from_ticket(ticket)
-
-
-def _gather_repo_context(workspace_root: Path, ticket: JiraTicket | None = None) -> str:
-    return gather_repo_context(workspace_root, ticket)
 
 
 def _repo_context_for_ticket(
@@ -41,7 +33,7 @@ def _repo_context_for_ticket(
 
     root = workspace_root.resolve()
     if not should_use_vector(ticket=ticket):
-        return _gather_repo_context(root, ticket)
+        return gather_repo_context(root, ticket)
 
     sid = session_id or root.name
     query = f"{ticket.summary}\n{ticket.description}"

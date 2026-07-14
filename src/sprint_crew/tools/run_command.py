@@ -61,9 +61,8 @@ def _harden_argv(argv: list[str]) -> list[str]:
         allowed = ", ".join(sorted(ALLOWED_COMMANDS))
         raise ToolError(f"Command {argv[0]!r} not allowlisted. Allowed: {allowed}.")
     argv[0] = _resolve_executable(argv[0])
-    if argv[0].endswith("npm") or Path(argv[0]).name == "npm":
-        if "--ignore-scripts" not in argv:
-            argv = [*argv, "--ignore-scripts"]
+    if Path(argv[0]).name == "npm" and "--ignore-scripts" not in argv:
+        argv = [*argv, "--ignore-scripts"]
     return argv
 
 

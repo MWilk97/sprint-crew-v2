@@ -16,10 +16,6 @@ from sprint_crew.schemas.ticket import TaskPlan
 _DIFF_MAX_CHARS = 24_000
 
 
-def _run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[str, bool]:
-    return run_acceptance_tests(workspace_root, commands)
-
-
 async def run_reviewer(
     task_plan: TaskPlan,
     code_change: CodeChange,

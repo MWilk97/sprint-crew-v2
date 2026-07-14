@@ -62,9 +62,6 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return sorted(self._tools.keys())
 
-    def list_tools(self) -> list[Tool]:
-        return [self._tools[name] for name in self.names()]
-
     def dispatch(
         self,
         name: str,

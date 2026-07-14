@@ -81,7 +81,6 @@ def prepare_workspace(
     source: Path | None = None,
     *,
     repo_url: str | None = None,
-    push_remote_url: str | None = None,
 ) -> Path:
     settings = get_settings()
     dest = settings.workspace_base / session_id
@@ -114,14 +113,6 @@ def prepare_workspace(
         capture_output=True,
         env=env,
     )
-    remote = push_remote_url or repo_url
-    if remote:
-        subprocess.run(
-            ["git", "remote", "add", "origin", remote],
-            cwd=dest,
-            check=True,
-            capture_output=True,
-        )
     return dest.resolve()
 
 

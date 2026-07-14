@@ -181,7 +181,7 @@ Default embedding model: `jinaai/jina-embeddings-v2-base-code` (Apache 2.0, CPU 
 | **TechLead tool_loop** (COMPLEX) | Seeded manifest/pre_search in loop prompt; `semantic_search` tool + verify with `grep` / `read_file`; JSON step uses ground-truth `repo_context` + handoff |
 | **Template / TRIVIAL** | No index; template plan from Python (path validation skipped) |
 
-Context order in `enrich_repo_context`: `_gather_repo_context` → `repo_manifest` → `keyword_grep` → `pre_search` → `semantic_search`.
+Context order in `enrich_repo_context`: `gather_repo_context` → `repo_manifest` → `keyword_grep` → `pre_search` → `semantic_search`.
 
 Retrieval pattern: **manifest (ground truth) → pre_search / semantic_search → grep → read_file**. Merge gate and plan coverage remain deterministic (git diff + `snapshot_baseline_paths`).
 

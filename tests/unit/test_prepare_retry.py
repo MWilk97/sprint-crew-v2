@@ -44,9 +44,7 @@ async def test_prepare_retry_increments_attempt(base_retry_state: dict) -> None:
         retry_scope="code",
     ).model_dump()
 
-    with patch(
-        "sprint_crew.graph.pipeline.run_cycle_acceptance_tests", return_value=("stderr", False)
-    ):
+    with patch("sprint_crew.graph.pipeline.run_acceptance_tests", return_value=("stderr", False)):
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
 
     assert result["attempt"] == 1
@@ -72,7 +70,7 @@ async def test_prepare_retry_code_scope_skips_tester_when_tests_green(
         tests_passed=True,
     ).model_dump()
 
-    with patch("sprint_crew.graph.pipeline.run_cycle_acceptance_tests") as run_tests:
+    with patch("sprint_crew.graph.pipeline.run_acceptance_tests") as run_tests:
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
 
     run_tests.assert_not_called()
@@ -89,7 +87,7 @@ async def test_prepare_retry_plan_scope_increments_plan_retries(base_retry_state
         retry_scope="plan",
     ).model_dump()
 
-    with patch("sprint_crew.graph.pipeline.run_cycle_acceptance_tests", return_value=("", False)):
+    with patch("sprint_crew.graph.pipeline.run_acceptance_tests", return_value=("", False)):
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
 
     assert result["plan_retries"] == 1
@@ -109,7 +107,7 @@ async def test_prepare_retry_wires_test_output_into_feedback(base_retry_state: d
     ).model_dump()
 
     with patch(
-        "sprint_crew.graph.pipeline.run_cycle_acceptance_tests",
+        "sprint_crew.graph.pipeline.run_acceptance_tests",
         return_value=("AssertionError: boom", False),
     ):
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]

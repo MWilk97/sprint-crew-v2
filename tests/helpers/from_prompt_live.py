@@ -9,7 +9,8 @@ from uuid import uuid4
 from sprint_crew.agents.scrum_master import run_scrum_master
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, stop_lane
-from sprint_crew.orchestrator.backlog import BacklogRunStore, normalize_backlog_plan, run_backlog
+from sprint_crew.orchestrator.backlog import BacklogRunStore, normalize_backlog_plan
+from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
 from sprint_crew.orchestrator.session import SessionStore, prepare_workspace
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SprintSession
@@ -129,7 +130,7 @@ async def run_from_prompt_live(
         )
     )
 
-    run = await run_backlog(
+    run = await run_backlog_batched(
         run_id=run_id,
         plan=plan,
         user_prompt=prompt,

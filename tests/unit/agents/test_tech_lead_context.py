@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sprint_crew.agents.tech_lead import _gather_repo_context, _paths_from_ticket
+from sprint_crew.orchestrator.repo_context import gather_repo_context, paths_from_ticket
 from sprint_crew.schemas.ticket import JiraTicket
 
 
@@ -13,7 +13,7 @@ def test_paths_from_ticket_extracts_greeter_py() -> None:
         issue_type="Story",
         acceptance_criteria="pytest -q tests/test_greeter.py passes",
     )
-    paths = _paths_from_ticket(ticket)
+    paths = paths_from_ticket(ticket)
     assert "greeter.py" in paths
     assert "tests/test_greeter.py" in paths
 
@@ -30,7 +30,7 @@ def test_gather_repo_context_includes_git_status_and_greeter(tmp_workspace) -> N
         issue_type="Story",
         acceptance_criteria="- tests pass",
     )
-    context = _gather_repo_context(tmp_workspace, ticket)
+    context = gather_repo_context(tmp_workspace, ticket)
     assert "=== git status ===" in context
     assert "=== directory listing" in context
     assert "=== read_file: greeter.py ===" in context

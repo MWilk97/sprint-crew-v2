@@ -7,7 +7,8 @@ from uuid import uuid4
 import pytest
 
 from sprint_crew.config import Settings, get_settings
-from sprint_crew.orchestrator.backlog import create_jira_tickets, run_backlog
+from sprint_crew.orchestrator.backlog import create_jira_tickets
+from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
 from sprint_crew.schemas.backlog import BacklogIssueType, BacklogPlan, BacklogStory, ProductBrief
 from sprint_crew.schemas.session import BacklogRunStatus, SprintSession
 from tests.helpers.batch_cycle_fakes import awaiting_session, fake_prepare_workspace
@@ -76,7 +77,7 @@ async def test_run_backlog_creates_jira_without_vllm(
         patch("sprint_crew.orchestrator.batch_cycle._stop_all_lanes", new=AsyncMock()),
     ):
         get_settings.cache_clear()
-        run = await run_backlog(
+        run = await run_backlog_batched(
             run_id=str(uuid4()),
             plan=plan,
             user_prompt="Add hello()",

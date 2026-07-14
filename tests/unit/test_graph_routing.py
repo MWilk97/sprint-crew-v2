@@ -128,7 +128,7 @@ async def test_test_implement_skips_acceptance_when_coder_verified(
     base_state["acceptance_test_output"] = "pytest ok"
 
     with patch(
-        "sprint_crew.graph.pipeline.run_cycle_acceptance_tests",
+        "sprint_crew.graph.pipeline.run_acceptance_tests",
     ) as run_ac:
         await test_implement(base_state)  # type: ignore[arg-type]
 
@@ -159,7 +159,7 @@ async def test_test_implement_keeps_work_lane_warm_after_reporter(
         ),
         patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="diff"),
         patch("sprint_crew.graph.pipeline.run_tester_reporter", new=AsyncMock(return_value=None)),
-        patch("sprint_crew.graph.pipeline.run_cycle_acceptance_tests", return_value=("", False)),
+        patch("sprint_crew.graph.pipeline.run_acceptance_tests", return_value=("", False)),
         patch("sprint_crew.graph.pipeline.should_invoke_tester", return_value=True),
     ):
         await test_implement(base_state)  # type: ignore[arg-type]

@@ -5,7 +5,8 @@ from unittest.mock import patch
 import pytest
 from tests.helpers.agent_live_tickets import greeter_code_change, greeter_task_plan
 
-from sprint_crew.agents.reviewer import _run_acceptance_tests, run_reviewer
+from sprint_crew.agents.reviewer import run_reviewer
+from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
 from sprint_crew.schemas.change import ReviewOutcome
 
 
@@ -15,7 +16,7 @@ def test_run_acceptance_tests_green_on_fixture(tmp_workspace) -> None:
         'def hello():\n    return "hello"\n',
         encoding="utf-8",
     )
-    output, passed = _run_acceptance_tests(tmp_workspace, plan.acceptance_tests)
+    output, passed = run_acceptance_tests(tmp_workspace, plan.acceptance_tests)
     assert passed is True
     assert "exit_code=0" in output
 
@@ -23,7 +24,7 @@ def test_run_acceptance_tests_green_on_fixture(tmp_workspace) -> None:
 def test_run_acceptance_tests_red_when_tests_fail(tmp_workspace) -> None:
     plan = greeter_task_plan()
     (tmp_workspace / "greeter.py").write_text("# empty\n", encoding="utf-8")
-    output, passed = _run_acceptance_tests(tmp_workspace, plan.acceptance_tests)
+    output, passed = run_acceptance_tests(tmp_workspace, plan.acceptance_tests)
     assert passed is False
     assert "exit_code=" in output
 

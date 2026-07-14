@@ -23,7 +23,7 @@ async def test_test_implement_records_acceptance_failure_when_collection_fails(
 
     with (
         patch(
-            "sprint_crew.graph.pipeline.run_cycle_acceptance_tests",
+            "sprint_crew.graph.pipeline.run_acceptance_tests",
             return_value=(SCRUM3_COLLECTION, False),
         ),
         patch("sprint_crew.graph.pipeline.should_invoke_tester", return_value=False),
@@ -57,7 +57,7 @@ async def test_test_implement_clears_stale_acceptance_failure_once_tests_are_gre
 
     with (
         patch(
-            "sprint_crew.graph.pipeline.run_cycle_acceptance_tests",
+            "sprint_crew.graph.pipeline.run_acceptance_tests",
             return_value=("exit_code=0", True),
         ),
         patch("sprint_crew.graph.pipeline.should_invoke_tester", return_value=False),
