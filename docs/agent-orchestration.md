@@ -72,11 +72,9 @@ Single-step plans use one Coder session (fast path).
 
 ## Plan coverage gate
 
-`validate_plan_coverage` compares `files_to_touch` + all `step.files` against changed paths from:
-
-- `git diff --name-only`
-- `git diff --cached --name-only`
-- `git status --porcelain` (includes untracked files from `write_file`)
+`validate_plan_coverage` compares `files_to_touch` + all `step.files` against changed paths
+from a single `git status --porcelain` call (covers modified, staged, and untracked files —
+including files created by `write_file`).
 
 **Early exit** (Coder stops tool loop when acceptance tests pass) only fires when:
 

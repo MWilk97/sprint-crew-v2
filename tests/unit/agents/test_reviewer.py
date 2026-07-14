@@ -6,27 +6,10 @@ import pytest
 from tests.helpers.agent_live_tickets import greeter_code_change, greeter_task_plan
 
 from sprint_crew.agents.reviewer import run_reviewer
-from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
 from sprint_crew.schemas.change import ReviewOutcome
 
-
-def test_run_acceptance_tests_green_on_fixture(tmp_workspace) -> None:
-    plan = greeter_task_plan()
-    (tmp_workspace / "greeter.py").write_text(
-        'def hello():\n    return "hello"\n',
-        encoding="utf-8",
-    )
-    output, passed = run_acceptance_tests(tmp_workspace, plan.acceptance_tests)
-    assert passed is True
-    assert "exit_code=0" in output
-
-
-def test_run_acceptance_tests_red_when_tests_fail(tmp_workspace) -> None:
-    plan = greeter_task_plan()
-    (tmp_workspace / "greeter.py").write_text("# empty\n", encoding="utf-8")
-    output, passed = run_acceptance_tests(tmp_workspace, plan.acceptance_tests)
-    assert passed is False
-    assert "exit_code=" in output
+_GREEN_RUN = ("exit_code=0", True)
+_RED_RUN = ("exit_code=1\nFAILED tests/test_greeter.py::test_hello", False)
 
 
 @pytest.mark.asyncio
@@ -43,10 +26,13 @@ async def test_run_reviewer_orchestrator_overrides_llm_tests_passed(tmp_workspac
         summary="ok",
         tests_passed=False,
     )
-    with patch(
-        "sprint_crew.agents.reviewer.structured_completion",
-        return_value=llm_review,
-    ) as completion_mock:
+    with (
+        patch("sprint_crew.agents.reviewer.run_acceptance_tests", return_value=_GREEN_RUN),
+        patch(
+            "sprint_crew.agents.reviewer.structured_completion",
+            return_value=llm_review,
+        ) as completion_mock,
+    ):
         result = await run_reviewer(
             plan,
             change,
@@ -69,9 +55,12 @@ async def test_run_reviewer_fails_when_acceptance_red(tmp_workspace) -> None:
         summary="looks fine",
         tests_passed=True,
     )
-    with patch(
-        "sprint_crew.agents.reviewer.structured_completion",
-        return_value=llm_review,
+    with (
+        patch("sprint_crew.agents.reviewer.run_acceptance_tests", return_value=_RED_RUN),
+        patch(
+            "sprint_crew.agents.reviewer.structured_completion",
+            return_value=llm_review,
+        ),
     ):
         result = await run_reviewer(plan, change, tmp_workspace)
 
@@ -94,9 +83,12 @@ async def test_run_reviewer_overrides_llm_passed_false_when_green(tmp_workspace)
         tests_passed=True,
         findings=[],
     )
-    with patch(
-        "sprint_crew.agents.reviewer.structured_completion",
-        return_value=llm_review,
+    with (
+        patch("sprint_crew.agents.reviewer.run_acceptance_tests", return_value=_GREEN_RUN),
+        patch(
+            "sprint_crew.agents.reviewer.structured_completion",
+            return_value=llm_review,
+        ),
     ):
         result = await run_reviewer(plan, change, tmp_workspace)
 

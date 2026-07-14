@@ -23,7 +23,7 @@ def test_structured_completion_retries_on_invalid_json() -> None:
     client = MagicMock()
     client.chat.completions.create.side_effect = [bad, good]
 
-    with patch("sprint_crew.inference.structured.OpenAI", return_value=client):
+    with patch("sprint_crew.inference.structured._client", return_value=client):
         result = structured_completion(
             Role.WORK,
             system_prompt="sys",
@@ -50,7 +50,7 @@ def test_structured_completion_strips_markdown_fences() -> None:
     client = MagicMock()
     client.chat.completions.create.return_value = resp
 
-    with patch("sprint_crew.inference.structured.OpenAI", return_value=client):
+    with patch("sprint_crew.inference.structured._client", return_value=client):
         result = structured_completion(
             Role.WORK,
             system_prompt="sys",

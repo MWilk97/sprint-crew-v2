@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 from typing import TypeVar
 
 from openai import OpenAI
@@ -13,6 +14,11 @@ T = TypeVar("T", bound=BaseModel)
 
 _MAX_RETRIES = 3
 _RAW_FRAGMENT_CHARS = 2000
+
+
+@lru_cache(maxsize=8)
+def _client(base_url: str, timeout_seconds: float) -> OpenAI:
+    return OpenAI(base_url=base_url, api_key="local", timeout=timeout_seconds)
 
 
 def _extract_json_object(raw: str) -> str:
@@ -39,7 +45,7 @@ def structured_completion(
     max_tokens: int | None = None,
 ) -> T:
     lane = lane_for_role(role)
-    client = OpenAI(base_url=lane.base_url, api_key="local", timeout=timeout_seconds)
+    client = _client(lane.base_url, timeout_seconds)
     schema = output_type.model_json_schema()
     repair_hint = ""
     last_error: Exception | None = None

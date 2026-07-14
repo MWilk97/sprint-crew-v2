@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from functools import lru_cache
 from typing import Any
 
 from qdrant_client import QdrantClient
@@ -31,10 +32,15 @@ def point_id(session_id: str, chunk: CodeChunk) -> str:
     return str(uuid.UUID(digest[:32]))
 
 
+@lru_cache(maxsize=4)
+def _client_for_url(url: str) -> QdrantClient:
+    return QdrantClient(url=url)
+
+
 class QdrantStore:
     def __init__(self, url: str | None = None) -> None:
         settings = get_settings()
-        self._client = QdrantClient(url=url or settings.qdrant_url)
+        self._client = _client_for_url(url or settings.qdrant_url)
 
     def ensure_collection(self, name: str, vector_size: int) -> None:
         exists = self._client.collection_exists(name)

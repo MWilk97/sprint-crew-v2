@@ -102,5 +102,8 @@ def index_workspace(workspace: Path, session_id: str) -> IndexResult:
 
 
 def delete_workspace_index(session_id: str) -> None:
+    """Drop a session's collection; no-op when the vector index is disabled."""
+    if not get_settings().vector_index_enabled:
+        return
     store = QdrantStore()
     store.delete_collection(collection_name(session_id))

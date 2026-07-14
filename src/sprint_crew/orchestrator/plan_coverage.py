@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
-from sprint_crew.paths import is_test_path, normalize_path, paths_from_diff
+from sprint_crew.paths import is_test_path, normalize_path
 from sprint_crew.schemas.ticket import TaskPlan
 
 _NOISE_PATH_RE = re.compile(r"__pycache__|pytest_cache|\.pyc$|\.(orig|rej)$")
@@ -126,22 +126,14 @@ def _run_git(args: list[str], workspace_root: Path) -> str:
 
 
 def collect_changed_paths(workspace_root: Path) -> set[str]:
-    """Return paths changed in the workspace (modified, staged, and untracked)."""
+    """Return paths changed in the workspace (modified, staged, and untracked).
+
+    A single ``git status --porcelain`` covers all three categories; this runs
+    on every coverage check in the cycle hot path, so keep it to one subprocess.
+    """
     root = workspace_root.resolve()
-    paths: set[str] = set()
-
-    diff_out = _run_git(["diff", "--name-only"], root)
-    paths.update(normalize_path(line) for line in diff_out.splitlines() if line.strip())
-
-    staged_out = _run_git(["diff", "--cached", "--name-only"], root)
-    paths.update(normalize_path(line) for line in staged_out.splitlines() if line.strip())
-
     status_out = _run_git(["status", "--porcelain"], root)
-    paths.update(_paths_from_porcelain(status_out))
-
-    diff_text = _run_git(["diff"], root)
-    paths.update(paths_from_diff(diff_text))
-
+    paths = _paths_from_porcelain(status_out)
     return {path for path in paths if path and not is_noise_path(path)}
 
 

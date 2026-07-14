@@ -45,7 +45,7 @@ class BacklogRunCreatedResponse(BaseModel):
 
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "lanes": lane_health()}
+    return {"status": "ok", "lanes": await asyncio.to_thread(lane_health)}
 
 
 @app.post("/sprint/from-prompt", response_model=BacklogRunCreatedResponse)
