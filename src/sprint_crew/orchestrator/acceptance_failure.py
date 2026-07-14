@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from sprint_crew.paths import is_test_path as _shared_is_test_path
+
 FailureKind = Literal[
     "none",
     "collection_error",
@@ -60,8 +62,7 @@ def _normalize_repo_path(path: str) -> str:
 
 
 def _is_test_path(path: str) -> bool:
-    normalized = _normalize_repo_path(path)
-    return normalized.startswith("tests/") or "/tests/" in normalized
+    return _shared_is_test_path(_normalize_repo_path(path))
 
 
 def _is_source_path(path: str) -> bool:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sqlite3
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -14,6 +13,7 @@ from sprint_crew.config import get_settings
 from sprint_crew.graph.pipeline import run_sprint_cycle
 from sprint_crew.graph.state import SprintState
 from sprint_crew.integrations.jira_client import default_git_env
+from sprint_crew.orchestrator.store import SqliteJsonStore
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
 from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
@@ -23,56 +23,35 @@ def _utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
-class SessionStore:
-    def __init__(self, db_path: Path) -> None:
-        self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
+class SessionStore(SqliteJsonStore):
+    table = "sessions"
+    key_column = "session_id"
+    create_sql = """
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """
 
     def save(self, session: SprintSession) -> None:
         session.updated_at = _utc_now_iso()
-        payload = session.model_dump(mode="json")
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO sessions (session_id, payload, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    payload=excluded.payload,
-                    updated_at=excluded.updated_at
-                """,
-                (session.session_id, json.dumps(payload), session.updated_at),
-            )
+        self._save_row(
+            {
+                "session_id": session.session_id,
+                "payload": json.dumps(session.model_dump(mode="json")),
+                "updated_at": session.updated_at,
+            }
+        )
 
     def load(self, session_id: str) -> SprintSession | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM sessions WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
-        if row is None:
+        payload = self._load_payload(session_id)
+        if payload is None:
             return None
-        return SprintSession.model_validate(json.loads(row["payload"]))
+        return SprintSession.model_validate(json.loads(payload))
 
 
-def _store() -> SessionStore:
+def session_store() -> SessionStore:
     return SessionStore(get_settings().session_db)
 
 
@@ -211,7 +190,7 @@ async def create_and_run_cycle(
         events=list(initial_events or []),
     )
     initial_events_snapshot = list(session.events)
-    store = _store()
+    store = session_store()
     store.save(session)
 
     deadline_epoch = (
@@ -248,7 +227,7 @@ async def create_and_run_cycle(
 
 
 def get_session(session_id: str) -> SprintSession | None:
-    return _store().load(session_id)
+    return session_store().load(session_id)
 
 
 def approve_session(session_id: str) -> SprintSession:
@@ -271,5 +250,5 @@ def approve_session(session_id: str) -> SprintSession:
             ],
         }
     )
-    _store().save(updated)
+    session_store().save(updated)
     return updated

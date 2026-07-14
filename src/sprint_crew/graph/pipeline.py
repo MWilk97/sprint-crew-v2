@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from sprint_crew.agents.coder import _normalize_change, run_coder_with_coverage
+from sprint_crew.agents.coder import normalize_change, run_coder_with_coverage
 from sprint_crew.agents.formatter import run_formatter
 from sprint_crew.agents.reviewer import run_reviewer
 from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated
@@ -18,7 +17,13 @@ from sprint_crew.agents.tester import run_tester_loop, run_tester_reporter
 from sprint_crew.agents.tool_events import tool_call_events
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, stop_lane
-from sprint_crew.graph.state import SprintState
+from sprint_crew.graph.state import (
+    SprintState,
+    code_change_from_state,
+    task_plan_from_state,
+    ticket_from_state,
+    workspace_from_state,
+)
 from sprint_crew.orchestrator.acceptance_failure import (
     AcceptanceFailureAnalysis,
     analyze_acceptance_output,
@@ -31,44 +36,26 @@ from sprint_crew.orchestrator.plan_coverage import (
     should_invoke_tester,
 )
 from sprint_crew.orchestrator.plan_validation import snapshot_baseline_paths
+from sprint_crew.orchestrator.repo_context import (
+    enrich_repo_context_with_hits,
+    maybe_index_workspace,
+    pre_search_agent_event,
+)
 from sprint_crew.orchestrator.retry import (
     format_review_feedback,
     resolve_failure_feedback,
     resolve_retry_scope,
 )
 from sprint_crew.orchestrator.ship_cycle import orchestrator_ship
-from sprint_crew.orchestrator.template_plan import build_template_task_plan_validated
+from sprint_crew.orchestrator.template_plan import work_lane_required_for_ticket
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
-from sprint_crew.schemas.change import CodeChange, ReviewOutcome
+from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.session import AgentEvent, SessionStatus
-from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
-from sprint_crew.vector.context import enrich_repo_context_with_hits, pre_search_agent_event
-from sprint_crew.vector.indexer import maybe_index_workspace
-
-
-def _event(agent: str, event_type: str, summary: str, **detail: Any) -> AgentEvent:
-    payload = detail or None
-    return AgentEvent(agent=agent, event_type=event_type, summary=summary, detail=payload)
+from sprint_crew.schemas.session import agent_event as _event
 
 
 def _timed_detail(started: float, **extra: Any) -> dict[str, Any]:
     return {"duration_ms": int((time.monotonic() - started) * 1000), **extra}
-
-
-def _ticket(state: SprintState) -> JiraTicket:
-    return JiraTicket.model_validate(state["selected_ticket"])
-
-
-def _task_plan(state: SprintState) -> TaskPlan:
-    return TaskPlan.model_validate(state["task_plan"])
-
-
-def _code_change(state: SprintState) -> CodeChange:
-    return CodeChange.model_validate(state["code_change"])
-
-
-def _workspace(state: SprintState) -> Path:
-    return Path(state["workspace_root"])
 
 
 def _coverage_from_dict(raw: Any) -> PlanCoverageResult | None:
@@ -137,17 +124,12 @@ async def _stop_lane_after_cycle(state: SprintState, role: Role) -> None:
 
 async def init_session(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
-    workspace = _workspace(state)
+    workspace = workspace_from_state(state)
     git_dir = workspace / ".git"
     if not git_dir.exists():
         raise ValueError(f"Workspace is not a git repo: {workspace}")
-    ticket = _ticket(state)
-    template_fast_path = False
-    try:
-        build_template_task_plan_validated(ticket)
-        template_fast_path = True
-    except RuntimeError:
-        pass
+    ticket = ticket_from_state(state)
+    template_fast_path = not work_lane_required_for_ticket(ticket)
 
     session_id = state["session_id"]
     index_result = await asyncio.to_thread(
@@ -204,8 +186,8 @@ async def init_session(state: SprintState) -> dict[str, Any]:
 
 async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
-    ticket = _ticket(state)
-    workspace = _workspace(state)
+    ticket = ticket_from_state(state)
+    workspace = workspace_from_state(state)
     session_id = state["session_id"]
     baseline = frozenset(state.get("baseline_paths") or snapshot_baseline_paths(workspace))
 
@@ -281,8 +263,8 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
 
 async def code_implement(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
-    plan = _task_plan(state)
-    workspace = _workspace(state)
+    plan = task_plan_from_state(state)
+    workspace = workspace_from_state(state)
     baseline = frozenset(state.get("baseline_paths") or ())
 
     await ensure_lane(Role.CODING)
@@ -308,7 +290,7 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
         raw_output=raw_output,
         git_diff=workspace_diff,
     )
-    change = _normalize_change(change, plan)
+    change = normalize_change(change, plan)
 
     events: list[AgentEvent] = [
         *tool_call_events("coder", tool_log),
@@ -355,9 +337,9 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
 
 async def test_implement(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
-    plan = _task_plan(state)
-    change = _code_change(state)
-    workspace = _workspace(state)
+    plan = task_plan_from_state(state)
+    change = code_change_from_state(state)
+    workspace = workspace_from_state(state)
 
     if state.get("skip_tester_this_attempt"):
         workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
@@ -471,9 +453,9 @@ async def review(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
     await stop_lane(Role.CODING)
     await ensure_lane(Role.WORK)
-    plan = _task_plan(state)
-    change = _code_change(state)
-    workspace = _workspace(state)
+    plan = task_plan_from_state(state)
+    change = code_change_from_state(state)
+    workspace = workspace_from_state(state)
     workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
         workspace, priority_paths=plan.files_to_touch
     )
@@ -495,7 +477,7 @@ async def review(state: SprintState) -> dict[str, Any]:
         workspace,
         workspace_diff=workspace_diff,
         test_additions_json=test_additions_json,
-        ticket_acceptance_criteria=_ticket(state).acceptance_criteria,
+        ticket_acceptance_criteria=ticket_from_state(state).acceptance_criteria,
         tests_already_run=tests_already_run,
         coverage_summary=coverage_summary,
         files_to_touch=plan.files_to_touch,
@@ -573,15 +555,15 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
 
     outcome = ReviewOutcome.model_validate(state["review_outcome"])
-    plan = _task_plan(state)
+    plan = task_plan_from_state(state)
     workspace_diff = state.get("workspace_diff", "")
-    change = _code_change(state) if state.get("code_change") else None
+    change = code_change_from_state(state) if state.get("code_change") else None
     coverage_raw = state.get("plan_coverage")
     coverage = _coverage_from_dict(coverage_raw)
     scope = resolve_retry_scope(
         outcome,
         coverage=coverage,
-        workspace_root=_workspace(state),
+        workspace_root=workspace_from_state(state),
     )
 
     plan_retries = state.get("plan_retries", 0)
@@ -612,7 +594,7 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
         else:
             test_output, _ = await asyncio.to_thread(
                 run_acceptance_tests,
-                _workspace(state),
+                workspace_from_state(state),
                 plan.acceptance_tests,
             )
 
@@ -629,7 +611,7 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
         workspace_diff=workspace_diff,
         test_output=test_output,
         coverage=coverage,
-        workspace_root=_workspace(state),
+        workspace_root=workspace_from_state(state),
         failure_analysis=failure_analysis,
         bugs_observed=bugs_observed,
     )
@@ -667,7 +649,7 @@ def route_after_retry(state: SprintState) -> str:
         scope = resolve_retry_scope(
             outcome,
             coverage=coverage,
-            workspace_root=_workspace(state),
+            workspace_root=workspace_from_state(state),
         )
     if scope == "plan" and state.get("plan_retries", 0) > get_settings().max_plan_retries:
         return "code"

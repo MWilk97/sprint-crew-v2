@@ -28,8 +28,7 @@ def _repo_context_for_ticket(
     *,
     session_id: str | None = None,
 ) -> str:
-    from sprint_crew.vector.context import enrich_repo_context
-    from sprint_crew.vector.indexer import should_use_vector
+    from sprint_crew.orchestrator.repo_context import enrich_repo_context, should_use_vector
 
     root = workspace_root.resolve()
     if not should_use_vector(ticket=ticket):
@@ -189,7 +188,7 @@ async def run_tech_lead(
     )
 
     if tech_lead_mode(ticket) == "tool_loop":
-        from sprint_crew.vector.indexer import should_use_vector
+        from sprint_crew.orchestrator.repo_context import should_use_vector
 
         log: ToolCallLog = tool_call_log if tool_call_log is not None else []
         handoff = await run_tech_lead_loop(

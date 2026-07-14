@@ -34,6 +34,10 @@ class AgentEvent(BaseModel):
     detail: dict[str, Any] | None = None
 
 
+def agent_event(agent: str, event_type: str, summary: str, **detail: Any) -> AgentEvent:
+    return AgentEvent(agent=agent, event_type=event_type, summary=summary, detail=detail or None)
+
+
 class SprintSession(BaseModel):
     model_config = _STRICT
 

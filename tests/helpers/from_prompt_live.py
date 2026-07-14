@@ -11,11 +11,13 @@ from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, stop_lane
 from sprint_crew.orchestrator.backlog import BacklogRunStore, normalize_backlog_plan
 from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
+from sprint_crew.orchestrator.repo_context import (
+    enrich_repo_context_with_hits,
+    maybe_index_workspace,
+)
 from sprint_crew.orchestrator.session import SessionStore, prepare_workspace
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SprintSession
-from sprint_crew.vector.context import enrich_repo_context_with_hits
-from sprint_crew.vector.indexer import maybe_index_workspace
 from sprint_crew.vector.search import semantic_search
 from tests.helpers.vector_ab import copy_fixture_workspace
 from tests.helpers.vector_tiers import failure_class_from_session, last_gate_result

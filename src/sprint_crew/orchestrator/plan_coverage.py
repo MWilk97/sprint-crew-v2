@@ -6,19 +6,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
+from sprint_crew.paths import is_test_path, normalize_path, paths_from_diff
 from sprint_crew.schemas.ticket import TaskPlan
 
-DIFF_PATH_RE = re.compile(r"^diff --git a/(.+?) b/", re.MULTILINE)
 _NOISE_PATH_RE = re.compile(r"__pycache__|pytest_cache|\.pyc$|\.(orig|rej)$")
 
 
 def is_noise_path(path: str) -> bool:
     cleaned = path.replace("\\", "/")
     return bool(_NOISE_PATH_RE.search(cleaned))
-
-
-def normalize_path(path: str) -> str:
-    return path.replace("\\", "/").lstrip("./")
 
 
 def step_file_paths(plan: TaskPlan) -> set[str]:
@@ -102,13 +98,6 @@ def check_patch_mutations_allowed(
     return None
 
 
-def _paths_from_diff(diff_text: str) -> set[str]:
-    paths: set[str] = set()
-    for match in DIFF_PATH_RE.finditer(diff_text):
-        paths.add(normalize_path(match.group(1)))
-    return paths
-
-
 def _paths_from_porcelain(status_text: str) -> set[str]:
     paths: set[str] = set()
     for line in status_text.splitlines():
@@ -151,14 +140,9 @@ def collect_changed_paths(workspace_root: Path) -> set[str]:
     paths.update(_paths_from_porcelain(status_out))
 
     diff_text = _run_git(["diff"], root)
-    paths.update(_paths_from_diff(diff_text))
+    paths.update(paths_from_diff(diff_text))
 
     return {path for path in paths if path and not is_noise_path(path)}
-
-
-def _is_test_path(path: str) -> bool:
-    normalized = normalize_path(path)
-    return normalized.startswith("tests/") or "/tests/" in normalized
 
 
 def _is_ignorable_missing(
@@ -173,7 +157,7 @@ def _is_ignorable_missing(
 
     normalized = normalize_path(path)
 
-    if _is_test_path(normalized):
+    if is_test_path(normalized):
         if (workspace_root / normalized).is_file() and not step_requires_test_edit(
             plan, normalized
         ):

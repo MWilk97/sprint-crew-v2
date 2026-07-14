@@ -87,7 +87,7 @@ async def test_run_tech_lead_skips_nudge_when_pre_search_hits(tmp_path) -> None:
             ),
         ),
         patch(
-            "sprint_crew.vector.indexer.should_use_vector",
+            "sprint_crew.orchestrator.repo_context.should_use_vector",
             return_value=True,
         ),
         patch(

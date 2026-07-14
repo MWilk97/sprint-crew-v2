@@ -4,28 +4,7 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
-from sprint_crew.tools._safety import FORBIDDEN_PATH_SEGMENTS
-
-INDEXABLE_SUFFIXES = frozenset(
-    {
-        ".py",
-        ".md",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".json",
-        ".sh",
-        ".js",
-        ".ts",
-        ".tsx",
-        ".jsx",
-        ".go",
-        ".rs",
-        ".txt",
-    }
-)
-
-SKIP_SUFFIXES = frozenset({".lock", ".min.js", ".map", ".png", ".jpg", ".gif", ".woff", ".woff2"})
+from sprint_crew.paths import INDEXABLE_SUFFIXES, chunk_kind_for_path, should_skip_path
 
 MAX_FILE_BYTES = 100_000
 CHUNK_CHARS = 1600
@@ -51,17 +30,6 @@ class CodeChunk:
         )
 
 
-def _chunk_kind_for_path(rel: str) -> str:
-    normalized = rel.replace("\\", "/")
-    if normalized.startswith("tests/") or "/tests/" in normalized or normalized.startswith("test_"):
-        return "test"
-    if normalized.endswith((".md", ".rst")):
-        return "doc"
-    if normalized.endswith((".yaml", ".yml", ".toml", ".json")):
-        return "config"
-    return "code"
-
-
 def _language_for_suffix(suffix: str) -> str:
     return {
         ".py": "python",
@@ -79,18 +47,6 @@ def _language_for_suffix(suffix: str) -> str:
         ".rs": "rust",
         ".txt": "text",
     }.get(suffix, "text")
-
-
-def _should_skip_path(rel: Path) -> bool:
-    for part in rel.parts:
-        if part in FORBIDDEN_PATH_SEGMENTS:
-            return True
-    suffix = rel.suffix.lower()
-    if suffix in SKIP_SUFFIXES:
-        return True
-    if suffix and suffix not in INDEXABLE_SUFFIXES:
-        return False if suffix == "" else True
-    return False
 
 
 def _sliding_window_chunks(
@@ -174,7 +130,7 @@ def _python_chunks(rel: str, content: str, *, chunk_kind: str) -> list[CodeChunk
 
 
 def chunk_file(rel: str, content: str) -> list[CodeChunk]:
-    chunk_kind = _chunk_kind_for_path(rel)
+    chunk_kind = chunk_kind_for_path(rel)
     suffix = Path(rel).suffix.lower()
     language = _language_for_suffix(suffix)
     if suffix == ".py":
@@ -192,7 +148,7 @@ def iter_workspace_chunks(workspace_root: Path) -> list[CodeChunk]:
             rel = file_path.relative_to(root).as_posix()
         except ValueError:
             continue
-        if _should_skip_path(Path(rel)):
+        if should_skip_path(Path(rel)):
             continue
         suffix = file_path.suffix.lower()
         if suffix not in INDEXABLE_SUFFIXES:
@@ -223,7 +179,7 @@ def count_indexable_files(workspace_root: Path) -> int:
             rel = Path(file_path.relative_to(root).as_posix())
         except ValueError:
             continue
-        if _should_skip_path(rel):
+        if should_skip_path(rel):
             continue
         if file_path.suffix.lower() not in INDEXABLE_SUFFIXES:
             continue

@@ -6,11 +6,11 @@ from sprint_crew.orchestrator.acceptance_tests import (
     AcceptanceTestsValidationError,
     validate_acceptance_tests,
 )
-from sprint_crew.orchestrator.complexity import _paths_in_text
 from sprint_crew.orchestrator.plan_validation import (
     PlanStructureValidationError,
     validate_plan_structure,
 )
+from sprint_crew.paths import paths_in_text
 from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
 
 _MODULE_RE = re.compile(r"\b(\w+)\s+module\b", re.IGNORECASE)
@@ -86,7 +86,7 @@ def _infer_source_from_test_paths(paths: list[str]) -> list[str]:
 def build_template_task_plan(ticket: JiraTicket) -> TaskPlan:
     """Deterministic TaskPlan for trivial tickets — no LLM, no Work lane."""
     text = _ticket_text(ticket)
-    paths = _paths_in_text(text)
+    paths = paths_in_text(text)
     for inferred in _infer_module_paths(text):
         if inferred not in paths:
             paths.append(inferred)

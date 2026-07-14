@@ -1,25 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from sprint_crew.graph.state import SprintState
+from sprint_crew.graph.state import SprintState, code_change_from_state, workspace_from_state
 from sprint_crew.orchestrator.git_commit import commit_change_on_branch
-from sprint_crew.schemas.change import CodeChange
-from sprint_crew.schemas.session import AgentEvent, SessionStatus
-
-
-def _event(agent: str, event_type: str, summary: str, **detail: Any) -> AgentEvent:
-    payload = detail or None
-    return AgentEvent(agent=agent, event_type=event_type, summary=summary, detail=payload)
-
-
-def _workspace(state: SprintState) -> Path:
-    return Path(state["workspace_root"])
-
-
-def _code_change(state: SprintState) -> CodeChange:
-    return CodeChange.model_validate(state["code_change"])
+from sprint_crew.schemas.session import SessionStatus
+from sprint_crew.schemas.session import agent_event as _event
 
 
 async def orchestrator_ship(state: SprintState) -> dict[str, Any]:
@@ -31,8 +17,8 @@ async def orchestrator_ship(state: SprintState) -> dict[str, Any]:
 
 
 async def ship_stub(state: SprintState) -> dict[str, Any]:
-    workspace = _workspace(state)
-    change = _code_change(state)
+    workspace = workspace_from_state(state)
+    change = code_change_from_state(state)
     branch, commit_msg = commit_change_on_branch(workspace=workspace, change=change)
     return {
         "branch": branch,

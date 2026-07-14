@@ -60,9 +60,9 @@ async def ship(session: SprintSession) -> SprintSession:
             ],
         }
     )
-    from sprint_crew.orchestrator.session import _store
+    from sprint_crew.orchestrator.session import session_store
 
-    _store().save(updated)
+    session_store().save(updated)
     return updated
 
 

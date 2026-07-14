@@ -46,6 +46,20 @@ def _lane_healthy(role: Role) -> bool:
         return False
 
 
+def _lane_status(role: Role) -> str:
+    url = _health_url(role)
+    try:
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            return "ok" if resp.status == 200 else "degraded"
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return "down"
+
+
+def lane_health() -> dict[str, str]:
+    """Per-lane health summary ("ok" / "degraded" / "down"), keyed by lane name."""
+    return {_lane_name(role): _lane_status(role) for role in Role}
+
+
 def _lane_container_running(role: Role) -> bool:
     proc = subprocess.run(
         ["docker", "inspect", "-f", "{{.State.Status}}", _container_name(role)],

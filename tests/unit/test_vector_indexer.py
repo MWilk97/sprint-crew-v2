@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from tests.helpers.agent_live_tickets import complex_api_ticket, email_validators_ticket
 
+from sprint_crew.orchestrator.repo_context import should_index_workspace, should_use_vector
 from sprint_crew.schemas.ticket import JiraTicket
-from sprint_crew.vector.indexer import should_index_workspace, should_use_vector
 
 
 def _enable_vector(monkeypatch: pytest.MonkeyPatch) -> None:

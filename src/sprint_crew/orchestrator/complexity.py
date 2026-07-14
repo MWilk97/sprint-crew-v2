@@ -4,12 +4,8 @@ import re
 from enum import Enum
 from typing import Literal
 
+from sprint_crew.paths import paths_in_text
 from sprint_crew.schemas.ticket import JiraTicket
-
-_PATH_RE = re.compile(
-    r"[\w./-]+\.(?:py|js|ts|tsx|jsx|go|rs|md|yaml|yml|json|toml|txt|sh)",
-    re.IGNORECASE,
-)
 
 _COMPLEX_KEYWORDS = re.compile(
     r"\b(?:REST|RESTful\s+API|API\s+(?:endpoint|endpoints|routes?|server|integration|layer|gateway)|"
@@ -44,17 +40,6 @@ class PromptComplexity(str, Enum):
     COMPLEX = "complex"
 
 
-def _paths_in_text(text: str) -> list[str]:
-    seen: set[str] = set()
-    paths: list[str] = []
-    for match in _PATH_RE.findall(text):
-        normalized = match.lstrip("./")
-        if normalized not in seen:
-            seen.add(normalized)
-            paths.append(normalized)
-    return paths
-
-
 def assess_prompt_complexity(prompt: str) -> PromptComplexity:
     """Heuristic prompt complexity for backlog model routing."""
     text = prompt.strip()
@@ -68,7 +53,7 @@ def assess_prompt_complexity(prompt: str) -> PromptComplexity:
     if len(text) > 450 or text.count("\n") >= 4:
         return PromptComplexity.COMPLEX
 
-    paths = _paths_in_text(text)
+    paths = paths_in_text(text)
     if len(paths) > 3:
         return PromptComplexity.COMPLEX
 

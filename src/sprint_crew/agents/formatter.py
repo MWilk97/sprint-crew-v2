@@ -8,26 +8,15 @@ from sprint_crew.agents.prompts_formatter import (
 )
 from sprint_crew.config import Role
 from sprint_crew.inference.structured import structured_completion
-from sprint_crew.orchestrator.plan_coverage import DIFF_PATH_RE, normalize_path
+from sprint_crew.paths import paths_from_diff
 from sprint_crew.schemas.change import CodeChange, FileChange
 from sprint_crew.schemas.ticket import TaskPlan
-
-
-def _paths_from_diff(git_diff: str) -> list[str]:
-    paths: list[str] = []
-    seen: set[str] = set()
-    for match in DIFF_PATH_RE.finditer(git_diff):
-        path = normalize_path(match.group(1))
-        if path and path not in seen:
-            seen.add(path)
-            paths.append(path)
-    return paths
 
 
 def _derive_files_changed(git_diff: str) -> list[FileChange]:
     return [
         FileChange(path=path, action="modified", summary="changed in workspace diff")
-        for path in _paths_from_diff(git_diff)
+        for path in paths_from_diff(git_diff)
     ]
 
 

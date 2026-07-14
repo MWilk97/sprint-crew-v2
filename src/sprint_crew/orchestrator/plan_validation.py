@@ -4,10 +4,9 @@ import re
 from pathlib import Path
 
 from sprint_crew.orchestrator.complexity import tech_lead_mode
-from sprint_crew.orchestrator.plan_coverage import normalize_path, step_file_paths
+from sprint_crew.orchestrator.plan_coverage import step_file_paths
+from sprint_crew.paths import INDEXABLE_SUFFIXES, normalize_path, should_skip_path
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
-from sprint_crew.vector.chunker import INDEXABLE_SUFFIXES
-from sprint_crew.vector.chunker import _should_skip_path as _chunker_should_skip_path
 
 _NEW_FILE_STEP_RE = re.compile(
     r"\b(?:create|new\s+file|add\s+file|add\s+new)\b",
@@ -33,7 +32,7 @@ class PlanScopeValidationError(ValueError):
 
 def _is_indexable_file(rel: str) -> bool:
     suffix = Path(rel).suffix.lower()
-    return suffix in INDEXABLE_SUFFIXES and not _chunker_should_skip_path(Path(rel))
+    return suffix in INDEXABLE_SUFFIXES and not should_skip_path(Path(rel))
 
 
 def snapshot_baseline_paths(workspace: Path) -> frozenset[str]:

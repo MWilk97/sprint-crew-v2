@@ -35,7 +35,7 @@ def _branch_name(ticket_key: str) -> str:
     return f"feature/{ticket_key.lower()}"
 
 
-def _normalize_change(change: CodeChange, task_plan: TaskPlan) -> CodeChange:
+def normalize_change(change: CodeChange, task_plan: TaskPlan) -> CodeChange:
     updates: dict[str, object] = {}
     if not change.ticket_key:
         updates["ticket_key"] = task_plan.ticket_key

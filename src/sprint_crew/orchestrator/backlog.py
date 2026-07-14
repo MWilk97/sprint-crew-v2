@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 from collections import deque
-from pathlib import Path
 
 from sprint_crew.config import get_settings
 from sprint_crew.integrations.jira_client import get_jira_client
 from sprint_crew.orchestrator.complexity import PromptComplexity, assess_prompt_complexity
+from sprint_crew.orchestrator.store import SqliteJsonStore
 from sprint_crew.schemas.backlog import BacklogPlan, BacklogStory
 from sprint_crew.schemas.session import BacklogRun
 from sprint_crew.schemas.ticket import JiraTicket
@@ -126,48 +125,29 @@ def sort_stories(plan: BacklogPlan) -> list[BacklogStory]:
     return ordered
 
 
-class BacklogRunStore:
-    def __init__(self, db_path: Path) -> None:
-        self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS backlog_runs (
-                    run_id TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL
-                )
-                """
-            )
+class BacklogRunStore(SqliteJsonStore):
+    table = "backlog_runs"
+    key_column = "run_id"
+    create_sql = """
+        CREATE TABLE IF NOT EXISTS backlog_runs (
+            run_id TEXT PRIMARY KEY,
+            payload TEXT NOT NULL
+        )
+    """
 
     def save(self, run: BacklogRun) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO backlog_runs (run_id, payload)
-                VALUES (?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET payload=excluded.payload
-                """,
-                (run.run_id, json.dumps(run.model_dump(mode="json"))),
-            )
+        self._save_row(
+            {
+                "run_id": run.run_id,
+                "payload": json.dumps(run.model_dump(mode="json")),
+            }
+        )
 
     def load(self, run_id: str) -> BacklogRun | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM backlog_runs WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-        if row is None:
+        payload = self._load_payload(run_id)
+        if payload is None:
             return None
-        return BacklogRun.model_validate(json.loads(row["payload"]))
+        return BacklogRun.model_validate(json.loads(payload))
 
 
 def backlog_store() -> BacklogRunStore:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from sprint_crew.vector.chunker import INDEXABLE_SUFFIXES, _chunk_kind_for_path, _should_skip_path
+from sprint_crew.paths import INDEXABLE_SUFFIXES, chunk_kind_for_path, should_skip_path
 
 FileKind = Literal["code", "test", "doc", "config"]
 
@@ -56,7 +56,7 @@ def build_repo_manifest(workspace: Path, *, max_files: int = 300) -> list[FileEn
         except ValueError:
             continue
         rel_path = Path(rel)
-        if _should_skip_path(rel_path):
+        if should_skip_path(rel_path):
             continue
         if rel_path.suffix.lower() not in INDEXABLE_SUFFIXES:
             continue
@@ -66,7 +66,7 @@ def build_repo_manifest(workspace: Path, *, max_files: int = 300) -> list[FileEn
             continue
         if not content.strip():
             continue
-        chunk_kind = _chunk_kind_for_path(rel)
+        chunk_kind = chunk_kind_for_path(rel)
         kind: FileKind
         if chunk_kind == "test":
             kind = "test"

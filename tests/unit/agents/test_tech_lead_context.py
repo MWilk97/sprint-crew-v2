@@ -44,11 +44,11 @@ def test_enrich_repo_context_appends_semantic_section(tmp_workspace, monkeypatch
     get_settings.cache_clear()
 
     monkeypatch.setattr(
-        "sprint_crew.vector.context.should_index_workspace",
+        "sprint_crew.orchestrator.repo_context.should_index_workspace",
         lambda *a, **k: True,
     )
     monkeypatch.setattr(
-        "sprint_crew.vector.context.semantic_search",
+        "sprint_crew.orchestrator.repo_context.semantic_search",
         lambda *a, **k: [
             __import__("sprint_crew.vector.search", fromlist=["SearchHit"]).SearchHit(
                 path="auth.py",
@@ -61,7 +61,7 @@ def test_enrich_repo_context_appends_semantic_section(tmp_workspace, monkeypatch
         ],
     )
 
-    from sprint_crew.vector.context import enrich_repo_context
+    from sprint_crew.orchestrator.repo_context import enrich_repo_context
 
     text = enrich_repo_context(tmp_workspace, "sess-1", "authentication middleware")
     assert "=== repo_manifest" in text
@@ -85,15 +85,18 @@ def test_enrich_repo_context_with_hits_returns_hit_list(tmp_workspace, monkeypat
         snippet="def auth(): ...",
     )
     monkeypatch.setattr(
-        "sprint_crew.vector.context.should_index_workspace",
+        "sprint_crew.orchestrator.repo_context.should_index_workspace",
         lambda *a, **k: True,
     )
     monkeypatch.setattr(
-        "sprint_crew.vector.context.semantic_search",
+        "sprint_crew.orchestrator.repo_context.semantic_search",
         lambda *a, **k: [hit],
     )
 
-    from sprint_crew.vector.context import enrich_repo_context_with_hits, pre_search_agent_event
+    from sprint_crew.orchestrator.repo_context import (
+        enrich_repo_context_with_hits,
+        pre_search_agent_event,
+    )
 
     text, hits = enrich_repo_context_with_hits(tmp_workspace, "sess-1", "authentication")
     assert hits == [hit]

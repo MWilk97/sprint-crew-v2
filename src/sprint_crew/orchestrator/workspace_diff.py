@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sprint_crew.orchestrator.plan_coverage import DIFF_PATH_RE, _run_git, normalize_path
+from sprint_crew.orchestrator.plan_coverage import _run_git
+from sprint_crew.paths import DIFF_PATH_RE, normalize_path
 from sprint_crew.tools import READONLY_TOOLS, build_registry
 
 _DEFAULT_MAX_CHARS = 24_000

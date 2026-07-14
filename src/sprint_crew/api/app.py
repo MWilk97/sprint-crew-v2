@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import urllib.error
-import urllib.request
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -10,10 +8,11 @@ from pydantic import BaseModel, Field
 
 from sprint_crew.agents.scrum_master import run_scrum_master
 from sprint_crew.config import Role, get_settings
-from sprint_crew.graph.lanes import ensure_lane, stop_lane
+from sprint_crew.graph.lanes import ensure_lane, lane_health, stop_lane
 from sprint_crew.integrations.jira_client import get_jira_client
 from sprint_crew.orchestrator.backlog import BacklogRunStore, get_backlog_run
 from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
+from sprint_crew.orchestrator.repo_context import enrich_repo_context, maybe_index_workspace
 from sprint_crew.orchestrator.session import (
     SessionStore,
     approve_session,
@@ -22,8 +21,6 @@ from sprint_crew.orchestrator.session import (
     prepare_workspace,
 )
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus, SprintSession
-from sprint_crew.vector.context import enrich_repo_context
-from sprint_crew.vector.indexer import maybe_index_workspace
 
 app = FastAPI(title="Sprint Crew API", version="0.1.0")
 
@@ -46,25 +43,9 @@ class BacklogRunCreatedResponse(BaseModel):
     run_id: str
 
 
-def _lane_health_summary() -> dict[str, str]:
-    settings = get_settings()
-    lanes = {
-        "coder": settings.vllm_coder_url.replace("/v1", "/health"),
-        "work": settings.vllm_work_url.replace("/v1", "/health"),
-    }
-    summary: dict[str, str] = {}
-    for name, url in lanes.items():
-        try:
-            with urllib.request.urlopen(url, timeout=2) as resp:
-                summary[name] = "ok" if resp.status == 200 else "degraded"
-        except (urllib.error.URLError, TimeoutError, OSError):
-            summary[name] = "down"
-    return summary
-
-
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "lanes": _lane_health_summary()}
+    return {"status": "ok", "lanes": lane_health()}
 
 
 @app.post("/sprint/from-prompt", response_model=BacklogRunCreatedResponse)

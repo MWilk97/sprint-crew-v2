@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import operator
+from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
+from sprint_crew.schemas.change import CodeChange
 from sprint_crew.schemas.session import AgentEvent, SessionStatus
+from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
 
 
 class SprintState(TypedDict, total=False):
@@ -35,3 +38,19 @@ class SprintState(TypedDict, total=False):
     acceptance_test_output: str
     backlog_run_id: str | None
     template_fast_path: bool
+
+
+def ticket_from_state(state: SprintState) -> JiraTicket:
+    return JiraTicket.model_validate(state["selected_ticket"])
+
+
+def task_plan_from_state(state: SprintState) -> TaskPlan:
+    return TaskPlan.model_validate(state["task_plan"])
+
+
+def code_change_from_state(state: SprintState) -> CodeChange:
+    return CodeChange.model_validate(state["code_change"])
+
+
+def workspace_from_state(state: SprintState) -> Path:
+    return Path(state["workspace_root"])

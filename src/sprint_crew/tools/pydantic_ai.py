@@ -162,7 +162,50 @@ def _maybe_trigger_early_exit(ctx: RunContext[WorkspaceDeps], command: str, *, o
     )
 
 
-def build_coder_toolset() -> FunctionToolset[WorkspaceDeps]:
+_TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "coder": {
+        "read_file": "Read a UTF-8 text file from the workspace (optional line range).",
+        "write_file": "Write UTF-8 content to a file in the workspace.",
+        "apply_patch": "Apply a unified diff patch within the workspace.",
+        "grep": "Search file contents under a workspace path for a regex pattern.",
+        "list_directory": "List files and directories under a workspace path.",
+        "run_command": "Run an allowlisted shell command in the workspace root.",
+        "git_status": "Show git status for the workspace repository.",
+    },
+    "tester": {
+        "read_file": "Read a UTF-8 text file from the workspace.",
+        "write_file": "Write UTF-8 content to a file under tests/.",
+        "apply_patch": "Apply a unified diff patch to files under tests/.",
+        "grep": "Search file contents for a regex pattern.",
+        "list_directory": "List directory entries.",
+        "run_command": "Run an allowlisted shell command.",
+        "git_status": "Show git status.",
+    },
+    "readonly": {
+        "read_file": "Read a UTF-8 text file from the workspace.",
+        "grep": "Search file contents for a regex pattern.",
+        "list_directory": "List directory entries.",
+        "run_command": "Run an allowlisted shell command.",
+        "git_status": "Show git status.",
+        "git_diff": "Show git diff.",
+        "git_log": "Show recent git log.",
+    },
+}
+
+
+def _build_toolset(
+    variant: str,
+    *,
+    include_semantic_search: bool = False,
+) -> FunctionToolset[WorkspaceDeps]:
+    """Single toolset factory; ``variant`` selects mutation guards and tool surface.
+
+    - ``coder``: plan-scoped writes, early exit on green acceptance command.
+    - ``tester``: writes restricted to tests/.
+    - ``readonly``: no writes, plus git_diff / git_log (and optional semantic_search).
+    """
+    descriptions = _TOOL_DESCRIPTIONS[variant]
+    mutating = variant in ("coder", "tester")
     ts: FunctionToolset[WorkspaceDeps] = FunctionToolset()
 
     async def read_file(
@@ -171,187 +214,106 @@ def build_coder_toolset() -> FunctionToolset[WorkspaceDeps]:
         start_line: int | None = None,
         end_line: int | None = None,
     ) -> str:
-        """Read a UTF-8 text file from the workspace (optional line range)."""
         return _dispatch(
             ctx, "read_file", ReadFileArgs(path=path, start_line=start_line, end_line=end_line)
         )
 
     async def write_file(ctx: RunContext[WorkspaceDeps], path: str, content: str = "") -> str:
-        """Write UTF-8 content to a file in the workspace."""
-        err = _coder_scope_error_for_path(ctx.deps, path)
+        if variant == "tester":
+            err = check_mutation_allowed(path, None, tests_only=True)
+        else:
+            err = _coder_scope_error_for_path(ctx.deps, path)
         if err:
             _record_tool_call(ctx.deps, "write_file", {"path": path}, err, ok=False)
             return err
-        _invalidate_workspace_cache(ctx.deps)
+        if variant == "coder":
+            _invalidate_workspace_cache(ctx.deps)
         return _dispatch(ctx, "write_file", WriteFileArgs(path=path, content=content))
 
     async def apply_patch(ctx: RunContext[WorkspaceDeps], patch: str) -> str:
-        """Apply a unified diff patch within the workspace."""
-        err = _coder_scope_error_for_patch(ctx.deps, patch)
+        if variant == "tester":
+            err = check_patch_mutations_allowed(patch, None, tests_only=True)
+        else:
+            err = _coder_scope_error_for_patch(ctx.deps, patch)
         if err:
             _record_tool_call(ctx.deps, "apply_patch", {"patch": patch[:200]}, err, ok=False)
             return err
-        _invalidate_workspace_cache(ctx.deps)
+        if variant == "coder":
+            _invalidate_workspace_cache(ctx.deps)
         return _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
 
     async def grep(ctx: RunContext[WorkspaceDeps], pattern: str, path: str = ".") -> str:
-        """Search file contents under a workspace path for a regex pattern."""
         return _dispatch(ctx, "grep", GrepArgs(pattern=pattern, path=path))
 
     async def list_directory(ctx: RunContext[WorkspaceDeps], path: str = ".") -> str:
-        """List files and directories under a workspace path."""
         return _dispatch(ctx, "list_directory", ListDirectoryArgs(path=path))
 
     async def run_command(ctx: RunContext[WorkspaceDeps], command: str) -> str:
-        """Run an allowlisted shell command in the workspace root."""
         result = _dispatch_result(ctx, "run_command", RunCommandArgs(command=command))
-        _maybe_trigger_early_exit(ctx, command, ok=result.ok)
+        if variant == "coder":
+            _maybe_trigger_early_exit(ctx, command, ok=result.ok)
         return result.output
 
     async def git_status(ctx: RunContext[WorkspaceDeps]) -> str:
-        """Show git status for the workspace repository."""
-        from sprint_crew.tools.git_tools import GitStatusArgs
-
-        return _dispatch(ctx, "git_status", GitStatusArgs())
-
-    for fn in (
-        read_file,
-        write_file,
-        apply_patch,
-        grep,
-        list_directory,
-        run_command,
-        git_status,
-    ):
-        ts.tool(fn)
-    return ts
-
-
-def build_tester_toolset() -> FunctionToolset[WorkspaceDeps]:
-    ts: FunctionToolset[WorkspaceDeps] = FunctionToolset()
-
-    async def read_file(
-        ctx: RunContext[WorkspaceDeps],
-        path: str,
-        start_line: int | None = None,
-        end_line: int | None = None,
-    ) -> str:
-        """Read a UTF-8 text file from the workspace."""
-        return _dispatch(
-            ctx, "read_file", ReadFileArgs(path=path, start_line=start_line, end_line=end_line)
-        )
-
-    async def write_file(ctx: RunContext[WorkspaceDeps], path: str, content: str = "") -> str:
-        """Write UTF-8 content to a file under tests/."""
-        err = check_mutation_allowed(path, None, tests_only=True)
-        if err:
-            _record_tool_call(ctx.deps, "write_file", {"path": path}, err, ok=False)
-            return err
-        return _dispatch(ctx, "write_file", WriteFileArgs(path=path, content=content))
-
-    async def apply_patch(ctx: RunContext[WorkspaceDeps], patch: str) -> str:
-        """Apply a unified diff patch to files under tests/."""
-        err = check_patch_mutations_allowed(patch, None, tests_only=True)
-        if err:
-            _record_tool_call(ctx.deps, "apply_patch", {"patch": patch[:200]}, err, ok=False)
-            return err
-        return _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
-
-    async def grep(ctx: RunContext[WorkspaceDeps], pattern: str, path: str = ".") -> str:
-        """Search file contents for a regex pattern."""
-        return _dispatch(ctx, "grep", GrepArgs(pattern=pattern, path=path))
-
-    async def list_directory(ctx: RunContext[WorkspaceDeps], path: str = ".") -> str:
-        """List directory entries."""
-        return _dispatch(ctx, "list_directory", ListDirectoryArgs(path=path))
-
-    async def run_command(ctx: RunContext[WorkspaceDeps], command: str) -> str:
-        """Run an allowlisted shell command."""
-        return _dispatch(ctx, "run_command", RunCommandArgs(command=command))
-
-    async def git_status(ctx: RunContext[WorkspaceDeps]) -> str:
-        """Show git status."""
-        from sprint_crew.tools.git_tools import GitStatusArgs
-
-        return _dispatch(ctx, "git_status", GitStatusArgs())
-
-    for fn in (read_file, write_file, apply_patch, grep, list_directory, run_command, git_status):
-        ts.tool(fn)
-    return ts
-
-
-def build_readonly_toolset(
-    *, include_semantic_search: bool = False
-) -> FunctionToolset[WorkspaceDeps]:
-    ts: FunctionToolset[WorkspaceDeps] = FunctionToolset()
-
-    async def read_file(
-        ctx: RunContext[WorkspaceDeps],
-        path: str,
-        start_line: int | None = None,
-        end_line: int | None = None,
-    ) -> str:
-        """Read a UTF-8 text file from the workspace."""
-        return _dispatch(
-            ctx, "read_file", ReadFileArgs(path=path, start_line=start_line, end_line=end_line)
-        )
-
-    async def grep(ctx: RunContext[WorkspaceDeps], pattern: str, path: str = ".") -> str:
-        """Search file contents for a regex pattern."""
-        return _dispatch(ctx, "grep", GrepArgs(pattern=pattern, path=path))
-
-    async def list_directory(ctx: RunContext[WorkspaceDeps], path: str = ".") -> str:
-        """List directory entries."""
-        return _dispatch(ctx, "list_directory", ListDirectoryArgs(path=path))
-
-    async def run_command(ctx: RunContext[WorkspaceDeps], command: str) -> str:
-        """Run an allowlisted shell command."""
-        return _dispatch(ctx, "run_command", RunCommandArgs(command=command))
-
-    async def git_status(ctx: RunContext[WorkspaceDeps]) -> str:
-        """Show git status."""
         from sprint_crew.tools.git_tools import GitStatusArgs
 
         return _dispatch(ctx, "git_status", GitStatusArgs())
 
     async def git_diff(ctx: RunContext[WorkspaceDeps]) -> str:
-        """Show git diff."""
         from sprint_crew.tools.git_tools import GitDiffArgs
 
         return _dispatch(ctx, "git_diff", GitDiffArgs())
 
     async def git_log(ctx: RunContext[WorkspaceDeps], n: int = 10) -> str:
-        """Show recent git log."""
         return _dispatch(ctx, "git_log", GitLogArgs(n=n))
 
-    tools = [read_file, grep, list_directory, run_command, git_status, git_diff, git_log]
+    async def semantic_search(
+        ctx: RunContext[WorkspaceDeps],
+        query: str,
+        path_prefix: str | None = None,
+        top_k: int | None = None,
+        chunk_kind: str | None = None,
+    ) -> str:
+        """Semantic search over indexed workspace code (concept-level discovery)."""
+        return _dispatch(
+            ctx,
+            "semantic_search",
+            SemanticSearchArgs(
+                query=query,
+                path_prefix=path_prefix,
+                top_k=top_k,
+                chunk_kind=chunk_kind,
+            ),
+        )
 
-    if include_semantic_search:
-
-        async def semantic_search(
-            ctx: RunContext[WorkspaceDeps],
-            query: str,
-            path_prefix: str | None = None,
-            top_k: int | None = None,
-            chunk_kind: str | None = None,
-        ) -> str:
-            """Semantic search over indexed workspace code (concept-level discovery)."""
-            return _dispatch(
-                ctx,
-                "semantic_search",
-                SemanticSearchArgs(
-                    query=query,
-                    path_prefix=path_prefix,
-                    top_k=top_k,
-                    chunk_kind=chunk_kind,
-                ),
-            )
-
-        tools.append(semantic_search)
+    tools = [read_file]
+    if mutating:
+        tools.extend([write_file, apply_patch])
+    tools.extend([grep, list_directory, run_command, git_status])
+    if variant == "readonly":
+        tools.extend([git_diff, git_log])
+        if include_semantic_search:
+            tools.append(semantic_search)
 
     for fn in tools:
+        if fn.__name__ in descriptions:
+            fn.__doc__ = descriptions[fn.__name__]
         ts.tool(fn)
     return ts
+
+
+def build_coder_toolset() -> FunctionToolset[WorkspaceDeps]:
+    return _build_toolset("coder")
+
+
+def build_tester_toolset() -> FunctionToolset[WorkspaceDeps]:
+    return _build_toolset("tester")
+
+
+def build_readonly_toolset(
+    *, include_semantic_search: bool = False
+) -> FunctionToolset[WorkspaceDeps]:
+    return _build_toolset("readonly", include_semantic_search=include_semantic_search)
 
 
 def workspace_deps(
