@@ -4,7 +4,7 @@
 
 ## Current system (July 2026)
 
-Sprint Crew v2 is a headless FastAPI + LangGraph backend on the GX10 (dual vLLM lanes: Coder :8001, Work :8002). Users call `POST /sprint/from-prompt` (ScrumMaster builds a backlog, then sequential per-ticket cycles) or `POST /sprint/from-ticket` (single cycle, no ScrumMaster). Runs end at `awaiting_human`; a human merges the PR manually per [ADR 0010](../adr/0010-manual-merge-gate.md). There is no web UI.
+Sprint Crew v2 is a headless FastAPI + LangGraph backend on the GX10 (dual vLLM lanes: Coder :8001, Work :8002). Users call `POST /sprint/from-prompt` (ScrumMaster builds a backlog, then sequential per-ticket cycles) or `POST /sprint/from-ticket` (single cycle, no ScrumMaster). Runs end at `awaiting_human`; a human merges the PR manually per [ADR 0010](../adr/0010-manual-merge-gate.md). A backend console API MVP (`/v1/console/*`) now exists (see [roadmap](../roadmap.md) Phase 1.5), but there is still no browser UI.
 
 ## Target UX
 
@@ -24,7 +24,7 @@ sequenceDiagram
   participant W as Web console (separate repo)
   participant A as FastAPI (this repo, GX10)
   U->>W: prompt + mode (Plan / Code)
-  W->>A: clarify request (Proposed API)
+  W->>A: clarify request (/v1/console)
   A-->>W: suggested options
   U->>W: pick option or custom answer, confirm
   W->>A: confirmed run

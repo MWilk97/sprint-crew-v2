@@ -6,12 +6,12 @@ Sprint Crew v2 automates the software delivery loop for a single ticket at a tim
 
 | Layer | Responsibility |
 |-------|----------------|
-| **API** (`src/sprint_crew/api/app.py`) | HTTP entry points: from-prompt, from-ticket, session status, approve |
+| **API** (`api/app.py`, `api/console.py`) | HTTP entry points: `/sprint/*` (from-prompt, from-ticket, session status, approve) and `/v1/console/*` (interactive console MVP) |
 | **Orchestrator** (`orchestrator/`) | Workspace prep, git push, Jira transitions, GitHub PR creation |
 | **LangGraph** (`graph/pipeline.py`) | State machine: plan → code → test → review → ship node |
 | **Agents** (`agents/`) | TechLead, Coder, Tester, Formatter, Reviewer, ScrumMaster |
 | **Tools** (`tools/`) | read_file, write_file, apply_patch, grep, run_command (allowlisted) |
-| **Vector** (`vector/`) | Optional Qdrant index + semantic search for COMPLEX tickets |
+| **Vector** (`vector/`) | Optional Qdrant index + semantic search for non-TRIVIAL tickets (SIMPLE and COMPLEX) |
 | **Integrations** (`integrations/`) | Jira and GitHub clients (real + mock) |
 
 ## Inference lanes

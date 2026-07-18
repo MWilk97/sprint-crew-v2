@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed
+Accepted — partially implemented. The backend console API MVP (`/v1/console/*`,
+including clarify and confirm) is live (roadmap Phase 1.5); the browser UI that
+consumes it is still Proposed and lives in a separate repo ([ADR 0011](0011-web-console-off-gx.md)).
 
 ## Context
 
@@ -24,4 +26,4 @@ Before any sprint run in either mode, a **clarify** step presents suggested opti
 - No sprint run starts from a raw prompt alone; confirmation is mandatory
 - Plan mode gives a cheap, side-effect-free way to explore a backlog before committing GPU time
 - The manual merge gate ([ADR 0010](0010-manual-merge-gate.md)) is unchanged; Code mode still ends at `awaiting_human`
-- The future API must expose clarify options and confirmation state (Proposed; see [roadmap](../roadmap.md) Phase 1)
+- The API exposes clarify options and confirmation state via `/v1/console/*` (delivered as an MVP in Phase 1.5; see [roadmap](../roadmap.md))

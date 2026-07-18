@@ -73,6 +73,7 @@ GX10 test suite (preflight + real ship cycle):
 | `GET /sprint/session/{id}` | Session status and event timeline |
 | `GET /sprint/backlog/{run_id}` | Backlog orchestration status |
 | `POST /sprint/session/{id}/approve` | Record human approval (no auto-merge) |
+| `POST /v1/console/sessions` (+ `messages`/`clarify`/`confirm`/`start`/`cancel`) | Interactive console MVP — see [contract](docs/contracts/chat-console-api.md) |
 | `GET /health` | API health + vLLM lane status |
 
 Start the API:
