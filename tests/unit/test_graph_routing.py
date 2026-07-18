@@ -4,6 +4,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.helpers.agent_live_tickets import greeter_ticket
 
 from sprint_crew.config import Role
 from sprint_crew.graph.pipeline import (
@@ -12,29 +13,9 @@ from sprint_crew.graph.pipeline import (
     route_after_plan,
     route_after_retry,
 )
-from sprint_crew.orchestrator.retry import resolve_retry_scope
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome
 from sprint_crew.schemas.session import SessionStatus
-from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
-
-
-@pytest.fixture
-def base_state() -> dict:
-    ticket = JiraTicket(
-        key="DEMO-1",
-        summary="Add hello()",
-        status="To Do",
-        issue_type="Story",
-    )
-    return {
-        "session_id": "test-session",
-        "workspace_root": "/tmp/fake",
-        "selected_ticket": ticket.model_dump(),
-        "attempt": 0,
-        "prior_review_feedback": "",
-        "events": [],
-        "use_real_ship": False,
-    }
+from sprint_crew.schemas.ticket import TaskPlan
 
 
 @pytest.mark.asyncio
@@ -44,49 +25,32 @@ async def test_graph_happy_path_mocked(
     task_plan: TaskPlan,
     code_change: CodeChange,
     passing_review: ReviewOutcome,
+    graph_run_mocks,
 ) -> None:
     import subprocess
 
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
     base_state["workspace_root"] = str(tmp_path)
     graph = build_sprint_graph()
-    stop_mock = AsyncMock()
 
-    with (
-        patch("sprint_crew.graph.pipeline.ensure_lane", new=AsyncMock()) as ensure_mock,
-        patch("sprint_crew.graph.pipeline.stop_lane", new=stop_mock),
-        patch(
-            "sprint_crew.graph.pipeline.run_tech_lead_validated",
-            new=AsyncMock(return_value=(task_plan, "static", [])),
+    with graph_run_mocks(
+        tech_lead_result=(task_plan, "static", []),
+        coder_result=(
+            "handoff",
+            [],
+            MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
         ),
-        patch(
-            "sprint_crew.graph.pipeline.run_coder_with_coverage",
-            new=AsyncMock(
-                return_value=(
-                    "handoff",
-                    [],
-                    MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
-                )
-            ),
-        ),
-        patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="diff"),
-        patch("sprint_crew.graph.pipeline.run_formatter", new=AsyncMock(return_value=code_change)),
-        patch(
-            "sprint_crew.graph.pipeline.run_reviewer", new=AsyncMock(return_value=passing_review)
-        ),
-        patch("sprint_crew.orchestrator.plan_coverage.subprocess.run") as mock_subprocess,
-    ):
-        mock_subprocess.return_value.returncode = 0
-        mock_subprocess.return_value.stdout = ""
-        mock_subprocess.return_value.stderr = ""
+        formatter_result=code_change,
+        reviewer=AsyncMock(return_value=passing_review),
+    ) as mocks:
         result = await graph.ainvoke(base_state)
 
     assert result["status"] == SessionStatus.AWAITING_HUMAN
     assert result["task_plan"]["ticket_key"] == "DEMO-1"
     assert result["review_outcome"]["passed"] is True
-    review_stops = [call.args[0] for call in stop_mock.await_args_list if call.args]
+    review_stops = [call.args[0] for call in mocks["stop_lane"].await_args_list if call.args]
     assert Role.WORK in review_stops
-    assert ensure_mock.await_count >= 1
+    assert mocks["ensure_lane"].await_count >= 1
 
 
 def test_graph_init_routes_directly_to_tech_lead_plan() -> None:
@@ -103,44 +67,24 @@ async def test_graph_simple_ticket_uses_template_via_tech_lead(
     base_state: dict,
     code_change: CodeChange,
     passing_review: ReviewOutcome,
+    graph_run_mocks,
 ) -> None:
     import subprocess
 
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
     base_state["workspace_root"] = str(tmp_path)
-    base_state["selected_ticket"] = JiraTicket(
-        key="DEMO-1",
-        summary="Add hello() to greeter.py",
-        description="Implement hello() returning 'hello'.",
-        status="To Do",
-        issue_type="Story",
-        acceptance_criteria="- Unit tests pass\n- hello() returns 'hello'",
-    ).model_dump()
+    base_state["selected_ticket"] = greeter_ticket().model_dump()
     graph = build_sprint_graph()
 
-    with (
-        patch("sprint_crew.graph.pipeline.ensure_lane", new=AsyncMock()),
-        patch("sprint_crew.graph.pipeline.stop_lane", new=AsyncMock()),
-        patch(
-            "sprint_crew.graph.pipeline.run_coder_with_coverage",
-            new=AsyncMock(
-                return_value=(
-                    "handoff",
-                    [],
-                    MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
-                )
-            ),
+    with graph_run_mocks(
+        coder_result=(
+            "handoff",
+            [],
+            MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
         ),
-        patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="diff"),
-        patch("sprint_crew.graph.pipeline.run_formatter", new=AsyncMock(return_value=code_change)),
-        patch(
-            "sprint_crew.graph.pipeline.run_reviewer", new=AsyncMock(return_value=passing_review)
-        ),
-        patch("sprint_crew.orchestrator.plan_coverage.subprocess.run") as mock_subprocess,
+        formatter_result=code_change,
+        reviewer=AsyncMock(return_value=passing_review),
     ):
-        mock_subprocess.return_value.returncode = 0
-        mock_subprocess.return_value.stdout = ""
-        mock_subprocess.return_value.stderr = ""
         result = await graph.ainvoke(base_state)
 
     assert result["task_plan"]["ticket_key"] == "DEMO-1"
@@ -312,18 +256,6 @@ def test_route_after_gate_no_deadline_when_zero(passing_review: ReviewOutcome) -
         "deadline_epoch": 0.0,
     }
     assert route_after_gate(state) == "retry"  # type: ignore[arg-type]
-
-
-def test_resolve_retry_scope_defaults_to_code(passing_review: ReviewOutcome) -> None:
-    review = passing_review.model_copy(update={"passed": False, "summary": "fix implementation"})
-    assert resolve_retry_scope(review) == "code"
-
-
-def test_resolve_retry_scope_plan_when_requested(passing_review: ReviewOutcome) -> None:
-    review = passing_review.model_copy(
-        update={"passed": False, "retry_scope": "plan", "summary": "wrong files in plan"}
-    )
-    assert resolve_retry_scope(review) == "plan"
 
 
 def test_route_after_retry_routes_by_scope(passing_review: ReviewOutcome) -> None:

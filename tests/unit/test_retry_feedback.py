@@ -249,3 +249,21 @@ def test_format_review_feedback_includes_bugs_observed() -> None:
     )
     assert "Tester observations" in feedback
     assert "src/api/routes.py" in feedback
+
+
+def test_format_review_feedback_includes_diff_and_tests() -> None:
+    review = ReviewOutcome(
+        ticket_key="DEMO-1",
+        passed=False,
+        summary="Fix hello() return value",
+        tests_passed=False,
+        tests_run=["pytest -q"],
+    )
+    feedback = format_review_feedback(
+        review,
+        workspace_diff="diff snippet",
+        test_output="stderr: AssertionError",
+    )
+    assert "Workspace diff" in feedback
+    assert "Latest test output" in feedback
+    assert "AssertionError" in feedback

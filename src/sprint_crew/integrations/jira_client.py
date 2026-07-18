@@ -178,13 +178,19 @@ class AtlassianJiraClient(JiraClient):
         log.info("Jira comment added to %s", key)
 
     def transition(self, key: str, status: str) -> None:
-        transitions = self._client.get_issue_transitions(key)
-        for transition in transitions or []:
+        transitions = self._client.get_issue_transitions(key) or []
+        for transition in transitions:
             if transition.get("name", "").lower() == status.lower():
                 self._client.set_issue_status_by_transition_id(key, transition["id"])
                 log.info("Jira %s transitioned to %s", key, status)
                 return
-        log.warning("No Jira transition named %r for %s", status, key)
+        available = [t.get("name", "") for t in transitions]
+        log.error(
+            "No Jira transition named %r for %s (available: %s) — ticket status unchanged",
+            status,
+            key,
+            available,
+        )
 
 
 _GITHUB_SLUG_RE = re.compile(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)")

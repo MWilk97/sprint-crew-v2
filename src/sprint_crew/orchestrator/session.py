@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -14,6 +13,7 @@ from uuid import uuid4
 from sprint_crew.config import get_settings
 from sprint_crew.graph.pipeline import run_sprint_cycle
 from sprint_crew.graph.state import SprintState
+from sprint_crew.integrations.jira_client import default_git_env
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
 from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
@@ -104,13 +104,7 @@ def prepare_workspace(
 
     fixture = source or settings.project_root / "fixtures" / "repo"
     shutil.copytree(fixture, dest, dirs_exist_ok=True)
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "sprint-crew",
-        "GIT_AUTHOR_EMAIL": "sprint-crew@local",
-        "GIT_COMMITTER_NAME": "sprint-crew",
-        "GIT_COMMITTER_EMAIL": "sprint-crew@local",
-    }
+    env = default_git_env()
     subprocess.run(["git", "init"], cwd=dest, check=True, capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=dest, check=True, capture_output=True)
     subprocess.run(
@@ -138,13 +132,7 @@ def prepare_chained_workspace(parent_workspace: Path, session_id: str) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(parent_workspace, dest, dirs_exist_ok=True)
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "sprint-crew",
-        "GIT_AUTHOR_EMAIL": "sprint-crew@local",
-        "GIT_COMMITTER_NAME": "sprint-crew",
-        "GIT_COMMITTER_EMAIL": "sprint-crew@local",
-    }
+    env = default_git_env()
     branch = f"feature/{session_id[:8]}"
     subprocess.run(
         ["git", "checkout", "-b", branch],
@@ -179,7 +167,12 @@ def _state_from_session(
     }
 
 
-def _session_from_state(state: dict[str, Any], base: SprintSession) -> SprintSession:
+def _session_from_state(
+    state: dict[str, Any],
+    base: SprintSession,
+    *,
+    initial_events: list[AgentEvent],
+) -> SprintSession:
     updates: dict[str, Any] = {
         "status": state.get("status", base.status),
         "attempt": state.get("attempt", base.attempt),
@@ -199,8 +192,7 @@ def _session_from_state(state: dict[str, Any], base: SprintSession) -> SprintSes
         updates["test_additions"] = TestAdditions.model_validate(test_additions)
 
     new_events = state.get("events") or []
-    merged_events = list(base.events) + list(new_events)
-    updates["events"] = merged_events
+    updates["events"] = list(initial_events) + list(new_events)
     return base.model_copy(update=updates)
 
 
@@ -227,6 +219,7 @@ async def create_and_run_cycle(
         backlog_run_id=backlog_run_id,
         events=list(initial_events or []),
     )
+    initial_events_snapshot = list(session.events)
     store = _store()
     store.save(session)
 
@@ -243,12 +236,12 @@ async def create_and_run_cycle(
 
     async def _persist_progress(partial: dict[str, Any]) -> None:
         nonlocal session
-        session = _session_from_state(partial, session)
+        session = _session_from_state(partial, session, initial_events=initial_events_snapshot)
         store.save(session)
 
     try:
         final_state = await run_sprint_cycle(state, on_node_complete=_persist_progress)
-        session = _session_from_state(final_state, session)
+        session = _session_from_state(final_state, session, initial_events=initial_events_snapshot)
     except Exception as exc:
         import traceback
 

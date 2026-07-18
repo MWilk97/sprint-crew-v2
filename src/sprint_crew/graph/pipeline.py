@@ -19,7 +19,10 @@ from sprint_crew.agents.tool_events import tool_call_events
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, stop_lane
 from sprint_crew.graph.state import SprintState
-from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
+from sprint_crew.orchestrator.acceptance_failure import (
+    AcceptanceFailureAnalysis,
+    analyze_acceptance_output,
+)
 from sprint_crew.orchestrator.merge_gate import review_accepted
 from sprint_crew.orchestrator.plan_coverage import (
     PlanCoverageResult,
@@ -65,6 +68,39 @@ def _code_change(state: SprintState) -> CodeChange:
 
 def _workspace(state: SprintState) -> Path:
     return Path(state["workspace_root"])
+
+
+def _coverage_from_dict(raw: Any) -> PlanCoverageResult | None:
+    if not isinstance(raw, dict):
+        return None
+    return PlanCoverageResult(
+        missing=list(raw.get("missing", [])),
+        unexpected=list(raw.get("unexpected", [])),
+        out_of_scope_hits=list(raw.get("out_of_scope_hits", [])),
+        blocking_unexpected=list(raw.get("blocking_unexpected", [])),
+        phantom_paths=list(raw.get("phantom_paths", [])),
+        satisfied=bool(raw.get("satisfied", True)),
+    )
+
+
+def _acceptance_failure_dict(analysis: AcceptanceFailureAnalysis | None) -> dict[str, Any]:
+    """Serialize this round's acceptance-failure analysis for graph state.
+
+    Always returns a value (empty dict when there's no failure) so a node's
+    returned update overwrites a stale failure recorded in an earlier round —
+    acceptance_failure has no reducer, so an omitted key would otherwise leave
+    a prior round's failure in state after tests turn green.
+    """
+    if analysis is None or analysis.kind == "none":
+        return {}
+    return {
+        "kind": analysis.kind,
+        "tester_can_help": analysis.tester_can_help,
+        "source_paths": list(analysis.source_paths),
+        "test_paths": list(analysis.test_paths),
+        "summary": analysis.summary,
+        "detail_excerpt": analysis.detail_excerpt,
+    }
 
 
 def _coverage_satisfied(state: SprintState) -> bool:
@@ -158,6 +194,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
             session_id=session_id,
             prior_review_feedback=state.get("prior_review_feedback", ""),
             baseline_paths=baseline,
+            pre_search_hit_count=len(pre_hits),
         )
     except RuntimeError as exc:
         events.append(
@@ -292,6 +329,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         return {
             "workspace_diff": workspace_diff,
             "skip_tester_this_attempt": False,
+            "acceptance_failure": {},
             "events": [
                 _event(
                     "tester",
@@ -324,9 +362,10 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
             skip_reason = "Source/build failure — tester cannot edit src/; coder must fix first"
         else:
             skip_reason = "No test gap — tester skipped"
-        result: dict[str, Any] = {
+        return {
             "workspace_diff": workspace_diff,
             "tests_run_this_cycle": acceptance_green,
+            "acceptance_failure": _acceptance_failure_dict(failure_analysis),
             "events": [
                 _event(
                     "tester",
@@ -336,16 +375,6 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
                 ),
             ],
         }
-        if failure_analysis is not None and failure_analysis.kind != "none":
-            result["acceptance_failure"] = {
-                "kind": failure_analysis.kind,
-                "tester_can_help": failure_analysis.tester_can_help,
-                "source_paths": list(failure_analysis.source_paths),
-                "test_paths": list(failure_analysis.test_paths),
-                "summary": failure_analysis.summary,
-                "detail_excerpt": failure_analysis.detail_excerpt,
-            }
-        return result
 
     await stop_lane(Role.WORK)
     await ensure_lane(Role.CODING)
@@ -366,6 +395,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         return {
             "workspace_diff": workspace_diff,
             "tests_run_this_cycle": True,
+            "acceptance_failure": _acceptance_failure_dict(failure_analysis),
             "events": [
                 *tool_call_events("tester", tool_log),
                 _event(
@@ -380,6 +410,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         "test_additions": additions.model_dump(),
         "workspace_diff": workspace_diff,
         "tests_run_this_cycle": additions.tests_passed,
+        "acceptance_failure": _acceptance_failure_dict(failure_analysis),
         "events": [
             *tool_call_events("tester", tool_log),
             _event(
@@ -503,16 +534,7 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
     workspace_diff = state.get("workspace_diff", "")
     change = _code_change(state) if state.get("code_change") else None
     coverage_raw = state.get("plan_coverage")
-    coverage: PlanCoverageResult | None = None
-    if isinstance(coverage_raw, dict):
-        coverage = PlanCoverageResult(
-            missing=list(coverage_raw.get("missing", [])),
-            unexpected=list(coverage_raw.get("unexpected", [])),
-            out_of_scope_hits=list(coverage_raw.get("out_of_scope_hits", [])),
-            blocking_unexpected=list(coverage_raw.get("blocking_unexpected", [])),
-            phantom_paths=list(coverage_raw.get("phantom_paths", [])),
-            satisfied=bool(coverage_raw.get("satisfied", True)),
-        )
+    coverage = _coverage_from_dict(coverage_raw)
     scope = resolve_retry_scope(
         outcome,
         coverage=coverage,
@@ -526,16 +548,7 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
     stall_count = state.get("coverage_stall_count", 0)
     prev_raw = state.get("plan_coverage_prev")
     if coverage is not None:
-        prev: PlanCoverageResult | None = None
-        if isinstance(prev_raw, dict):
-            prev = PlanCoverageResult(
-                missing=list(prev_raw.get("missing", [])),
-                unexpected=list(prev_raw.get("unexpected", [])),
-                out_of_scope_hits=list(prev_raw.get("out_of_scope_hits", [])),
-                blocking_unexpected=list(prev_raw.get("blocking_unexpected", [])),
-                phantom_paths=list(prev_raw.get("phantom_paths", [])),
-                satisfied=bool(prev_raw.get("satisfied", True)),
-            )
+        prev = _coverage_from_dict(prev_raw)
         if prev is not None and not coverage_improved(prev, coverage):
             stall_count += 1
         else:
@@ -599,16 +612,7 @@ def route_after_retry(state: SprintState) -> str:
     if scope not in {"plan", "code"}:
         outcome = ReviewOutcome.model_validate(state["review_outcome"])
         coverage_raw = state.get("plan_coverage")
-        coverage: PlanCoverageResult | None = None
-        if isinstance(coverage_raw, dict):
-            coverage = PlanCoverageResult(
-                missing=list(coverage_raw.get("missing", [])),
-                unexpected=list(coverage_raw.get("unexpected", [])),
-                out_of_scope_hits=list(coverage_raw.get("out_of_scope_hits", [])),
-                blocking_unexpected=list(coverage_raw.get("blocking_unexpected", [])),
-                phantom_paths=list(coverage_raw.get("phantom_paths", [])),
-                satisfied=bool(coverage_raw.get("satisfied", True)),
-            )
+        coverage = _coverage_from_dict(coverage_raw)
         scope = resolve_retry_scope(
             outcome,
             coverage=coverage,
@@ -629,16 +633,7 @@ async def awaiting_human(state: SprintState) -> dict[str, Any]:
 async def failed(state: SprintState) -> dict[str, Any]:
     outcome = ReviewOutcome.model_validate(state.get("review_outcome", {}))
     coverage_raw = state.get("plan_coverage")
-    coverage: PlanCoverageResult | None = None
-    if isinstance(coverage_raw, dict):
-        coverage = PlanCoverageResult(
-            missing=list(coverage_raw.get("missing", [])),
-            unexpected=list(coverage_raw.get("unexpected", [])),
-            out_of_scope_hits=list(coverage_raw.get("out_of_scope_hits", [])),
-            blocking_unexpected=list(coverage_raw.get("blocking_unexpected", [])),
-            phantom_paths=list(coverage_raw.get("phantom_paths", [])),
-            satisfied=bool(coverage_raw.get("satisfied", True)),
-        )
+    coverage = _coverage_from_dict(coverage_raw)
     if _deadline_exceeded(state):
         summary = "Per-cycle wall-clock budget exceeded"
     elif state.get("coverage_stall_count", 0) >= 2:

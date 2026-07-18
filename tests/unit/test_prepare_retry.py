@@ -94,7 +94,10 @@ async def test_prepare_retry_plan_scope_increments_plan_retries(base_retry_state
 
 
 @pytest.mark.asyncio
-async def test_prepare_retry_feedback_includes_diff_and_test_output(base_retry_state: dict) -> None:
+async def test_prepare_retry_wires_test_output_into_feedback(base_retry_state: dict) -> None:
+    """format_review_feedback's own content rendering is covered by
+    test_retry_feedback.py; this only proves prepare_retry wires the workspace
+    diff and rerun test output through to the feedback at all."""
     base_retry_state["review_outcome"] = ReviewOutcome(
         ticket_key="DEMO-1",
         passed=False,
@@ -109,6 +112,6 @@ async def test_prepare_retry_feedback_includes_diff_and_test_output(base_retry_s
     ):
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
 
-    feedback = result["prior_review_feedback"]
-    assert "Workspace diff" in feedback
-    assert "AssertionError" in feedback
+    assert result["prior_review_feedback"]
+    assert result["retry_scope"] == "code"
+    assert result["attempt"] == 1

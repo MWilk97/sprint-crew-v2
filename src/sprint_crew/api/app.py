@@ -84,12 +84,14 @@ async def sprint_from_prompt(
 
     work_lane = Role.WORK
     await ensure_lane(work_lane)
-    plan = await run_scrum_master(
-        user_prompt=body.prompt,
-        repo_context=repo_context,
-        role=work_lane,
-    )
-    await stop_lane(work_lane)
+    try:
+        plan = await run_scrum_master(
+            user_prompt=body.prompt,
+            repo_context=repo_context,
+            role=work_lane,
+        )
+    finally:
+        await stop_lane(work_lane)
 
     BacklogRunStore(get_settings().session_db).save(
         BacklogRun(
