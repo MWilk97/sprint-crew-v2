@@ -1,6 +1,14 @@
 # Chat console API contract
 
-**Status: Proposed — not implemented.** No `/v1/console/*` route exists; the current live API is `/sprint/*` and `/health` only (see [app.py](../../src/sprint_crew/api/app.py)). This contract exists so the separate UI repo ([ADR 0011](../adr/0011-web-console-off-gx.md)) can build a mock client before the backend lands. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic stubs: `src/sprint_crew/schemas/console.py`.
+**Status: Implemented (MVP store + stub clarify).** The `/v1/console/*` routes are live in [console.py](../../src/sprint_crew/api/console.py), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). The separate UI repo ([ADR 0011](../adr/0011-web-console-off-gx.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
+
+Implementation status / MVP limitations:
+
+- Sessions are held in a **process-local in-memory store**: they do not survive an API restart and are not shared across workers (single-worker assumption).
+- **Clarify is a deterministic stub** — 2–3 fixed questions (scope, tests, and API compatibility when the prompt mentions an API/endpoint/route), lightly derived from the prompt text, no LLM call. All stub questions set `allow_custom: true`.
+- `POST /start` with `mode=code` reuses the same orchestration as `POST /sprint/from-prompt` (which remains unchanged for direct callers); the clarify answers are appended to the prompt.
+- `POST /cancel` on a `running` code-mode session marks the console session `cancelled` but does **not** stop the already-dispatched backlog run (no kill support today).
+- Progress mirroring: `GET /sessions/{id}` refreshes a running code-mode session from the backlog run (`sprint_ref.sprint_session_ids`, completed/failed status); clients may also poll `GET /sprint/backlog/{run_id}` directly.
 
 Notes:
 

@@ -1,11 +1,12 @@
 openapi: 3.1.0
 info:
-  title: Sprint Crew console API (Proposed)
-  version: 0.0.1-proposed
+  title: Sprint Crew console API
+  version: 0.1.0
   description: |
-    Status: Proposed — not implemented. Contract for the future interactive
-    console (docs/contracts/chat-console-api.md, ADR 0011/0012). No
-    /v1/console/* route is live; the current API is /sprint/* and /health.
+    Status: Implemented (MVP in-memory store + deterministic clarify stub).
+    Contract for the interactive console
+    (docs/contracts/chat-console-api.md, ADR 0011/0012). Routes are live at
+    /v1/console/* alongside the existing /sprint/* and /health API.
     Auth: TBD. Streaming (SSE/WebSocket): non-goal; clients poll GET session.
 paths:
   /v1/console/sessions:
