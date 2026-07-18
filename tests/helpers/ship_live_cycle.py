@@ -39,6 +39,7 @@ async def run_fixture_ship_live_cycle(
     summary_suffix: str,
     description: str,
     acceptance_criteria: str = "pytest -q passes",
+    max_wall_seconds: float = 4500,
 ) -> SprintSession:
     if not docker_available():
         pytest.skip("docker not available")
@@ -79,6 +80,7 @@ async def run_fixture_ship_live_cycle(
             ticket=jira_ticket,
             workspace=workspace,
             use_real_ship=True,
+            max_wall_seconds=max_wall_seconds,
         )
         assert_cycle_passed(
             session,

@@ -73,11 +73,8 @@ def enrich_repo_context_with_hits(
     hits = semantic_search(session_id, query_text, top_k=settings.vector_top_k)
     if hits:
         parts.append(
-            "=== pre_search (orchestrator — review before planning) ===\n"
+            "=== pre_search (orchestrator pre-fetched — verify with read_file/grep before planning) ===\n"
             + format_search_hits(hits)
-        )
-        parts.append(
-            "=== semantic_search (verify with read_file/grep) ===\n" + format_search_hits(hits)
         )
 
     return "\n\n".join(parts), hits

@@ -3,22 +3,16 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from tests.helpers.agent_live_tickets import complex_api_ticket, greeter_ticket
 
 from sprint_crew.agents import tech_lead as tech_lead_module
 from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated
-from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
+from sprint_crew.schemas.ticket import PlanStep, TaskPlan
 
 
 @pytest.mark.asyncio
 async def test_run_tech_lead_validated_returns_template_mode_for_greeter(tmp_path) -> None:
-    ticket = JiraTicket(
-        key="DEMO-1",
-        summary="Add hello() to greeter.py",
-        description="Implement hello() returning 'hello'.",
-        status="To Do",
-        issue_type="Story",
-        acceptance_criteria="- Unit tests pass",
-    )
+    ticket = greeter_ticket(summary="Add hello() to greeter.py")
     plan, mode, _tool_log = await run_tech_lead_validated(ticket, tmp_path)
     assert mode == "template"
     assert plan.ticket_key == "DEMO-1"
@@ -26,14 +20,7 @@ async def test_run_tech_lead_validated_returns_template_mode_for_greeter(tmp_pat
 
 @pytest.mark.asyncio
 async def test_run_tech_lead_complex_uses_tool_loop(tmp_path) -> None:
-    ticket = JiraTicket(
-        key="DEMO-2",
-        summary="Build REST API for tasks",
-        description="CRUD endpoints with SQLite storage.",
-        status="To Do",
-        issue_type="Story",
-        acceptance_criteria="Integration tests pass",
-    )
+    ticket = complex_api_ticket()
     expected = TaskPlan(
         ticket_key="DEMO-2",
         summary="api",

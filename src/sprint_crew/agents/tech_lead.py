@@ -184,6 +184,44 @@ def _tool_log_has_semantic_search(tool_log: ToolCallLog) -> bool:
     return any(entry.get("tool") == "semantic_search" for entry in tool_log)
 
 
+def _semantic_retrieval_satisfied(
+    tool_log: ToolCallLog,
+    *,
+    pre_search_hits: int = 0,
+) -> bool:
+    if pre_search_hits > 0:
+        return True
+    return _tool_log_has_semantic_search(tool_log)
+
+
+def _append_programmatic_semantic_search(
+    handoff: str,
+    *,
+    session_id: str,
+    ticket: JiraTicket,
+    tool_log: ToolCallLog,
+) -> str:
+    from sprint_crew.vector.search import format_search_hits, semantic_search
+
+    query = f"{ticket.summary}\n{ticket.description}"
+    hits = semantic_search(session_id, query)
+    body = format_search_hits(hits)
+    tool_log.append(
+        {
+            "tool": "semantic_search",
+            "args": {"query": query[:500]},
+            "ok": True,
+            "output_preview": body if len(body) <= 500 else body[:500] + "…",
+        }
+    )
+    if not body.strip() or body == "(no semantic matches)":
+        return handoff
+    prefix = "=== programmatic semantic_search ===\n"
+    if handoff.strip():
+        return f"{handoff.strip()}\n\n{prefix}{body}"
+    return f"{prefix}{body}"
+
+
 async def run_tech_lead(
     ticket: JiraTicket,
     workspace_root: Path,
@@ -191,6 +229,7 @@ async def run_tech_lead(
     session_id: str | None = None,
     prior_review_feedback: str = "",
     tool_call_log: ToolCallLog | None = None,
+    pre_search_hit_count: int = 0,
 ) -> tuple[TaskPlan, str]:
     """Run TechLead planning ladder; returns (TaskPlan, planning_mode)."""
     from sprint_crew.orchestrator.template_plan import build_template_task_plan_validated
@@ -214,7 +253,9 @@ async def run_tech_lead(
             prior_review_feedback=prior_review_feedback,
             tool_call_log=log,
         )
-        if should_use_vector(ticket=ticket) and not _tool_log_has_semantic_search(log):
+        if should_use_vector(ticket=ticket) and not _semantic_retrieval_satisfied(
+            log, pre_search_hits=pre_search_hit_count
+        ):
             nudge_feedback = (
                 f"{prior_review_feedback}\n\n".strip()
                 + "You must call semantic_search at least once when the repo is indexed. "
@@ -229,6 +270,15 @@ async def run_tech_lead(
             )
             if nudge_handoff:
                 handoff = nudge_handoff
+        if should_use_vector(ticket=ticket) and not _semantic_retrieval_satisfied(
+            log, pre_search_hits=pre_search_hit_count
+        ):
+            handoff = _append_programmatic_semantic_search(
+                handoff,
+                session_id=sid,
+                ticket=ticket,
+                tool_log=log,
+            )
         if handoff:
             repo_context = _repo_context_for_ticket(root, ticket, session_id=sid)
             plan = _structured_plan_from_context(

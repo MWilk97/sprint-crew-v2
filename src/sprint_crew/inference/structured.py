@@ -36,6 +36,7 @@ def structured_completion(
     temperature: float = 0,
     timeout_seconds: float = 600,
     max_retries: int = _MAX_RETRIES,
+    max_tokens: int | None = None,
 ) -> T:
     lane = lane_for_role(role)
     client = OpenAI(base_url=lane.base_url, api_key="local", timeout=timeout_seconds)
@@ -51,11 +52,11 @@ def structured_completion(
         if repair_hint:
             messages.append({"role": "user", "content": repair_hint})
 
-        resp = client.chat.completions.create(
-            model=lane.served_name,
-            messages=messages,
-            temperature=temperature,
-            response_format={
+        create_kwargs: dict[str, object] = {
+            "model": lane.served_name,
+            "messages": messages,
+            "temperature": temperature,
+            "response_format": {
                 "type": "json_schema",
                 "json_schema": {
                     "name": output_type.__name__,
@@ -63,7 +64,11 @@ def structured_completion(
                     "strict": True,
                 },
             },
-        )
+        }
+        if max_tokens is not None:
+            create_kwargs["max_tokens"] = max_tokens
+
+        resp = client.chat.completions.create(**create_kwargs)
         raw = resp.choices[0].message.content or ""
         try:
             parsed = json.loads(_extract_json_object(raw))

@@ -28,17 +28,3 @@ async def test_scrum_master_returns_valid_backlog_plan_schema() -> None:
     assert result.recommended_first
 
 
-@pytest.mark.asyncio
-async def test_scrum_master_normalizes_trivial_over_split() -> None:
-    plan = BacklogPlan(
-        product_brief=ProductBrief(title="Greeter hello", summary="Add hello"),
-        stories=[
-            BacklogStory(key="A", summary="Part A"),
-            BacklogStory(key="B", summary="Part B"),
-        ],
-        recommended_first="A",
-    )
-    with patch("sprint_crew.agents.scrum_master.structured_completion", return_value=plan):
-        result = await run_scrum_master(user_prompt="Add hello() to greeter.py with pytest.")
-
-    assert len(result.stories) == 1

@@ -9,7 +9,7 @@ from sprint_crew.agents.reviewer import _run_acceptance_tests
 from sprint_crew.agents.tester import run_tester_loop
 from sprint_crew.orchestrator.template_plan import build_template_task_plan_validated
 from sprint_crew.schemas.change import CodeChange
-from sprint_crew.schemas.ticket import JiraTicket
+from tests.helpers.agent_live_tickets import greeter_ticket
 from tests.helpers.vllm_live import docker_available, wait_lane_healthy
 
 _WRITE_TOOLS = frozenset({"write_file", "apply_patch"})
@@ -69,12 +69,9 @@ async def test_tester_writes_tests_when_ac_red(
 
     _workspace_ac_red_for_tester(tmp_workspace)
 
-    ticket = JiraTicket(
-        key="DEMO-1",
+    ticket = greeter_ticket(
         summary="Add hello() to greeter.py",
         description="Implement hello() returning 'hello' and ensure pytest passes.",
-        status="To Do",
-        issue_type="Story",
         acceptance_criteria="pytest -q tests/test_greeter.py passes",
     )
     plan = build_template_task_plan_validated(ticket)

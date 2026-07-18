@@ -10,7 +10,11 @@ from pydantic_ai.toolsets.function import FunctionToolset
 
 from sprint_crew.agents.tool_events import ToolCallLog
 from sprint_crew.config import get_settings
-from sprint_crew.orchestrator.plan_coverage import validate_plan_coverage
+from sprint_crew.orchestrator.plan_coverage import (
+    check_mutation_allowed,
+    check_patch_mutations_allowed,
+    validate_plan_coverage,
+)
 from sprint_crew.orchestrator.pytest_cmd import normalize_test_command
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
 from sprint_crew.schemas.ticket import TaskPlan
@@ -122,6 +126,18 @@ def _dispatch_result(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel)
     return result
 
 
+def _coder_scope_error_for_path(deps: WorkspaceDeps, path: str) -> str | None:
+    if deps.task_plan is None:
+        return None
+    return check_mutation_allowed(path, deps.task_plan)
+
+
+def _coder_scope_error_for_patch(deps: WorkspaceDeps, patch: str) -> str | None:
+    if deps.task_plan is None:
+        return None
+    return check_patch_mutations_allowed(patch, deps.task_plan)
+
+
 def _maybe_trigger_early_exit(ctx: RunContext[WorkspaceDeps], command: str, *, ok: bool) -> None:
     if not ok or not ctx.deps.acceptance_tests or ctx.deps.early_exit_handoff:
         return
@@ -162,11 +178,19 @@ def build_coder_toolset() -> FunctionToolset[WorkspaceDeps]:
 
     async def write_file(ctx: RunContext[WorkspaceDeps], path: str, content: str = "") -> str:
         """Write UTF-8 content to a file in the workspace."""
+        err = _coder_scope_error_for_path(ctx.deps, path)
+        if err:
+            _record_tool_call(ctx.deps, "write_file", {"path": path}, err, ok=False)
+            return err
         _invalidate_workspace_cache(ctx.deps)
         return _dispatch(ctx, "write_file", WriteFileArgs(path=path, content=content))
 
     async def apply_patch(ctx: RunContext[WorkspaceDeps], patch: str) -> str:
         """Apply a unified diff patch within the workspace."""
+        err = _coder_scope_error_for_patch(ctx.deps, patch)
+        if err:
+            _record_tool_call(ctx.deps, "apply_patch", {"patch": patch[:200]}, err, ok=False)
+            return err
         _invalidate_workspace_cache(ctx.deps)
         return _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
 
@@ -203,13 +227,6 @@ def build_coder_toolset() -> FunctionToolset[WorkspaceDeps]:
     return ts
 
 
-def _tests_only_path_or_error(path: str) -> str | None:
-    normalized = path.replace("\\", "/").lstrip("./")
-    if not (normalized == "tests" or normalized.startswith("tests/")):
-        return f"Error: Tester may only write under tests/: got {path!r}"
-    return None
-
-
 def build_tester_toolset() -> FunctionToolset[WorkspaceDeps]:
     ts: FunctionToolset[WorkspaceDeps] = FunctionToolset()
 
@@ -226,7 +243,7 @@ def build_tester_toolset() -> FunctionToolset[WorkspaceDeps]:
 
     async def write_file(ctx: RunContext[WorkspaceDeps], path: str, content: str = "") -> str:
         """Write UTF-8 content to a file under tests/."""
-        err = _tests_only_path_or_error(path)
+        err = check_mutation_allowed(path, None, tests_only=True)
         if err:
             _record_tool_call(ctx.deps, "write_file", {"path": path}, err, ok=False)
             return err
@@ -234,20 +251,10 @@ def build_tester_toolset() -> FunctionToolset[WorkspaceDeps]:
 
     async def apply_patch(ctx: RunContext[WorkspaceDeps], patch: str) -> str:
         """Apply a unified diff patch to files under tests/."""
-        for line in patch.splitlines():
-            if line.startswith("+++ ") or line.startswith("--- "):
-                candidate = line[4:].strip()
-                if candidate.startswith("b/"):
-                    candidate = candidate[2:]
-                elif candidate.startswith("a/"):
-                    candidate = candidate[2:]
-                if candidate and candidate != "/dev/null":
-                    err = _tests_only_path_or_error(candidate)
-                    if err:
-                        _record_tool_call(
-                            ctx.deps, "apply_patch", {"patch": patch[:200]}, err, ok=False
-                        )
-                        return err
+        err = check_patch_mutations_allowed(patch, None, tests_only=True)
+        if err:
+            _record_tool_call(ctx.deps, "apply_patch", {"patch": patch[:200]}, err, ok=False)
+            return err
         return _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
 
     async def grep(ctx: RunContext[WorkspaceDeps], pattern: str, path: str = ".") -> str:

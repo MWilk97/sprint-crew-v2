@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from pydantic import ValidationError
 
 from sprint_crew.agents.prompts_formatter import (
@@ -10,17 +8,16 @@ from sprint_crew.agents.prompts_formatter import (
 )
 from sprint_crew.config import Role
 from sprint_crew.inference.structured import structured_completion
+from sprint_crew.orchestrator.plan_coverage import DIFF_PATH_RE, normalize_path
 from sprint_crew.schemas.change import CodeChange, FileChange
 from sprint_crew.schemas.ticket import TaskPlan
-
-_DIFF_PATH_RE = re.compile(r"^diff --git a/(.+?) b/\S+", re.MULTILINE)
 
 
 def _paths_from_diff(git_diff: str) -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
-    for match in _DIFF_PATH_RE.finditer(git_diff):
-        path = match.group(1).lstrip("./")
+    for match in DIFF_PATH_RE.finditer(git_diff):
+        path = normalize_path(match.group(1))
         if path and path not in seen:
             seen.add(path)
             paths.append(path)
@@ -87,7 +84,7 @@ async def run_formatter(*, task_plan: TaskPlan, raw_output: str, git_diff: str =
             ),
             output_type=CodeChange,
         )
-    except (ValidationError, ValueError, Exception):
+    except Exception:
         change = _minimal_code_change_from_handoff(
             task_plan=task_plan,
             raw_output=raw_output,

@@ -125,6 +125,21 @@ Requirements: Qdrant + embed sidecar (`./scripts/lane-ctl.sh start vector`), wor
 
 Chained workspaces: story N+1 starts from the workspace after story N ships (`prepare_chained_workspace`).
 
+### Integration failure taxonomy (from-prompt JSON reports)
+
+Reports from `test_from_prompt_vector_2story_integration` include structured fields:
+
+| Field | Meaning |
+|-------|---------|
+| `pipeline_ok` | Backlog `completed`, story count, sessions aligned |
+| `post_check_ok` | Re-indexed `postcheck-{run_id}` collection surfaces `ferry` + `retry` on final workspace |
+| `failure_class` | `post_check`, `infra_timeout`, `merge_gate_coverage`, `backlog_failed`, … |
+| `partial_pytest` | When backlog fails early: pytest state on last session workspace |
+
+`scripts/agent_scorecard.py` treats integration as passed only when `pipeline_ok` and `post_check_ok` are both true. Runs with `pipeline_ok=true` and `post_check_ok=false` count as **pipeline_only_ok** (pipeline succeeded; post-check failed).
+
+Post-check uses short per-fragment queries (`POSTCHECK_QUERIES` in `tests/helpers/from_prompt_live.py`), not the full ScrumMaster prompt — avoids embedding dilution after Qdrant cleanup in `batch_cycle.py`.
+
 ## Manual test commands
 
 ```bash
@@ -153,6 +168,7 @@ VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/capability/ -m "vector_a
 
 # Vector integration nightly — 2-story from-prompt (mock ship, ~1–1.5h on GX10)
 ./scripts/lane-ctl.sh start vector
+VECTOR_LIVE=1 pytest tests/vector_live/test_postcheck_contract.py -q   # ~15s preflight
 VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/integration/ -m "vector_agent_live and agent_integration and nightly" -v
 
 # Vector trap tier — adversarial (SOFT; set VECTOR_TRAP_STRICT=1 to hard-fail)

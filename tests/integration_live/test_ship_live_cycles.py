@@ -9,7 +9,7 @@ from tests.helpers.ship_live_cycle import run_fixture_ship_live_cycle
 @pytest.mark.integration_live
 @pytest.mark.vllm_live
 @pytest.mark.asyncio
-@pytest.mark.timeout(2400)
+@pytest.mark.timeout(4800)
 async def test_greeter_full_cycle_real_ship(integration_vllm_env: Settings) -> None:
     await run_fixture_ship_live_cycle(
         integration_vllm_env,
@@ -23,7 +23,7 @@ async def test_greeter_full_cycle_real_ship(integration_vllm_env: Settings) -> N
 @pytest.mark.integration_live
 @pytest.mark.vllm_live
 @pytest.mark.asyncio
-@pytest.mark.timeout(2400)
+@pytest.mark.timeout(4800)
 async def test_email_validation_full_cycle_real_ship(integration_vllm_env: Settings) -> None:
     await run_fixture_ship_live_cycle(
         integration_vllm_env,

@@ -89,7 +89,6 @@ class Settings(BaseSettings):
         default="jinaai/jina-embeddings-v2-base-code",
         alias="EMBED_MODEL_ID",
     )
-    vector_min_files: int = Field(default=50, alias="VECTOR_MIN_FILES")
     vector_top_k: int = Field(default=8, alias="VECTOR_TOP_K")
     vector_score_threshold: float = Field(default=0.55, alias="VECTOR_SCORE_THRESHOLD")
 

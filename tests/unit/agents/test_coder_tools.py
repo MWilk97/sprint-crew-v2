@@ -1,7 +1,49 @@
 from __future__ import annotations
 
 from sprint_crew.agents.coder import _tool_log_has_repeated_call
-from sprint_crew.tools.pydantic_ai import _record_tool_call, workspace_deps
+from sprint_crew.schemas.ticket import PlanStep, TaskPlan
+from sprint_crew.tools.pydantic_ai import (
+    _coder_scope_error_for_path,
+    _record_tool_call,
+    workspace_deps,
+)
+
+
+def _queue_plan() -> TaskPlan:
+    return TaskPlan(
+        ticket_key="DEMO-1",
+        summary="queue worker",
+        steps=[PlanStep(description="wire queue", files=["src/messaging/queue_worker.py"])],
+        files_to_touch=["src/messaging/queue_worker.py"],
+        acceptance_tests=["pytest -q tests/test_ferry_queue.py"],
+        out_of_scope=["src/messaging/retry_policy.py"],
+    )
+
+
+def test_coder_write_file_rejects_out_of_scope(tmp_path) -> None:
+    deps = workspace_deps(tmp_path, mutate=True, task_plan=_queue_plan())
+    err = _coder_scope_error_for_path(deps, "src/messaging/retry_policy.py")
+    assert err is not None
+    assert "out_of_scope" in err
+
+
+def test_coder_write_file_allows_planned_path(tmp_path) -> None:
+    deps = workspace_deps(tmp_path, mutate=True, task_plan=_queue_plan())
+    assert _coder_scope_error_for_path(deps, "src/messaging/queue_worker.py") is None
+
+
+def test_coder_read_file_unrestricted_with_task_plan(tmp_path) -> None:
+    deps = workspace_deps(tmp_path, mutate=True, task_plan=_queue_plan())
+    ferry = tmp_path / "src/messaging"
+    ferry.mkdir(parents=True)
+    (ferry / "ferry.py").write_text("def send():\n    pass\n", encoding="utf-8")
+    result = deps.registry.dispatch(
+        "read_file",
+        {"path": "src/messaging/ferry.py"},
+        workspace_root=tmp_path,
+    )
+    assert result.ok
+    assert "send" in result.output
 
 
 def test_workspace_deps_write_file_via_registry(tmp_path) -> None:

@@ -117,9 +117,17 @@ run_pytest() {
   log "PASS $label"
 }
 
+check_gx10_prerequisites() {
+  python "$ROOT/scripts/check_sandbox_prerequisites.py" --gx10 --require-fixture
+}
+
 log "=== PHASE 0: prerequisites + lane cleanup ==="
-python "$ROOT/scripts/check_sandbox_prerequisites.py" --gx10 --require-fixture \
-  || fail "GX10 prerequisites"
+if ! check_gx10_prerequisites; then
+  log "GX10 prerequisites failed — running bootstrap_fixture_repos.sh"
+  chmod +x "$ROOT/scripts/bootstrap_fixture_repos.sh"
+  "$ROOT/scripts/bootstrap_fixture_repos.sh" || fail "fixture bootstrap"
+  check_gx10_prerequisites || fail "GX10 prerequisites after bootstrap"
+fi
 lane_hard_reset
 
 log "=== PHASE 1: preflight probes (work lane) ==="

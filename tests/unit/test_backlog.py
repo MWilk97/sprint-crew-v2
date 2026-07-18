@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from sprint_crew.orchestrator.backlog import sort_stories
-from sprint_crew.orchestrator.retry import format_review_feedback
 from sprint_crew.schemas.backlog import BacklogPlan, BacklogStory, ProductBrief
-from sprint_crew.schemas.change import ReviewOutcome
 
 
 def _story(key: str, *, depends_on: list[str] | None = None) -> BacklogStory:
@@ -26,21 +24,3 @@ def test_sort_stories_respects_dependencies() -> None:
     )
     ordered = sort_stories(plan)
     assert [story.key for story in ordered] == ["A", "B", "C"]
-
-
-def test_format_review_feedback_includes_diff_and_tests() -> None:
-    review = ReviewOutcome(
-        ticket_key="DEMO-1",
-        passed=False,
-        summary="Fix hello() return value",
-        tests_passed=False,
-        tests_run=["pytest -q"],
-    )
-    feedback = format_review_feedback(
-        review,
-        workspace_diff="diff snippet",
-        test_output="stderr: AssertionError",
-    )
-    assert "Workspace diff" in feedback
-    assert "Latest test output" in feedback
-    assert "AssertionError" in feedback

@@ -35,3 +35,8 @@ def test_resolve_safe_path_rejects_node_modules(tmp_path: Path) -> None:
 def test_resolve_safe_path_rejects_placeholder_angle_brackets(tmp_path: Path) -> None:
     with pytest.raises(UnsafePathError, match="placeholder"):
         resolve_safe_path("src/<name>.py", root=tmp_path)
+
+
+def test_resolve_safe_path_rejects_absolute(tmp_path: Path) -> None:
+    with pytest.raises(UnsafePathError):
+        resolve_safe_path("/etc/passwd", root=tmp_path)

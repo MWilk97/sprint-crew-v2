@@ -8,7 +8,7 @@ from pathlib import Path
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
 from sprint_crew.schemas.ticket import TaskPlan
 
-_DIFF_PATH_RE = re.compile(r"^diff --git a/(.+?) b/", re.MULTILINE)
+DIFF_PATH_RE = re.compile(r"^diff --git a/(.+?) b/", re.MULTILINE)
 _NOISE_PATH_RE = re.compile(r"__pycache__|pytest_cache|\.pyc$|\.(orig|rej)$")
 
 
@@ -45,9 +45,66 @@ def expected_paths(plan: TaskPlan) -> set[str]:
     return paths
 
 
+def paths_from_patch(patch: str) -> list[str]:
+    paths: list[str] = []
+    for line in patch.splitlines():
+        if not (line.startswith("+++ ") or line.startswith("--- ")):
+            continue
+        candidate = line[4:].strip()
+        if candidate.startswith("b/"):
+            candidate = candidate[2:]
+        elif candidate.startswith("a/"):
+            candidate = candidate[2:]
+        if candidate and candidate != "/dev/null":
+            paths.append(normalize_path(candidate))
+    return paths
+
+
+def check_mutation_allowed(
+    path: str, plan: TaskPlan | None, *, tests_only: bool = False
+) -> str | None:
+    """Return an agent-facing error when a mutation is out of plan scope."""
+    norm = normalize_path(path)
+    if tests_only:
+        if norm == "tests" or norm.startswith("tests/"):
+            return None
+        return f"Refused: Tester may only write under tests/: got {path!r}"
+
+    out_of_scope = {normalize_path(raw) for raw in plan.out_of_scope if normalize_path(raw)}
+    if norm in out_of_scope:
+        return f"Refused: {norm} is out_of_scope in TaskPlan."
+
+    allowed = frozenset(expected_paths(plan))
+    if norm.startswith("src/") and norm not in allowed:
+        return (
+            f"Refused: {norm} is not in files_to_touch/steps. "
+            "Edit only planned source files; use read_file to inspect others."
+        )
+    if norm.startswith("tests/") and norm not in allowed and not _plan_requires_new_tests(plan):
+        return (
+            f"Refused: {norm} is not listed in the TaskPlan. "
+            "Add it to files_to_touch/steps or let the Tester handle tests."
+        )
+    return None
+
+
+def check_patch_mutations_allowed(
+    patch: str, plan: TaskPlan | None, *, tests_only: bool = False
+) -> str | None:
+    seen: set[str] = set()
+    for raw_path in paths_from_patch(patch):
+        if raw_path in seen:
+            continue
+        seen.add(raw_path)
+        err = check_mutation_allowed(raw_path, plan, tests_only=tests_only)
+        if err:
+            return err
+    return None
+
+
 def _paths_from_diff(diff_text: str) -> set[str]:
     paths: set[str] = set()
-    for match in _DIFF_PATH_RE.finditer(diff_text):
+    for match in DIFF_PATH_RE.finditer(diff_text):
         paths.add(normalize_path(match.group(1)))
     return paths
 

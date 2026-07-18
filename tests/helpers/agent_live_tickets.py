@@ -3,7 +3,44 @@ from __future__ import annotations
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from sprint_crew.schemas.ticket import JiraTicket
+from sprint_crew.schemas.change import CodeChange
+from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
+
+
+def greeter_ticket(**overrides: object) -> JiraTicket:
+    defaults = {
+        "key": "DEMO-1",
+        "summary": "Add hello() to greeter module",
+        "description": "Implement hello() returning 'hello'.",
+        "status": "To Do",
+        "issue_type": "Story",
+        "acceptance_criteria": "- Unit tests pass\n- hello() returns 'hello'",
+    }
+    defaults.update(overrides)
+    return JiraTicket(**defaults)
+
+
+def greeter_task_plan(**overrides: object) -> TaskPlan:
+    defaults = {
+        "ticket_key": "DEMO-1",
+        "summary": "Add hello() to greeter.py",
+        "steps": [PlanStep(description="implement hello", files=["greeter.py"])],
+        "files_to_touch": ["greeter.py"],
+        "acceptance_tests": ["pytest -q tests/test_greeter.py"],
+    }
+    defaults.update(overrides)
+    return TaskPlan(**defaults)
+
+
+def greeter_code_change(**overrides: object) -> CodeChange:
+    defaults = {
+        "ticket_key": "DEMO-1",
+        "branch": "feature/demo-1",
+        "summary": "added hello",
+        "tests_passed": True,
+    }
+    defaults.update(overrides)
+    return CodeChange(**defaults)
 
 
 def email_validators_ticket() -> JiraTicket:

@@ -20,19 +20,6 @@ def _run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[st
     return run_acceptance_tests(workspace_root, commands)
 
 
-def _git_diff(
-    workspace_root: Path,
-    *,
-    max_chars: int = _DIFF_MAX_CHARS,
-    priority_paths: list[str] | None = None,
-) -> str:
-    return gather_workspace_diff(
-        workspace_root,
-        max_chars=max_chars,
-        priority_paths=priority_paths,
-    )
-
-
 async def run_reviewer(
     task_plan: TaskPlan,
     code_change: CodeChange,
@@ -55,8 +42,9 @@ async def run_reviewer(
     else:
         test_results, tests_passed = run_acceptance_tests(root, task_plan.acceptance_tests)
 
-    diff = workspace_diff.strip() or _git_diff(
+    diff = workspace_diff.strip() or gather_workspace_diff(
         root,
+        max_chars=_DIFF_MAX_CHARS,
         priority_paths=files_to_touch or task_plan.files_to_touch,
     )
 
@@ -74,7 +62,8 @@ async def run_reviewer(
             files_to_touch=files_to_touch or task_plan.files_to_touch,
         ),
         output_type=ReviewOutcome,
-        timeout_seconds=900,
+        timeout_seconds=600,
+        max_retries=3,
     )
 
     updates: dict[str, object] = {}

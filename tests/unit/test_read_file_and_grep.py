@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sprint_crew.tools._safety import UnsafePathError, resolve_safe_path
+from sprint_crew.tools._safety import UnsafePathError
 from sprint_crew.tools.grep import GrepArgs, GrepTool
 from sprint_crew.tools.list_directory import ListDirectoryArgs, ListDirectoryTool
 from sprint_crew.tools.read_file import ReadFileArgs, ReadFileTool
@@ -43,8 +43,3 @@ def test_list_directory_lists_entries(tmp_path: Path) -> None:
     assert result.ok is True
     assert "a.py" in result.output
     assert "pkg" in result.output
-
-
-def test_resolve_safe_path_rejects_absolute(tmp_path: Path) -> None:
-    with pytest.raises(UnsafePathError):
-        resolve_safe_path("/etc/passwd", root=tmp_path)

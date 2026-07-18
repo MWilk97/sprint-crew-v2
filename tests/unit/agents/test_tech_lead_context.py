@@ -66,7 +66,7 @@ def test_enrich_repo_context_appends_semantic_section(tmp_workspace, monkeypatch
     text = enrich_repo_context(tmp_workspace, "sess-1", "authentication middleware")
     assert "=== repo_manifest" in text
     assert "=== pre_search" in text
-    assert "=== semantic_search" in text
+    assert text.count("auth.py") == 1
     assert "auth.py" in text
 
 

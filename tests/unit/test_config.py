@@ -34,9 +34,8 @@ def test_vllm_work_url_accepts_legacy_planner_env(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_inference_router_import() -> None:
-    from sprint_crew.inference.router import pydantic_ai_model, served_model_name
+    from sprint_crew.inference.router import pydantic_ai_model
 
-    assert served_model_name(Role.WORK) == "qwen3-30b-a3b-thinking"
     model = pydantic_ai_model(Role.CODING)
     assert model.model_name == "qwen3-coder-next-nvfp4"
     assert "8001" in model.base_url

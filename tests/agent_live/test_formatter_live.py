@@ -5,7 +5,7 @@ import pytest
 from sprint_crew.agents.formatter import run_formatter
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
-from sprint_crew.schemas.ticket import PlanStep, TaskPlan
+from tests.helpers.agent_live_tickets import greeter_task_plan
 from tests.helpers.vllm_live import docker_available, wait_lane_healthy
 
 
@@ -24,13 +24,7 @@ async def test_formatter_produces_code_change(
     settings = get_settings()
     wait_lane_healthy(settings.vllm_work_url.replace("/v1", "/health"))
 
-    plan = TaskPlan(
-        ticket_key="DEMO-1",
-        summary="Add hello() to greeter.py",
-        steps=[PlanStep(description="implement hello", files=["greeter.py"])],
-        files_to_touch=["greeter.py"],
-        acceptance_tests=["pytest -q tests/test_greeter.py"],
-    )
+    plan = greeter_task_plan()
     (tmp_workspace / "greeter.py").write_text(
         'def hello():\n    return "hello"\n',
         encoding="utf-8",

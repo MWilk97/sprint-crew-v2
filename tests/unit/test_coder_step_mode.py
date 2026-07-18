@@ -79,3 +79,22 @@ async def test_coder_plan_single_loop_when_step_mode_off(
 
     loop_mock.assert_awaited_once()
     get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_coder_plan_single_loop_for_single_step_plan(tmp_path) -> None:
+    """A plan with only one step takes the fast path regardless of step-mode setting."""
+    from sprint_crew.agents import coder
+
+    single_step_plan = TaskPlan(
+        ticket_key="DEMO-1",
+        summary="single",
+        steps=[PlanStep(description="one", files=["a.py"])],
+        acceptance_tests=["pytest -q"],
+    )
+    with patch.object(
+        coder, "run_coder_loop", new=AsyncMock(return_value=("done", []))
+    ) as loop_mock:
+        await coder.run_coder_plan(single_step_plan, tmp_path)
+
+    loop_mock.assert_awaited_once()

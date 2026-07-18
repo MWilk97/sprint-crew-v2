@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 from tests.helpers.from_prompt_live import VECTOR_INTEGRATION_PROMPT, VECTOR_TRAP_PROMPT
 from tests.helpers.vector_fixtures import copy_vector_fixture, vector_fixture_root
+from tests.helpers.vector_trap import (
+    assert_notify_tests_fail_collection,
+    collect_notify_tests,
+    pytest_collect_only,
+)
 
 from sprint_crew.orchestrator.complexity import (
     PromptComplexity,
@@ -14,17 +19,6 @@ from sprint_crew.orchestrator.complexity import (
 from sprint_crew.vector.chunker import count_indexable_files
 
 _FIXTURE_ROOT = vector_fixture_root()
-_PYTEST_BIN = Path(__file__).resolve().parents[2] / ".venv" / "bin" / "pytest"
-
-
-def _collect_only(cwd: Path, target: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [str(_PYTEST_BIN), "--collect-only", "-q", target],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
 
 def test_vector_repo_fixture_has_enough_indexable_files() -> None:
@@ -65,17 +59,15 @@ def test_vector_integration_prompt_is_complex() -> None:
 
 def test_story3_clean_overlay_collects_notify_tests(tmp_path: Path) -> None:
     workspace = copy_vector_fixture(tmp_path, overlay="story3_clean", name="story3-clean-check")
-    proc = _collect_only(workspace, "tests/test_notify_routes.py")
+    proc = pytest_collect_only(workspace, "tests/test_notify_routes.py")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "test_enqueue_notification_returns_id" in proc.stdout + proc.stderr
 
 
 def test_base_fixture_notify_tests_fail_collection() -> None:
     """Documents stdlib platform shadow trap in vector_repo baseline."""
-    proc = _collect_only(_FIXTURE_ROOT, "tests/test_notify_routes.py")
-    assert proc.returncode != 0, "expected collection error on base vector_repo"
-    combined = (proc.stdout + proc.stderr).lower()
-    assert "error" in combined or "platform" in combined
+    proc = collect_notify_tests(_FIXTURE_ROOT)
+    assert_notify_tests_fail_collection(proc)
 
 
 def test_story3_clean_overlay_has_enough_indexable_files(tmp_path: Path) -> None:

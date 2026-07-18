@@ -4,8 +4,7 @@ import pytest
 
 from sprint_crew.agents.reviewer import run_reviewer
 from sprint_crew.config import get_settings
-from sprint_crew.schemas.change import CodeChange
-from sprint_crew.schemas.ticket import PlanStep, TaskPlan
+from tests.helpers.agent_live_tickets import greeter_code_change, greeter_task_plan
 from tests.helpers.vllm_live import docker_available, wait_lane_healthy
 
 
@@ -23,19 +22,8 @@ async def test_reviewer_accepts_green_fixture(
     settings = get_settings()
     wait_lane_healthy(settings.vllm_work_url.replace("/v1", "/health"))
 
-    plan = TaskPlan(
-        ticket_key="DEMO-1",
-        summary="Add hello() to greeter.py",
-        steps=[PlanStep(description="implement hello", files=["greeter.py"])],
-        files_to_touch=["greeter.py"],
-        acceptance_tests=["pytest -q tests/test_greeter.py"],
-    )
-    change = CodeChange(
-        ticket_key="DEMO-1",
-        branch="feature/demo-1",
-        summary="added hello",
-        tests_passed=True,
-    )
+    plan = greeter_task_plan()
+    change = greeter_code_change()
     (tmp_workspace / "greeter.py").write_text(
         'def hello():\n    return "hello"\n',
         encoding="utf-8",
@@ -68,19 +56,8 @@ async def test_reviewer_rejects_red_fixture(
     settings = get_settings()
     wait_lane_healthy(settings.vllm_work_url.replace("/v1", "/health"))
 
-    plan = TaskPlan(
-        ticket_key="DEMO-1",
-        summary="Add hello() to greeter.py",
-        steps=[PlanStep(description="implement hello", files=["greeter.py"])],
-        files_to_touch=["greeter.py"],
-        acceptance_tests=["pytest -q tests/test_greeter.py"],
-    )
-    change = CodeChange(
-        ticket_key="DEMO-1",
-        branch="feature/demo-1",
-        summary="incomplete greeter change",
-        tests_passed=False,
-    )
+    plan = greeter_task_plan()
+    change = greeter_code_change(tests_passed=False, summary="incomplete greeter change")
 
     result = await run_reviewer(
         plan,

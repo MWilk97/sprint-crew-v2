@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 from pydantic_ai import RunContext
 
 from sprint_crew.orchestrator.plan_coverage import (
+    check_mutation_allowed,
+    check_patch_mutations_allowed,
     collect_changed_paths,
     continuation_makes_sense,
     coverage_improved,
@@ -207,6 +209,64 @@ def test_validate_plan_coverage_out_of_scope_hit(tmp_path: Path) -> None:
     result = validate_plan_coverage(plan, repo)
     assert "secret.py" in result.out_of_scope_hits
     assert result.satisfied is False
+
+
+def test_check_mutation_allowed_queue_worker_ok() -> None:
+    plan = TaskPlan(
+        ticket_key="DEMO-1",
+        summary="queue",
+        steps=[PlanStep(description="wire queue", files=["src/messaging/queue_worker.py"])],
+        files_to_touch=["src/messaging/queue_worker.py"],
+        acceptance_tests=["pytest -q"],
+        out_of_scope=["src/messaging/retry_policy.py"],
+    )
+    assert check_mutation_allowed("src/messaging/queue_worker.py", plan) is None
+
+
+def test_check_mutation_allowed_rejects_out_of_scope() -> None:
+    plan = TaskPlan(
+        ticket_key="DEMO-1",
+        summary="queue",
+        steps=[PlanStep(description="wire queue", files=["src/messaging/queue_worker.py"])],
+        files_to_touch=["src/messaging/queue_worker.py"],
+        acceptance_tests=["pytest -q"],
+        out_of_scope=["src/messaging/retry_policy.py"],
+    )
+    err = check_mutation_allowed("src/messaging/retry_policy.py", plan)
+    assert err is not None
+    assert "out_of_scope" in err
+
+
+def test_check_mutation_allowed_rejects_unplanned_src() -> None:
+    plan = TaskPlan(
+        ticket_key="DEMO-1",
+        summary="queue",
+        steps=[PlanStep(description="wire queue", files=["src/messaging/queue_worker.py"])],
+        files_to_touch=["src/messaging/queue_worker.py"],
+        acceptance_tests=["pytest -q"],
+    )
+    err = check_mutation_allowed("src/messaging/ferry.py", plan)
+    assert err is not None
+    assert "files_to_touch" in err
+
+
+def test_check_patch_mutations_allowed_rejects_unplanned_path() -> None:
+    plan = TaskPlan(
+        ticket_key="DEMO-1",
+        summary="queue",
+        steps=[PlanStep(description="wire queue", files=["src/messaging/queue_worker.py"])],
+        files_to_touch=["src/messaging/queue_worker.py"],
+        acceptance_tests=["pytest -q"],
+    )
+    patch = """\
+--- a/src/messaging/ferry.py
++++ b/src/messaging/ferry.py
+@@ -1 +1 @@
+-x
++y
+"""
+    err = check_patch_mutations_allowed(patch, plan)
+    assert err is not None
 
 
 def test_validate_plan_coverage_legacy_empty_expected(tmp_path: Path) -> None:

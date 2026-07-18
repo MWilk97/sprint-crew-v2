@@ -13,8 +13,10 @@ from sprint_crew.orchestrator.backlog import BacklogRunStore, normalize_backlog_
 from sprint_crew.orchestrator.session import SessionStore, prepare_workspace
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SprintSession
+from tests.helpers.vector_tiers import failure_class_from_session, last_gate_result
 from sprint_crew.vector.context import enrich_repo_context_with_hits
 from sprint_crew.vector.indexer import maybe_index_workspace
+from sprint_crew.vector.search import semantic_search
 from tests.helpers.vector_ab import copy_fixture_workspace
 
 VECTOR_INTEGRATION_PROMPT = """\
@@ -28,6 +30,27 @@ Split into exactly 2 shippable stories (one PR each), dependency order:
 Each story must pass its dedicated pytest module without breaking greeter tests.
 Follow existing architecture; discover integration points from the repo, not guesses.
 """
+
+POSTCHECK_QUERIES: dict[str, str] = {
+    "ferry": "ferry dispatch outbound queue worker",
+    "retry": "exponential backoff retry adapter handoff",
+}
+
+
+def postcheck_collection_id(run_id: str) -> str:
+    """Dedicated Qdrant collection for integration post-check (avoids prod cleanup ids)."""
+    if run_id.startswith("postcheck-"):
+        return run_id
+    return f"postcheck-{run_id}"
+
+
+@dataclass
+class PostCheckResult:
+    collection_id: str
+    fragments_found: dict[str, bool]
+    hits_by_fragment: dict[str, list[tuple[str, float]]]
+    chunks: int | None = None
+
 
 VECTOR_TRAP_PROMPT = """\
 We have an internal task platform with SQLite storage and partial HTTP routes.
@@ -129,6 +152,55 @@ async def run_from_prompt_live(
     )
 
 
+def _index_prompt_for_fragments(fragments: tuple[str, ...]) -> str:
+    queries = [POSTCHECK_QUERIES[f] for f in fragments if f in POSTCHECK_QUERIES]
+    return " ".join(queries) if queries else POSTCHECK_QUERIES["ferry"]
+
+
+def verify_prompt_surfaces_path(
+    workspace: Path,
+    run_id: str,
+    *,
+    fragments: tuple[str, ...] = ("ferry",),
+    top_k: int = 5,
+) -> PostCheckResult:
+    """Re-index final workspace and search per fragment; used after backlog cleanup drops Qdrant."""
+    collection_id = postcheck_collection_id(run_id)
+    index_result = maybe_index_workspace(
+        workspace,
+        collection_id,
+        prompt=_index_prompt_for_fragments(fragments),
+    )
+    chunks = index_result.chunks if index_result is not None else None
+
+    fragments_found: dict[str, bool] = {}
+    hits_by_fragment: dict[str, list[tuple[str, float]]] = {}
+    missing: list[str] = []
+
+    for fragment in fragments:
+        query = POSTCHECK_QUERIES.get(fragment, fragment)
+        hits = semantic_search(collection_id, query, top_k=top_k)
+        hit_pairs = [(h.path, h.score) for h in hits]
+        hits_by_fragment[fragment] = hit_pairs
+        found = any(fragment in path for path, _score in hit_pairs)
+        fragments_found[fragment] = found
+        if not found:
+            missing.append(fragment)
+
+    if missing:
+        raise AssertionError(
+            f"semantic index should surface {missing!r}, "
+            f"fragments_found={fragments_found}, hits_by_fragment={hits_by_fragment}"
+        )
+
+    return PostCheckResult(
+        collection_id=collection_id,
+        fragments_found=fragments_found,
+        hits_by_fragment=hits_by_fragment,
+        chunks=chunks,
+    )
+
+
 def _write_benchmark_report(prefix: str, payload: dict, *, results_dir: Path | None = None) -> Path:
     root = get_settings().project_root
     out_dir = results_dir or (root / "benchmarks" / "results")
@@ -141,3 +213,22 @@ def _write_benchmark_report(prefix: str, payload: dict, *, results_dir: Path | N
 
 def write_from_prompt_integration_report(payload: dict, *, results_dir: Path | None = None) -> Path:
     return _write_benchmark_report("from_prompt_integration", payload, results_dir=results_dir)
+
+
+def backlog_failure_message(run: BacklogRun, sessions: list[SprintSession]) -> str:
+    parts = [
+        f"status={run.status.value}",
+        f"error={run.error!r}",
+        f"failed_ticket_key={getattr(run, 'failed_ticket_key', None)}",
+        f"completed={getattr(run, 'completed_session_ids', [])}",
+        f"sessions={len(sessions)}",
+    ]
+    for session in sessions:
+        gate = last_gate_result(session)
+        fc = failure_class_from_session(session)
+        parts.append(
+            f"{session.ticket_key}: session_status={session.status.value} "
+            f"gate={gate.get('accepted')} block_reason={gate.get('block_reason')} "
+            f"coverage_satisfied={gate.get('coverage_satisfied')} failure_class={fc}"
+        )
+    return "; ".join(parts)

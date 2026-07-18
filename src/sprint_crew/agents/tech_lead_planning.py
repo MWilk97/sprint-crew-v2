@@ -30,6 +30,7 @@ async def run_tech_lead_validated(
     session_id: str | None = None,
     prior_review_feedback: str = "",
     baseline_paths: frozenset[str] | None = None,
+    pre_search_hit_count: int = 0,
 ) -> tuple[TaskPlan, str, ToolCallLog]:
     """Run TechLead and validate acceptance_tests, structure, and path existence."""
     settings = get_settings()
@@ -47,6 +48,7 @@ async def run_tech_lead_validated(
             session_id=session_id,
             prior_review_feedback=feedback,
             tool_call_log=tool_log,
+            pre_search_hit_count=pre_search_hit_count,
         )
         if baseline is None:
             from sprint_crew.orchestrator.plan_validation import snapshot_baseline_paths

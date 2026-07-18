@@ -8,6 +8,7 @@ import pytest
 from sprint_crew.config import get_settings
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome
 from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
+from tests.helpers.agent_live_tickets import greeter_code_change, greeter_task_plan, greeter_ticket
 from tests.helpers.vector_ab import copy_fixture_workspace
 
 
@@ -31,34 +32,22 @@ def disable_vector_index_for_unit_tests(
 
 @pytest.fixture
 def sample_ticket() -> JiraTicket:
-    return JiraTicket(
-        key="DEMO-1",
-        summary="Add hello() to greeter module",
-        description="Implement hello() returning 'hello'.",
-        status="To Do",
-        issue_type="Story",
-        acceptance_criteria="- Unit tests pass\n- hello() returns 'hello'",
-    )
+    return greeter_ticket()
 
 
 @pytest.fixture
 def task_plan() -> TaskPlan:
-    return TaskPlan(
-        ticket_key="DEMO-1",
+    return greeter_task_plan(
         summary="Add hello()",
         steps=[PlanStep(description="edit greeter", files=["greeter.py"])],
+        files_to_touch=["greeter.py"],
         acceptance_tests=["pytest -q"],
     )
 
 
 @pytest.fixture
 def code_change() -> CodeChange:
-    return CodeChange(
-        ticket_key="DEMO-1",
-        branch="feature/demo-1",
-        summary="added hello",
-        tests_passed=True,
-    )
+    return greeter_code_change()
 
 
 @pytest.fixture
@@ -114,3 +103,11 @@ def skip_unless_vector_live() -> None:
 @pytest.fixture
 def skip_unless_preflight_live() -> None:
     skip_unless_env("PREFLIGHT_LIVE", "preflight tests require live vLLM lanes")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Long GPU integration tests need more than the global 1200s default."""
+    for item in items:
+        if item.get_closest_marker("agent_integration") or item.get_closest_marker("nightly"):
+            if not item.get_closest_marker("timeout"):
+                item.add_marker(pytest.mark.timeout(10800))

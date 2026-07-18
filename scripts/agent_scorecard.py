@@ -55,11 +55,19 @@ def _passed(report: dict) -> bool:
         # SOFT tier: report-only unless failure is absent
         return failure in (None, "")
 
+    if tier == "integration":
+        if "pipeline_ok" in report:
+            if failure:
+                return False
+            pipeline_ok = bool(report.get("pipeline_ok"))
+            post_check_ok = report.get("post_check_ok")
+            return pipeline_ok and post_check_ok is not False
+        if failure:
+            return False
+        return report.get("backlog_status") == "completed"
+
     if failure:
         return False
-
-    if tier == "integration":
-        return report.get("backlog_status") == "completed"
 
     if tier == "capability":
         return report.get("session_status") == "awaiting_human"
@@ -76,6 +84,12 @@ def _passed(report: dict) -> bool:
     if report.get("collect_exit_code") not in (None, 0):
         return False
     return failure in (None, "")
+
+
+def _pipeline_only_ok(report: dict) -> bool:
+    if _tier_of(report) != "integration":
+        return False
+    return bool(report.get("pipeline_ok")) and report.get("post_check_ok") is False
 
 
 def _median(values: list[float]) -> float | None:
@@ -106,14 +120,16 @@ def build_scorecard(reports: list[dict]) -> dict:
             if isinstance(r.get("total_tool_calls"), (int, float))
         ]
         failure_classes = Counter(
-            str(r.get("failure_class") or r.get("failure") or "none")[:80]
+            str(r.get("failure_class") or "unknown")
             for r in items
             if not _passed(r)
         )
+        pipeline_only = sum(1 for r in items if _pipeline_only_ok(r))
         tiers[tier] = {
             "count": len(items),
             "passed": passed,
             "pass_rate": round(passed / len(items), 3) if items else 0.0,
+            "pipeline_only_ok": pipeline_only if tier == "integration" else None,
             "median_duration_s": _median(durations),
             "median_semantic_tool_calls": _median(semantic),
             "median_total_tool_calls": _median(tools),
@@ -152,6 +168,8 @@ def main() -> int:
             )
             if stats["failure_histogram"]:
                 print(f"    failures: {stats['failure_histogram']}")
+            if stats.get("pipeline_only_ok"):
+                print(f"    pipeline_only_ok (post-check fail): {stats['pipeline_only_ok']}")
 
     return 0
 
