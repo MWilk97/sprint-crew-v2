@@ -1,0 +1,432 @@
+openapi: 3.1.0
+info:
+  title: Sprint Crew console API (Proposed)
+  version: 0.0.1-proposed
+  description: |
+    Status: Proposed — not implemented. Contract for the future interactive
+    console (docs/contracts/chat-console-api.md, ADR 0011/0012). No
+    /v1/console/* route is live; the current API is /sprint/* and /health.
+    Auth: TBD. Streaming (SSE/WebSocket): non-goal; clients poll GET session.
+paths:
+  /v1/console/sessions:
+    post:
+      operationId: createConsoleSession
+      summary: Create a console session (status starts at collecting)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateConsoleSessionRequest"
+            example:
+              mode: code
+              initial_prompt: Add a /metrics endpoint with request counters
+              repo_url: https://github.com/example/service
+              target_language: null
+      responses:
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+              example:
+                session_id: cs-7f3a
+                mode: code
+                status: collecting
+                confirmed: false
+                repo_url: https://github.com/example/service
+                target_language: null
+                messages:
+                  - role: user
+                    content: Add a /metrics endpoint with request counters
+                    timestamp: "2026-07-16T09:00:00+00:00"
+                clarify_questions: []
+                clarify_answers: []
+                sprint_ref: null
+                plan_result: null
+                error: null
+                created_at: "2026-07-16T09:00:00+00:00"
+                updated_at: "2026-07-16T09:00:00+00:00"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /v1/console/sessions/{id}:
+    get:
+      operationId: getConsoleSession
+      summary: Fetch session state (polling endpoint)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Current session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/console/sessions/{id}/messages:
+    post:
+      operationId: postConsoleMessage
+      summary: Append a user chat message
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostMessageRequest"
+            example:
+              content: It should also cover the backlog endpoints
+      responses:
+        "200":
+          description: Updated session (may transition to clarifying)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/StateConflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /v1/console/sessions/{id}/clarify:
+    post:
+      operationId: submitClarifyAnswers
+      summary: Answer pending clarify questions
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClarifyRequest"
+            example:
+              answers:
+                - question_id: q-scope
+                  selected_suggestion_id: s-api
+                  custom_text: null
+                - question_id: q-tests
+                  selected_suggestion_id: null
+                  custom_text: unit tests only, no live tiers
+      responses:
+        "200":
+          description: Updated session (ready once all questions answered)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "400":
+          description: Unknown question_id, both/neither answer fields, or custom answer where allow_custom is false
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/StateConflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+  /v1/console/sessions/{id}/confirm:
+    post:
+      operationId: confirmConsoleSession
+      summary: Explicitly confirm the clarified request (requires status=ready)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session with confirmed=true (status stays ready)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/StateConflict"
+  /v1/console/sessions/{id}/start:
+    post:
+      operationId: startConsoleRun
+      summary: Start the run (requires status=ready and confirmed=true)
+      description: |
+        mode=code: drives today's from-prompt pipeline; session gains sprint_ref
+        (backlog_run_id for GET /sprint/backlog/{run_id}; its session_ids feed
+        GET /sprint/session/{session_id}). mode=plan: analysis only; completes
+        with plan_result and never ships.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session now running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+              example:
+                session_id: cs-7f3a
+                mode: code
+                status: running
+                confirmed: true
+                repo_url: https://github.com/example/service
+                target_language: null
+                messages: []
+                clarify_questions: []
+                clarify_answers:
+                  - question_id: q-scope
+                    selected_suggestion_id: s-api
+                    custom_text: null
+                sprint_ref:
+                  backlog_run_id: run-91c2
+                  sprint_session_ids: []
+                plan_result: null
+                error: null
+                created_at: "2026-07-16T09:00:00+00:00"
+                updated_at: "2026-07-16T09:05:00+00:00"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not ready or not confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+              example:
+                detail: session must be confirmed before start
+  /v1/console/sessions/{id}/cancel:
+    post:
+      operationId: cancelConsoleSession
+      summary: Cancel from any non-terminal state
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/StateConflict"
+components:
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  responses:
+    NotFound:
+      description: Unknown session
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ConsoleError"
+          example:
+            detail: Console session not found
+    StateConflict:
+      description: Action not allowed in the session's current status
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ConsoleError"
+    ValidationError:
+      description: Request body failed schema validation (extra=forbid)
+      content:
+        application/json:
+          schema:
+            type: object
+  schemas:
+    ConsoleMode:
+      type: string
+      enum: [plan, code]
+    ConsoleSessionStatus:
+      type: string
+      enum: [collecting, clarifying, ready, running, completed, failed, cancelled]
+    ConsoleMessage:
+      type: object
+      additionalProperties: false
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          minLength: 1
+        timestamp:
+          type: string
+    ClarifySuggestion:
+      type: object
+      additionalProperties: false
+      required: [suggestion_id, label]
+      properties:
+        suggestion_id:
+          type: string
+          minLength: 1
+        label:
+          type: string
+          minLength: 1
+        detail:
+          type: [string, "null"]
+    ClarifyQuestion:
+      type: object
+      additionalProperties: false
+      required: [question_id, text, suggestions]
+      properties:
+        question_id:
+          type: string
+          minLength: 1
+        text:
+          type: string
+          minLength: 1
+        suggestions:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ClarifySuggestion"
+        allow_custom:
+          type: boolean
+          default: true
+    ClarifyAnswer:
+      type: object
+      additionalProperties: false
+      description: Exactly one of selected_suggestion_id or custom_text is non-null.
+      required: [question_id]
+      properties:
+        question_id:
+          type: string
+          minLength: 1
+        selected_suggestion_id:
+          type: [string, "null"]
+        custom_text:
+          type: [string, "null"]
+    SprintRunRef:
+      type: object
+      additionalProperties: false
+      description: |
+        Progress mapping to the live /sprint/* API: backlog_run_id feeds
+        GET /sprint/backlog/{run_id}; sprint_session_ids mirror that run's
+        session_ids for GET /sprint/session/{session_id}.
+      properties:
+        backlog_run_id:
+          type: [string, "null"]
+        sprint_session_ids:
+          type: array
+          items:
+            type: string
+    PlanPreviewStory:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        rationale:
+          type: [string, "null"]
+    ConsolePlanResult:
+      type: object
+      additionalProperties: false
+      description: Plan-mode outcome — analysis only, never shipped (ADR 0012).
+      required: [summary]
+      properties:
+        summary:
+          type: string
+          minLength: 1
+        stories:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanPreviewStory"
+    CreateConsoleSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          $ref: "#/components/schemas/ConsoleMode"
+        initial_prompt:
+          type: [string, "null"]
+        repo_url:
+          type: [string, "null"]
+        target_language:
+          type: [string, "null"]
+          description: Phase 3 language-specialized lanes; pass null for now.
+    PostMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+    ClarifyRequest:
+      type: object
+      additionalProperties: false
+      required: [answers]
+      properties:
+        answers:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ClarifyAnswer"
+    ConsoleSession:
+      type: object
+      additionalProperties: false
+      required: [session_id, mode, status]
+      properties:
+        session_id:
+          type: string
+          minLength: 1
+        mode:
+          $ref: "#/components/schemas/ConsoleMode"
+        status:
+          $ref: "#/components/schemas/ConsoleSessionStatus"
+        confirmed:
+          type: boolean
+          default: false
+        repo_url:
+          type: [string, "null"]
+        target_language:
+          type: [string, "null"]
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConsoleMessage"
+        clarify_questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClarifyQuestion"
+        clarify_answers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClarifyAnswer"
+        sprint_ref:
+          oneOf:
+            - $ref: "#/components/schemas/SprintRunRef"
+            - type: "null"
+        plan_result:
+          oneOf:
+            - $ref: "#/components/schemas/ConsolePlanResult"
+            - type: "null"
+        error:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    ConsoleError:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          minLength: 1

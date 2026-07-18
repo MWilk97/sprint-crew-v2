@@ -108,6 +108,7 @@ benchmarks/          scenario matrix + scorecard tooling
 ## Documentation
 
 - [Docs index](docs/README.md)
+- [Product vision (Target) and roadmap](docs/vision/product-vision.md) — future interactive console; see [docs/roadmap.md](docs/roadmap.md)
 - [Agent orchestration](docs/agent-orchestration.md)
 - [Integration testing](docs/integration-testing.md)
 - [Model evaluation](docs/model-evaluation.md)
