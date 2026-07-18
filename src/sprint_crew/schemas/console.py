@@ -1,9 +1,9 @@
-"""Schema stubs for the Proposed /v1/console/* API (roadmap Phase 1).
+"""Schemas for the /v1/console/* API (roadmap Phase 1).
 
 Contracts are documented in docs/contracts/chat-console-api.md and
-docs/contracts/chat-console.openapi.yaml (ADR 0011 / ADR 0012). These models
-are intentionally NOT wired into any FastAPI route — the console API is
-Proposed, not implemented.
+docs/contracts/chat-console.openapi.yaml (ADR 0011 / ADR 0012). Served by the
+live routes in sprint_crew.api.console (MVP in-memory store + deterministic
+clarify stub).
 """
 
 from __future__ import annotations

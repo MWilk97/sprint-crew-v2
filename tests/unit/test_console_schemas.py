@@ -1,4 +1,4 @@
-"""Console schema stubs (roadmap Phase 1): validation only — no routes exist."""
+"""Console schemas (roadmap Phase 1): validation + route registration smoke."""
 
 from __future__ import annotations
 
@@ -68,8 +68,17 @@ def test_unknown_fields_rejected() -> None:
         )
 
 
-def test_console_routes_not_registered() -> None:
+def test_console_routes_registered() -> None:
     from sprint_crew.api.app import app
 
-    paths = [getattr(route, "path", "") for route in app.routes]
-    assert not any(path.startswith("/v1/console") for path in paths)
+    paths = set(app.openapi()["paths"])
+    expected = {
+        "/v1/console/sessions",
+        "/v1/console/sessions/{id}",
+        "/v1/console/sessions/{id}/messages",
+        "/v1/console/sessions/{id}/clarify",
+        "/v1/console/sessions/{id}/confirm",
+        "/v1/console/sessions/{id}/start",
+        "/v1/console/sessions/{id}/cancel",
+    }
+    assert expected <= paths

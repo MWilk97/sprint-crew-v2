@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from sprint_crew.agents.scrum_master import run_scrum_master
+from sprint_crew.api.console import router as console_router
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_health, stop_lane
 from sprint_crew.integrations.jira_client import get_jira_client
@@ -23,6 +26,21 @@ from sprint_crew.orchestrator.session import (
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus, SprintSession
 
 app = FastAPI(title="Sprint Crew API", version="0.1.0")
+
+# CORS for the browser console (separate repo/origin, ADR 0011). Origins are
+# comma-separated in CONSOLE_CORS_ORIGINS; default "*" suits local dev. Auth is
+# TBD, so no credentials are allowed (incompatible with a "*" wildcard anyway).
+_cors_origins = [
+    o.strip() for o in os.environ.get("CONSOLE_CORS_ORIGINS", "*").split(",") if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(console_router)
 
 
 class FromPromptRequest(BaseModel):
@@ -48,27 +66,27 @@ async def health() -> dict[str, object]:
     return {"status": "ok", "lanes": await asyncio.to_thread(lane_health)}
 
 
-@app.post("/sprint/from-prompt", response_model=BacklogRunCreatedResponse)
-async def sprint_from_prompt(
-    body: FromPromptRequest, background_tasks: BackgroundTasks
-) -> BacklogRunCreatedResponse:
+async def start_from_prompt_run(
+    prompt: str, repo_url: str | None, background_tasks: BackgroundTasks
+) -> str:
+    """From-prompt orchestration shared by /sprint/from-prompt and console code-mode start."""
     settings = get_settings()
     run_id = str(uuid4())
     workspace_id = f"backlog-{run_id}"
-    workspace = prepare_workspace(workspace_id, repo_url=body.repo_url)
+    workspace = prepare_workspace(workspace_id, repo_url=repo_url)
     await asyncio.to_thread(
         maybe_index_workspace,
         workspace,
         workspace_id,
-        prompt=body.prompt,
+        prompt=prompt,
     )
-    repo_context = enrich_repo_context(workspace, workspace_id, body.prompt)
+    repo_context = enrich_repo_context(workspace, workspace_id, prompt)
 
     work_lane = Role.WORK
     await ensure_lane(work_lane)
     try:
         plan = await run_scrum_master(
-            user_prompt=body.prompt,
+            user_prompt=prompt,
             repo_context=repo_context,
             role=work_lane,
         )
@@ -79,8 +97,8 @@ async def sprint_from_prompt(
         BacklogRun(
             run_id=run_id,
             status=BacklogRunStatus.PENDING,
-            user_prompt=body.prompt,
-            repo_url=body.repo_url,
+            user_prompt=prompt,
+            repo_url=repo_url,
         )
     )
 
@@ -88,10 +106,18 @@ async def sprint_from_prompt(
         run_backlog_batched,
         run_id=run_id,
         plan=plan,
-        user_prompt=body.prompt,
-        repo_url=body.repo_url,
+        user_prompt=prompt,
+        repo_url=repo_url,
         use_real_ship=not settings.use_mock_integrations,
     )
+    return run_id
+
+
+@app.post("/sprint/from-prompt", response_model=BacklogRunCreatedResponse)
+async def sprint_from_prompt(
+    body: FromPromptRequest, background_tasks: BackgroundTasks
+) -> BacklogRunCreatedResponse:
+    run_id = await start_from_prompt_run(body.prompt, body.repo_url, background_tasks)
     return BacklogRunCreatedResponse(run_id=run_id)
 
 
