@@ -64,7 +64,7 @@ python scripts/check_sandbox_prerequisites.py --gx10 --require-fixture
 | `USE_MOCK_INTEGRATIONS=false` | Required for live clients |
 | `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | Atlassian Cloud auth |
 | `JIRA_PROJECT_KEY` | Sandbox project (e.g. `SCRUM`) |
-| `JIRA_REVIEW_TRANSITION` | Workflow transition after ship (e.g. `W trakcie weryfikacji`) |
+| `JIRA_REVIEW_TRANSITION` | Workflow transition after ship (e.g. `In Review`) |
 | `GITHUB_TOKEN` | PAT with `repo` scope |
 | `GITHUB_REPO` | Sandbox repo `owner/name` |
 | `GITHUB_FIXTURE_REPO_GREETER` | Fixture repo: `main` = [`fixtures/repo`](../fixtures/repo) |

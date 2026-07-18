@@ -4,6 +4,15 @@ version = "0.1.0"
 description = "Sprint crew agents: Pydantic AI + LangGraph + vLLM"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Maciej Wilk", email = "maciej.wilk97@gmail.com" }]
+keywords = ["llm", "agents", "langgraph", "pydantic-ai", "vllm", "sprint-automation"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Framework :: Pydantic :: 2",
+    "Topic :: Software Development :: Code Generators",
+]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -58,6 +67,8 @@ timeout = 1200
 line-length = 100
 target-version = "py312"
 src = ["src", "tests", "scripts"]
+# Sample/target repositories the agent operates on — not linted as our source.
+extend-exclude = ["fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

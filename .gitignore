@@ -19,6 +19,7 @@ benchmarks/results/*.json
 *.sqlite
 *.db
 .cursor/
+.claude/
 .DS_Store
 Thumbs.db
 .coverage
