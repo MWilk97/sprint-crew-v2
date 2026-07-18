@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Maciej Wilk", email = "maciej.wilk97@gmail.com" }]
 keywords = ["llm", "agents", "langgraph", "pydantic-ai", "vllm", "sprint-automation"]
+urls = { Repository = "https://github.com/MWilk97/sprint-crew-v2" }
 classifiers = [
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
