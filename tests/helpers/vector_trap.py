@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_PYTEST_BIN = _PROJECT_ROOT / ".venv" / "bin" / "pytest"
 
 
 def pytest_collect_only(cwd: Path, target: str) -> subprocess.CompletedProcess[str]:
-    """Run pytest --collect-only against a target under cwd."""
+    """Run pytest --collect-only against a target under cwd (uses the current interpreter)."""
     return subprocess.run(
-        [str(_PYTEST_BIN), "--collect-only", "-q", target],
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", target],
         cwd=cwd,
         capture_output=True,
         text=True,

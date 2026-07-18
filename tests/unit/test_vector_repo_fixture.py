@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -100,9 +101,8 @@ def test_ferry_queue_module_fails_on_unimplemented_fixture(tmp_path: Path) -> No
 
     dest = tmp_path / "vector_repo"
     shutil.copytree(_FIXTURE_ROOT, dest, dirs_exist_ok=True)
-    pytest_bin = Path(__file__).resolve().parents[2] / ".venv" / "bin" / "pytest"
     proc = subprocess.run(
-        [str(pytest_bin), "-q", "tests/test_ferry_queue.py"],
+        [sys.executable, "-m", "pytest", "-q", "tests/test_ferry_queue.py"],
         cwd=dest,
         capture_output=True,
         text=True,
