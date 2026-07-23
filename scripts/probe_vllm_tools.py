@@ -10,7 +10,7 @@ import sys
 from openai import OpenAI
 
 LANES = {
-    "coder": ("http://127.0.0.1:8001/v1", "qwen3-coder-next-nvfp4"),
+    "coder": ("http://127.0.0.1:8001/v1", "laguna-s-2.1-nvfp4"),
     "work": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking"),
 }
 

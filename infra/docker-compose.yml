@@ -29,6 +29,8 @@ x-vllm-common: &vllm-common
 services:
   vllm-coder:
     <<: *vllm-common
+    # Laguna needs vLLM >= 0.25 with poolside_v1 (NGC 26.04 is v0.19 — Work stays on NGC)
+    image: timothystewart6/vllm-gb10:v0.25.1-gb10.2
     profiles: [coder, all]
     # NVFP4 MoE on GB10 (sm121): force Marlin FP4/FP8 GEMM (FlashInfer FP4 MoE off)
     environment:
@@ -37,18 +39,19 @@ services:
       VLLM_TEST_FORCE_FP8_MARLIN: "1"
       VLLM_USE_FLASHINFER_MOE_FP4: "0"
       VLLM_MARLIN_USE_ATOMIC_ADD: "1"
+      CUTE_DSL_ARCH: sm_121a
     ports:
       - "8001:8000"
     command:
       - vllm
       - serve
-      - gdubicki/Qwen3-Coder-Next-NVFP4-GB10
+      - poolside/Laguna-S-2.1-NVFP4
       - --host
       - "0.0.0.0"
       - --port
       - "8000"
       - --served-model-name
-      - qwen3-coder-next-nvfp4
+      - laguna-s-2.1-nvfp4
       - --trust-remote-code
       - --tensor-parallel-size
       - "1"
@@ -67,7 +70,10 @@ services:
       - fp8
       - --enable-auto-tool-choice
       - --tool-call-parser
-      - qwen3_coder
+      - poolside_v1
+      # Thinking OFF (no --reasoning-parser) — see AGENTS.md 8.4.
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 30s

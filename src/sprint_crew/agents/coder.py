@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
+from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
@@ -150,10 +150,10 @@ async def run_coder_loop(
         if deps.early_exit_handoff:
             return deps.early_exit_handoff, tool_log
         return "Continuation turn budget exhausted; handing off partial work.", tool_log
-    except ModelHTTPError as exc:
-        # A mid-loop model error (e.g. HTTP 400 context-window overflow on the
-        # coder lane) must not crash the whole cycle: partial edits are already
-        # on disk, so hand off and let review/retry gate the result.
+    except ModelAPIError as exc:
+        # A mid-loop model error (context-window overflow, request timeout) must
+        # not crash the whole cycle: partial edits are already on disk, so hand
+        # off and let review/retry gate the result.
         if deps.early_exit_handoff:
             return deps.early_exit_handoff, tool_log
         return (

@@ -1,5 +1,12 @@
 # Role → lane mapping. Served names must match OpenAI API `model` field.
 #
+# Rollback coder — Qwen3-Coder-Next NVFP4 (previous production):
+#   model_id: gdubicki/Qwen3-Coder-Next-NVFP4-GB10
+#   served_name: qwen3-coder-next-nvfp4
+#   max_model_len: 131072
+#   gpu_memory_utilization: 0.85
+#   tool_call_parser: qwen3_coder
+#
 # Rollback coder baseline (FP8, small context):
 #   model_id: Qwen/Qwen3-Coder-Next-FP8
 #   served_name: qwen3-coder-next
@@ -8,7 +15,7 @@
 #
 # gpu_memory_utilization assumes ONE lane loaded at a time (sequential pipeline).
 # GX10/GB10 unified memory — per-lane tuning (128 GB unified), NVFP4 weights:
-#   coding  MoE 80B NVFP4 (~46 GB): ~0.85 leaves ample KV for 131k+ context
+#   coding  Laguna S 2.1 NVFP4 (~72 GB): ~0.85 leaves KV headroom @ 131k
 #   work    MoE 30B/3B NVFP4 (~18 GB): ~0.50 covers weights + KV @ 131k
 # NVFP4 MoE on GB10 (sm121) needs Marlin GEMM env flags — see infra/docker-compose.yml.
 # See https://github.com/shamily/vllm-gb10 — do not use 0.95+ like on discrete VRAM GPUs.
@@ -16,13 +23,13 @@ lanes:
   coding:
     port: 8001
     base_url: http://127.0.0.1:8001/v1
-    # Qwen3-Coder-Next — 80B MoE / ~3B active, NVFP4 (GB10) for 262k-capable context
-    # Ungated byte-identical mirror of gated saricles/Qwen3-Coder-Next-NVFP4-GB10
-    model_id: gdubicki/Qwen3-Coder-Next-NVFP4-GB10
-    served_name: qwen3-coder-next-nvfp4
+    # Laguna S 2.1 — 118B MoE / ~8.5B active, NVFP4 (GB10); thinking max via enable_thinking
+    # Requires vLLM >= 0.25.1 with poolside_v1 (coder image override in docker-compose)
+    model_id: poolside/Laguna-S-2.1-NVFP4
+    served_name: laguna-s-2.1-nvfp4
     max_model_len: 131072
     gpu_memory_utilization: 0.85
-    tool_call_parser: qwen3_coder
+    tool_call_parser: poolside_v1
     enable_auto_tool_choice: true
     is_moe: true
     request_limit_multiplier: 1.25
