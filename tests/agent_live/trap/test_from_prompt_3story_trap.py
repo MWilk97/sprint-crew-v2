@@ -18,9 +18,6 @@ from tests.helpers.vllm_live import docker_available
 
 
 @pytest.mark.agent_live
-@pytest.mark.vllm_live
-@pytest.mark.vector_agent_live
-@pytest.mark.agent_trap
 @pytest.mark.asyncio
 @pytest.mark.timeout(10800)
 async def test_from_prompt_vector_3story_trap(

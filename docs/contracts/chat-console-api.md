@@ -1,6 +1,6 @@
 # Chat console API contract
 
-**Status: Implemented (MVP store + stub clarify).** The `/v1/console/*` routes are live in [console.py](../../src/sprint_crew/api/console.py), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). The separate UI repo ([ADR 0011](../adr/0011-web-console-off-gx.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
+**Status: Implemented (MVP store + stub clarify).** The `/v1/console/*` routes are live in [console.py](../../src/sprint_crew/api/console.py), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
 
 Implementation status / MVP limitations:
 
@@ -169,7 +169,7 @@ Cancel from any non-terminal state. Empty body. Response `200` with `status: "ca
 
 ## Mapping to the current /sprint/* API
 
-| Console (Proposed) | Current endpoint (live today) | Notes |
+| Console (MVP) | Related `/sprint/*` endpoint | Notes |
 |--------------------|-------------------------------|-------|
 | `POST /v1/console/sessions`, `/messages`, `/clarify`, `/confirm` | — | New pre-run steps; no current equivalent |
 | `POST /v1/console/sessions/{id}/start` (mode=code) | `POST /sprint/from-prompt` | Runs only after clarify + confirm; existing endpoint unchanged |

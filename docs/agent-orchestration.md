@@ -1,6 +1,7 @@
 # Agent orchestration — multi-file sprint cycles
 
-How sprint-crew-v2 plans, implements, and validates multi-file changes.
+How sprint-crew-v2 plans, implements, and validates multi-file changes. This file owns the
+**mechanics**; the invariants they enforce are in [`AGENTS.md`](../AGENTS.md).
 
 ## Pipeline flow
 
@@ -195,7 +196,7 @@ Shipping is **never** done inside LLM tools:
 | [`orchestrator/ship_cycle.py`](../src/sprint_crew/orchestrator/ship_cycle.py) | LangGraph `orchestratorShip` node — local git commit stub or delegates to real ship |
 | [`orchestrator/sprint.py`](../src/sprint_crew/orchestrator/sprint.py) | Real push, GitHub PR, Jira transitions when `use_real_ship=true` |
 
-Real vector-tier verification is done manually with the vector stack up:
+Real vector verification is done manually with the vector stack up:
 
 ```bash
 ./scripts/lane-ctl.sh start vector

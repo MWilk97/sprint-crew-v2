@@ -70,15 +70,6 @@ scenarios:
       pytest_green: true
       max_attempts: 4
 
-  - id: from_prompt_2story
-    tier: integration
-    fixture: fixtures/vector_repo
-    prompt: integration
-    gates:
-      story_count: 2
-      merge_gate: true
-      semantic_retrieval_min: 1
-
   - id: vector_story3_stdlib_trap
     tier: trap
     fixture: fixtures/vector_repo

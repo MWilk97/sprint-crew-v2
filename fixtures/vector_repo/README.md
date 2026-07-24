@@ -43,11 +43,11 @@ src/
   platform/config.py     # shared settings
 ```
 
-## Test tiers
+## Variants
 
-| Variant | Stories | Tier |
-|---------|---------|------|
-| Base `fixtures/vector_repo` (no `tests/conftest.py`) | 1–2 capability; story 3 **trap** (stdlib `platform` shadow) | `agent_capability` / `agent_trap` |
-| Overlay `overlays/story3_clean/` (`tests/conftest.py` fixes import shadow) | Story 3 REST without trap | `agent_capability` story 3 clean |
+| Variant | Stories | Used by |
+|---------|---------|---------|
+| Base `fixtures/vector_repo` (no `tests/conftest.py`) | 1–2 straightforward; story 3 **trap** (stdlib `platform` shadow) | the `agent_live` trap gate |
+| Overlay `overlays/story3_clean/` (`tests/conftest.py` fixes import shadow) | Story 3 REST without trap | manual runs / benchmarks |
 
 Apply overlay at test time via `copy_vector_fixture(..., overlay="story3_clean")` in [`tests/helpers/vector_fixtures.py`](../../tests/helpers/vector_fixtures.py).

@@ -38,14 +38,3 @@ def awaiting_session(session_id: str, ticket: JiraTicket, workspace: Path) -> Sp
         workspace_root=str(workspace),
         selected_ticket=ticket,
     )
-
-
-def fake_prepare_workspace(tmp_path: Path):
-    """Return prepare_workspace side_effect that creates one dir per session_id."""
-
-    def _prepare(session_id: str, *, repo_url: str | None = None) -> Path:
-        ws = tmp_path / session_id
-        ws.mkdir(exist_ok=True)
-        return ws
-
-    return _prepare

@@ -2,6 +2,11 @@
 
 Policies for autonomous sprint agents on GX10 (Pydantic AI + LangGraph + vLLM).
 
+This file owns the **invariants**: safety rules, GX10 memory policy, the merge-gate
+predicate, retry limits, model↔lane assignment, and test commands. Pipeline *mechanics*
+live in [`docs/agent-orchestration.md`](docs/agent-orchestration.md); the ownership map is
+in [`docs/README.md`](docs/README.md).
+
 ## 1. Commit and workspace discipline
 
 - One ticket → one branch → one PR. No drive-by refactors.
@@ -12,7 +17,6 @@ Policies for autonomous sprint agents on GX10 (Pydantic AI + LangGraph + vLLM).
 
 - All file paths go through `resolve_safe_path` — no `..`, no `.git`, no `.venv`.
 - `run_command` uses an allowlist only; `npm` always gets `--ignore-scripts`.
-- Side effects (Jira, GitHub, git push) run in the **orchestrator**, never inside LLM tools.
 
 ## 3. Path and command safety
 
@@ -33,6 +37,7 @@ Policies for autonomous sprint agents on GX10 (Pydantic AI + LangGraph + vLLM).
 - `smoke_cycle` / API: do **not** call `lane-ctl start all` before a cycle (optional `--preflight-lanes` starts coder only).
 - Target `gpu_memory_utilization` per lane (one lane loaded at a time) — **per-lane tuning** on GX10/GB10 ([`infra/models.yaml`](infra/models.yaml)), NVFP4 weights: coding **0.85** (~46 GB weights, 131k+ context), work **0.50** (~20 GB weights, 131k context). NVFP4 MoE on GB10 (sm121) needs Marlin GEMM env flags (`VLLM_NVFP4_GEMM_BACKEND=marlin`) — see [`infra/docker-compose.yml`](infra/docker-compose.yml); 0.90+ still risks wedging the host ([vLLM #46307](https://github.com/vllm-project/vllm/issues/46307), [vllm-gb10](https://github.com/shamily/vllm-gb10)). Do not sum utilization across containers.
 - Backlog runs: `run_backlog_batched` creates Jira tickets and sequentially calls `create_and_run_cycle` (same LangGraph as from-ticket). `backlog_run_id` skips stopping the Work lane after review within a cycle; `_stop_all_lanes` runs in `finally`.
+- **Model serving split:** vLLM container flags and HF model IDs live in [`infra/docker-compose.yml`](infra/docker-compose.yml); [`infra/models.yaml`](infra/models.yaml) is the Python client config (ports, `served_name`). Its `tool_call_parser` fields are documentation-only — the parser vLLM actually uses comes from the compose flags.
 - After a failed lane test, always `./scripts/lane-ctl.sh stop all` before retrying.
 - If a lane is slow despite health=OK, check whether another vLLM container is still running (`docker ps`, `nvidia-smi`).
 
@@ -44,29 +49,25 @@ Git clone, branch, commit, push, Jira transitions, and GitHub PR creation are **
 
 ### 5.2 Entry points
 
-- `POST /sprint/from-prompt` — user prompt → BacklogPlan → Jira tickets → sequential sprint cycles (`BacklogRun`).
-- `GET /sprint/backlog/{run_id}` — backlog orchestration status and session IDs.
-- `POST /sprint/from-ticket` — existing Jira ticket → sprint cycle (skips ScrumMaster).
-- `GET /sprint/session/{id}` — status and event timeline.
-- `POST /sprint/session/{id}/approve` — record human approval (no auto-merge).
-- Manual merge gate: human approves PR after `awaiting_human`.
+Endpoint table: [README](README.md#api). Policy: `/sprint/from-prompt` runs ScrumMaster
+first, `/sprint/from-ticket` skips it, and `approve` only **records** human approval — no
+endpoint merges to main.
 
 ### 5.3 Acceptance criteria vs test commands
 
 - Jira `acceptance_criteria` is **human prose** (bullets, behavior) — never executed as shell.
 - TechLead interprets AC + repo context → `TaskPlan.acceptance_tests` (allowlisted commands only).
-- Every sprint cycle runs **TechLead → Coder+Formatter → Tester (conditional) → Review**. All tickets use **TechLead** via `techLeadPlan`; planning mode is selected internally (`template`, `static`, `tool_loop`, `template_fallback`).
-- Ticket complexity uses `assess_ticket_complexity` (COMPLEX → tool_loop; TRIVIAL/SIMPLE → template fast-path then static). `assess_prompt_complexity` gates backlog normalization (story merge/cap) and vector indexing — not lane routing.
-- Reviewer receives original ticket AC for behavioral/scope review; `tests_passed` from orchestrator exit codes.
+- `assess_prompt_complexity` gates backlog normalization (story merge/cap) and vector indexing — **not** lane routing.
+- Reviewer receives original ticket AC for behavioral/scope review; `tests_passed` comes from orchestrator exit codes, never from the model's claim.
 
 ### 5.4 Multi-file orchestration
 
-See [`docs/agent-orchestration.md`](docs/agent-orchestration.md) for the full flow.
+Mechanics — planning-mode ladder, coverage gate, Tester skip rules, env vars — are in
+[`docs/agent-orchestration.md`](docs/agent-orchestration.md). The rules that bind you:
 
-- **TechLead:** always via `techLeadPlan`; ladder is template fast-path (TRIVIAL/SIMPLE) → static LLM snapshot → tool_loop (COMPLEX only) → template_fallback after validation retries.
-- **Coder:** step orchestration when `CODER_STEP_MODE=true` and multiple plan steps; fresh session per step.
-- **Plan coverage:** Python compares `files_to_touch` / `step.files` to git diff + untracked paths; gates early exit and triggers continuation rounds (`MAX_COVERAGE_ROUNDS`).
-- **Tester:** skipped when orchestrator-verified acceptance tests are green, or when the plan assigns test files to Coder; invoked when AC is red and source changed without `tests/` diff (unless plan requires tests in Coder steps).
+- **Never bypass the plan.** All tickets go through `techLeadPlan`; do not add a graph branch that skips it.
+- **Plan coverage is deterministic and blocking** — Python compares plan paths to the git diff. You cannot argue a file into coverage; touch it or replan.
+- **Tester writes only under `tests/`.** Paths outside it soft-fail back to the model.
 - **write_file:** capped at `MAX_WRITE_FILE_BYTES`; use `apply_patch` for large edits.
 
 ## 6. Pydantic strict schemas
@@ -82,14 +83,14 @@ other real-cycle verification is manual, on demand.
 | Command | What it tests |
 |---------|---------------|
 | `pytest tests/unit -q` | Logic, tools, routing, agent unit tests (`tests/unit/agents/`) |
-| `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/test_from_prompt_3story_trap.py -v` | 3-story from-prompt e2e vs adversarial stdlib-shadow fixture (GX10 lanes + `./scripts/lane-ctl.sh start vector`) |
+| `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/test_from_prompt_3story_trap.py -v` | 3-story from-prompt e2e vs adversarial stdlib-shadow fixture (GX10 lanes; the test starts the vector stack itself) |
 | `scripts/smoke_cycle.py` | Manual full LangGraph cycle on `fixtures/repo` (real lanes) |
 | `scripts/verify_integrations.py` | Jira/GitHub credential smoke |
 | `scripts/benchmark_pipeline.py` | Scenario matrix → JSON metrics |
 
 Manual vLLM probes: `scripts/probe_vllm_tools.py` (tool_calls on work/coder lanes),
 `scripts/probe_json.py` (structured JSON), `scripts/probe_vector_index.py` (Qdrant round-trip).
-Probe D: `scripts/smoke_cycle.py --coder-only`.
+Probe A–D legend for the model matrix: [docs/model-evaluation.md](docs/model-evaluation.md).
 
 ## 8. Agent roles
 
@@ -138,7 +139,7 @@ Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 
 ### 8.5 Vector index (Qdrant)
 
 - **Default on** (`VECTOR_INDEX_ENABLED=true`); **TRIVIAL** tickets skip indexing and retrieval.
+- Retrieval never overrides ground truth: merge gate and plan coverage stay deterministic (git diff + `snapshot_baseline_paths`).
 - Dev stack: `./scripts/lane-ctl.sh start vector` (Qdrant :6333 + embed sidecar :8080).
-- Round-trip check: `python scripts/probe_vector_index.py` (Qdrant + embed sidecar).
-- Full vector on/off cycles + adversarial fixtures run through `python scripts/benchmark_pipeline.py` (scenarios in `benchmarks/scenarios.yaml`).
-- Scorecard: `python scripts/agent_scorecard.py` (aggregates `benchmarks/results/*.json`)
+
+Indexing triggers, agent-by-agent integration, and tuning env vars: [`docs/agent-orchestration.md`](docs/agent-orchestration.md#vector-index-qdrant--embeddings).

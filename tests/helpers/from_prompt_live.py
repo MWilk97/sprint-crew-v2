@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -202,20 +200,6 @@ def verify_prompt_surfaces_path(
         hits_by_fragment=hits_by_fragment,
         chunks=chunks,
     )
-
-
-def _write_benchmark_report(prefix: str, payload: dict, *, results_dir: Path | None = None) -> Path:
-    root = get_settings().project_root
-    out_dir = results_dir or (root / "benchmarks" / "results")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = out_dir / f"{prefix}_{stamp}.json"
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return path
-
-
-def write_from_prompt_integration_report(payload: dict, *, results_dir: Path | None = None) -> Path:
-    return _write_benchmark_report("from_prompt_integration", payload, results_dir=results_dir)
 
 
 def backlog_failure_message(run: BacklogRun, sessions: list[SprintSession]) -> str:

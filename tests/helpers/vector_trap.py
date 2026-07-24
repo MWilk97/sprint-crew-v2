@@ -25,14 +25,3 @@ def assert_notify_tests_fail_collection(proc: subprocess.CompletedProcess[str]) 
     assert proc.returncode != 0, "expected collection error on base vector_repo"
     combined = (proc.stdout + proc.stderr).lower()
     assert "error" in combined or "platform" in combined
-
-
-def stdlib_shadow_trap_report(proc: subprocess.CompletedProcess[str]) -> dict:
-    return {
-        "tier": "trap",
-        "trap": "stdlib_shadow_vector_repo",
-        "collect_exit_code": proc.returncode,
-        "stdout": proc.stdout[-2000:],
-        "stderr": proc.stderr[-2000:],
-        "expected": "collection_error",
-    }

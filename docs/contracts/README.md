@@ -1,6 +1,6 @@
 # API contracts
 
-Contracts consumed by the future web console repo ([ADR 0011](../adr/0011-web-console-off-gx.md)): the UI talks only to this FastAPI backend, never to the vLLM lanes, so these files are the entire integration surface.
+Contracts for a future web console in a separate off-GX repo (see [archive/HISTORY.md](../archive/HISTORY.md)): the UI talks only to this FastAPI backend, never to the vLLM lanes, so these files are the entire integration surface.
 
 ## Current (live today)
 
@@ -18,4 +18,4 @@ Pydantic models matching these contracts live in `src/sprint_crew/schemas/consol
 1. Generate or hand-write a client from [chat-console.openapi.yaml](chat-console.openapi.yaml); mock the server from its examples.
 2. Follow the session flow from [chat-console-api.md](chat-console-api.md): create → messages → clarify → confirm → start; poll `GET /v1/console/sessions/{id}` (no SSE/WebSocket in this version).
 3. After a Code-mode start, poll progress through the **existing** endpoints via `sprint_ref`: `GET /sprint/backlog/{run_id}`, then `GET /sprint/session/{session_id}` per ticket.
-4. `/v1/console/*` is live as an MVP (roadmap Phase 1.5): sessions are in-memory (lost on restart) and clarify questions are a deterministic stub; the current `/sprint/*` endpoints are stable and unchanged.
+4. `/v1/console/*` is live as an MVP: sessions are in-memory (lost on restart) and clarify questions are a deterministic stub; the current `/sprint/*` endpoints are stable and unchanged.

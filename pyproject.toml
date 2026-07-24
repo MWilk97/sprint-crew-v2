@@ -50,11 +50,11 @@ packages = ["src/sprint_crew"]
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = ["--strict-markers"]
 markers = [
-    "agent_live: e2e tests on fixture repo against real vLLM lanes (opt-in VLLM_LIVE=1)",
-    "vllm_live: real vLLM lanes (VLLM_LIVE=1)",
-    "vector_agent_live: full sprint cycle with vector index on (VECTOR_AGENT_LIVE=1 + VLLM_LIVE=1)",
-    "agent_trap: adversarial fixtures — stdlib shadow, decoys",
+    # Name is load-bearing: tests/conftest.py::disable_vector_index_for_unit_tests keys on it
+    # to decide whether to force VECTOR_INDEX_ENABLED=false. Rename both together.
+    "agent_live: opt-in e2e gate against real vLLM lanes (VECTOR_AGENT_LIVE=1 VLLM_LIVE=1)",
 ]
 timeout = 1200
 
