@@ -41,4 +41,4 @@ Human approval is required before merging to main (see [adr/0010-manual-merge-ga
 
 ## Test strategy
 
-Fast unit tests mock all LLM calls. Opt-in live tiers exercise real Jira/GitHub (sandbox) and real vLLM (GPU). See [integration-testing.md](integration-testing.md).
+Fast unit tests mock all LLM calls (`pytest tests/unit -q`). Real end-to-end verification against Jira/GitHub and vLLM is done on demand via `scripts/smoke_cycle.py` and `scripts/benchmark_pipeline.py`.

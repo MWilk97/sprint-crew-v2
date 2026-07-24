@@ -33,8 +33,6 @@ Review runs on the **work lane** (:8002) — there is no separate judge lane.
 | Layer | Marker / command | Requires |
 |-------|------------------|----------|
 | Unit | `pytest tests/unit -q` | venv only |
-| Sandbox API + Jira/GitHub | `INTEGRATION_LIVE=1 pytest tests/integration_live -m "integration_live and not vllm_live" -q` | `.env` credentials |
-| Live vLLM ship cycle | `./scripts/run_gx10_test_suite.sh` | Docker + GPU lanes |
 | Integration smoke (no vLLM) | `scripts/verify_integrations.py` | real Jira/GitHub |
 | Manual reference baseline | `scripts/smoke_cycle.py` | Docker + GPU |
 | Model comparison | `scripts/benchmark_pipeline.py` | Docker + GPU |
@@ -43,5 +41,5 @@ Review runs on the **work lane** (:8002) — there is no separate judge lane.
 
 1. Edit `infra/models.yaml` (lane `model_id` / `served_name`).
 2. Restart affected lane: `scripts/lane-ctl.sh stop work && scripts/lane-ctl.sh start work`.
-3. Run `./scripts/run_gx10_test_suite.sh` (preflight + greeter ship_live).
+3. Run `scripts/smoke_cycle.py` for a real end-to-end cycle on the new model.
 4. Or run all scenarios: `python scripts/benchmark_pipeline.py` → JSON under `benchmarks/results/`.

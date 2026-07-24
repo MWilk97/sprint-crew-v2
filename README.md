@@ -58,12 +58,6 @@ cp .env.example .env          # set HF_TOKEN for model download
 ./scripts/smoke_cycle.py --coder-only   # Coder + Formatter only
 ```
 
-GX10 test suite (preflight + real ship cycle):
-
-```bash
-./scripts/run_gx10_test_suite.sh
-```
-
 ## API
 
 | Endpoint | Description |
@@ -82,27 +76,26 @@ Start the API:
 uvicorn sprint_crew.api.app:app --host 0.0.0.0 --port 8080
 ```
 
-## Testing tiers
+## Testing
 
-| Tier | Command | Requires |
-|------|---------|----------|
-| 1 — Unit / CI | `pytest tests/unit -q` | venv only |
-| 2 — Sandbox | `INTEGRATION_LIVE=1 pytest tests/integration_live -m "integration_live and not vllm_live" -q` | Jira + GitHub tokens |
-| 3 — GPU | `./scripts/run_gx10_test_suite.sh` | Docker + vLLM lanes |
-| Preflight | `PREFLIGHT_LIVE=1 pytest -m preflight` | Work + Coder lanes |
-| Vector | `VECTOR_LIVE=1 pytest -m vector_live -q` | Qdrant + embed sidecar |
+| Suite | Command | Requires |
+|-------|---------|----------|
+| Unit / CI | `pytest tests/unit -q` | venv only |
+| E2E trap (opt-in) | `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/test_from_prompt_3story_trap.py -v` | GX10 GPU lanes + vector stack |
 
-See [docs/integration-testing.md](docs/integration-testing.md) for sandbox setup and cleanup.
+The single retained live gate is a 3-story from-prompt run against an adversarial
+(stdlib-shadow) fixture — the full pipeline end to end. Other GPU/sandbox tiers were
+retired; `scripts/smoke_cycle.py` and `scripts/benchmark_pipeline.py` cover ad-hoc cycles.
 
 ## Project layout
 
 ```
 src/sprint_crew/     Agents, LangGraph pipeline, orchestrator, API, vector index
-tests/               unit, integration_live, agent_live, vector_live, preflight
-scripts/             lane-ctl, probes, smoke, GX10 suite, benchmarks
+tests/               unit tests, one e2e trap gate, shared helpers
+scripts/             lane-ctl, probes, smoke, benchmarks
 infra/               docker-compose, models.yaml, embed-sidecar
 fixtures/            greeter smoke repo, vector e2e repos, trap fixtures
-docs/                orchestration, testing, evaluation runbooks
+docs/                orchestration, evaluation runbooks
 benchmarks/          scenario matrix + scorecard tooling
 ```
 
@@ -111,7 +104,6 @@ benchmarks/          scenario matrix + scorecard tooling
 - [Docs index](docs/README.md)
 - [Product vision (Target) and roadmap](docs/vision/product-vision.md) — future interactive console; see [docs/roadmap.md](docs/roadmap.md)
 - [Agent orchestration](docs/agent-orchestration.md)
-- [Integration testing](docs/integration-testing.md)
 - [Model evaluation](docs/model-evaluation.md)
 - [Agent policies (AGENTS.md)](AGENTS.md)
 - [Portfolio blurb for CV/LinkedIn](docs/portfolio-blurb.md)

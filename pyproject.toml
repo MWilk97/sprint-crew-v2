@@ -51,16 +51,10 @@ pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    "preflight: live vLLM model probes (opt-in PREFLIGHT_LIVE=1)",
-    "agent_live: single-agent tests on fixture repo (opt-in VLLM_LIVE=1 for GPU agents)",
-    "integration_live: real Jira/GitHub (INTEGRATION_LIVE=1)",
+    "agent_live: e2e tests on fixture repo against real vLLM lanes (opt-in VLLM_LIVE=1)",
     "vllm_live: real vLLM lanes (VLLM_LIVE=1)",
-    "vector_live: live Qdrant + embed sidecar (VECTOR_LIVE=1)",
-    "vector_agent_live: full sprint cycle vector on/off A/B and from-prompt e2e (VECTOR_AGENT_LIVE=1 + VLLM_LIVE=1)",
-    "agent_capability: single-story sprint cycle benchmarks on vector fixtures",
-    "agent_integration: multi-story chained/from-prompt integration (vector)",
-    "agent_trap: adversarial fixtures — stdlib shadow, decoys (opt-in SOFT)",
-    "nightly: long-running GPU e2e gates (opt-in)",
+    "vector_agent_live: full sprint cycle with vector index on (VECTOR_AGENT_LIVE=1 + VLLM_LIVE=1)",
+    "agent_trap: adversarial fixtures — stdlib shadow, decoys",
 ]
 timeout = 1200
 
