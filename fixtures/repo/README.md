@@ -20,4 +20,4 @@ pytest -q                          # local sanity check
 ./scripts/smoke_cycle.py --coder-only
 ```
 
-Cloned to a dedicated GitHub sandbox for `ship_live` integration tests — see [docs/integration-testing.md](../../docs/integration-testing.md).
+Cloned to a dedicated GitHub sandbox for manual `scripts/smoke_cycle.py` ship runs.

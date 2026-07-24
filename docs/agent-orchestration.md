@@ -195,25 +195,13 @@ Shipping is **never** done inside LLM tools:
 | [`orchestrator/ship_cycle.py`](../src/sprint_crew/orchestrator/ship_cycle.py) | LangGraph `orchestratorShip` node — local git commit stub or delegates to real ship |
 | [`orchestrator/sprint.py`](../src/sprint_crew/orchestrator/sprint.py) | Real push, GitHub PR, Jira transitions when `use_real_ship=true` |
 
-Live tests (vector tiers — see [integration-testing.md](integration-testing.md#vector-test-pyramid)):
-
-| Tier | Marker | Role |
-|------|--------|------|
-| Stack | `vector_live` | Qdrant + embed only |
-| Capability | `agent_capability` | Per-story cycles (SOFT in full suite) |
-| Integration | `agent_integration` + `nightly` | 2-story from-prompt (HARD gate) |
-| Trap | `agent_trap` | Adversarial / stdlib shadow (SOFT) |
-| A/B | `vector_agent_live` | Greeter fixture vector on/off |
+Real vector-tier verification is done manually with the vector stack up:
 
 ```bash
-VECTOR_LIVE=1 VECTOR_INDEX_ENABLED=1 pytest -m vector_live -q
 ./scripts/lane-ctl.sh start vector
-VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/integration/ \
-  -m "vector_agent_live and agent_integration and nightly" -v
-VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/test_sprint_vector_ab.py -m vector_agent_live -v
-python scripts/agent_scorecard.py
+python scripts/probe_vector_index.py     # Qdrant + embed sidecar round-trip
+python scripts/benchmark_pipeline.py     # scenario matrix → benchmarks/results/*.json
+python scripts/agent_scorecard.py        # aggregate results
 ```
 
-The A/B test runs two full sprint cycles (vector off vs on) and writes `benchmarks/results/vector_ab_*.json`.
-
-See also [`AGENTS.md`](../AGENTS.md) and [`docs/integration-testing.md`](integration-testing.md).
+See also [`AGENTS.md`](../AGENTS.md).

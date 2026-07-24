@@ -74,30 +74,22 @@ See [`docs/agent-orchestration.md`](docs/agent-orchestration.md) for the full fl
 - All agent contracts use Pydantic v2 with `extra="forbid"`.
 - No markdown fences in structured outputs — parse fail triggers Formatter (Coder) or retry.
 
-## 7. Testing layers
+## 7. Testing
 
-| Marker | Purpose |
-|--------|---------|
-| `preflight` | Live vLLM probes A–C via pytest; probe D = `scripts/smoke_cycle.py --coder-only` (manual) |
-| `agent_live` | Single-agent tests on fixture repo (`VLLM_LIVE=1` for GPU agents) |
-| `integration_live` | Real sandbox Jira + GitHub (`INTEGRATION_LIVE=1`) |
-| `vllm_live` | Real vLLM lanes (`VLLM_LIVE=1`) |
+Automated coverage is the mock-only unit suite plus one opt-in end-to-end gate;
+other real-cycle verification is manual, on demand.
 
 | Command | What it tests |
 |---------|---------------|
 | `pytest tests/unit -q` | Logic, tools, routing, agent unit tests (`tests/unit/agents/`) |
-| `INTEGRATION_LIVE=1 pytest tests/integration_live -m "integration_live and not vllm_live" -q` | Sandbox Jira/GitHub + API routes (no GPU) |
-| `./scripts/run_gx10_test_suite.sh` | Work lane preflight → coder block (preflight + greeter ship_live); lane timeout **1200 s** |
-| `./scripts/run_gx10_test_suite.sh --with-agent-live` | Adds diagnostic tech_lead static plan test (non-greeter; ship_live covers full pipeline) |
-| `./scripts/run_gx10_test_suite.sh --with-email` | Same coder block + email ship_live |
-| `PREFLIGHT_LIVE=1 pytest -m preflight` | vLLM probe scripts via pytest (work lane tools + JSON + backlog) |
-| `scripts/smoke_cycle.py` | Manual reference baseline |
+| `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/test_from_prompt_3story_trap.py -v` | 3-story from-prompt e2e vs adversarial stdlib-shadow fixture (GX10 lanes + `./scripts/lane-ctl.sh start vector`) |
+| `scripts/smoke_cycle.py` | Manual full LangGraph cycle on `fixtures/repo` (real lanes) |
 | `scripts/verify_integrations.py` | Jira/GitHub credential smoke |
 | `scripts/benchmark_pipeline.py` | Scenario matrix → JSON metrics |
 
-See [`docs/integration-testing.md`](docs/integration-testing.md) for sandbox setup and cleanup.
-
-Preflight scripts: `scripts/probe_vllm_tools.py` (A+B+C on work/coder lanes), `scripts/probe_json.py` (structured JSON on work lane), `test_probe_backlog_plan` (BacklogPlan JSON). Probe D: `scripts/smoke_cycle.py --coder-only`.
+Manual vLLM probes: `scripts/probe_vllm_tools.py` (tool_calls on work/coder lanes),
+`scripts/probe_json.py` (structured JSON), `scripts/probe_vector_index.py` (Qdrant round-trip).
+Probe D: `scripts/smoke_cycle.py --coder-only`.
 
 ## 8. Agent roles
 
@@ -147,9 +139,6 @@ Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 
 
 - **Default on** (`VECTOR_INDEX_ENABLED=true`); **TRIVIAL** tickets skip indexing and retrieval.
 - Dev stack: `./scripts/lane-ctl.sh start vector` (Qdrant :6333 + embed sidecar :8080).
-- A/B comparison: `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest -m vector_agent_live` (full cycle, not in default gx10 suite).
-- **Capability** (per-story, SOFT in full suite): `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/capability/ -m "vector_agent_live and agent_capability" -v`
-- **Integration nightly** (2-story from-prompt, HARD gate): `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/integration/ -m "vector_agent_live and agent_integration and nightly" -v` (~1–1.5h; requires `./scripts/lane-ctl.sh start vector`)
-- **Trap** (adversarial, STRICT by default — a trap the agent falls for fails the test): `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m "vector_agent_live and agent_trap" -v` (set `VECTOR_TRAP_SOFT=1` for report-only benchmark runs)
+- Round-trip check: `python scripts/probe_vector_index.py` (Qdrant + embed sidecar).
+- Full vector on/off cycles + adversarial fixtures run through `python scripts/benchmark_pipeline.py` (scenarios in `benchmarks/scenarios.yaml`).
 - Scorecard: `python scripts/agent_scorecard.py` (aggregates `benchmarks/results/*.json`)
-- Vector stack without vLLM: `VECTOR_LIVE=1 pytest -m vector_live -q`

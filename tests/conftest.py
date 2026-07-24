@@ -21,10 +21,8 @@ def skip_unless_env(var: str, reason: str) -> None:
 def disable_vector_index_for_unit_tests(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Keep unit/CI tests free of Qdrant unless explicitly marked vector_live / vector_agent_live."""
-    if request.node.get_closest_marker("vector_live") or request.node.get_closest_marker(
-        "vector_agent_live"
-    ):
+    """Keep unit/CI tests free of Qdrant unless explicitly marked vector_agent_live."""
+    if request.node.get_closest_marker("vector_agent_live"):
         return
     monkeypatch.setenv("VECTOR_INDEX_ENABLED", "false")
     get_settings.cache_clear()
@@ -88,26 +86,3 @@ def tmp_workspace(fixture_repo_path: Path, tmp_path: Path) -> Path:
 @pytest.fixture
 def skip_unless_vllm_live() -> None:
     skip_unless_env("VLLM_LIVE", "vLLM live tests require GPU lanes")
-
-
-@pytest.fixture
-def skip_unless_integration_live() -> None:
-    skip_unless_env("INTEGRATION_LIVE", "integration live tests require sandbox credentials")
-
-
-@pytest.fixture
-def skip_unless_vector_live() -> None:
-    skip_unless_env("VECTOR_LIVE", "vector live tests require Qdrant stack")
-
-
-@pytest.fixture
-def skip_unless_preflight_live() -> None:
-    skip_unless_env("PREFLIGHT_LIVE", "preflight tests require live vLLM lanes")
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Long GPU integration tests need more than the global 1200s default."""
-    for item in items:
-        if item.get_closest_marker("agent_integration") or item.get_closest_marker("nightly"):
-            if not item.get_closest_marker("timeout"):
-                item.add_marker(pytest.mark.timeout(10800))
