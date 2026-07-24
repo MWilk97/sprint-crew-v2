@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -73,18 +74,25 @@ def _git_diff_nonempty(repo: Path) -> bool:
     return bool(proc.stdout.strip())
 
 
-def _pytest_passes(repo: Path) -> bool:
-    proc = subprocess.run(
-        ["pytest", "-q"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    print(proc.stdout)
-    if proc.stderr:
-        print(proc.stderr, file=sys.stderr)
-    return proc.returncode == 0
+def _pytest_passes(repo: Path, commands: list[str] | None = None) -> bool:
+    """Run plan acceptance_tests when provided; default greeter path (shared fixture also has email stubs)."""
+    cmds = commands or ["pytest -q tests/test_greeter.py"]
+    ok = True
+    for cmd in cmds:
+        argv = shlex.split(cmd)
+        proc = subprocess.run(
+            argv,
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        print(proc.stdout)
+        if proc.stderr:
+            print(proc.stderr, file=sys.stderr)
+        if proc.returncode != 0:
+            ok = False
+    return ok
 
 
 def _prepare_repo(source: Path, dest: Path) -> None:
@@ -121,7 +129,7 @@ async def run_coder_only(repo: Path, plan_path: Path) -> int:
         print("FAIL: git diff is empty")
         await stop_lane(Role.WORK)
         return 1
-    if not _pytest_passes(repo):
+    if not _pytest_passes(repo, plan.acceptance_tests):
         print("FAIL: pytest did not pass")
         await stop_lane(Role.WORK)
         return 1

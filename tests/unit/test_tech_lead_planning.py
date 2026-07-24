@@ -7,6 +7,7 @@ from tests.helpers.agent_live_tickets import complex_api_ticket, greeter_ticket
 
 from sprint_crew.agents import tech_lead as tech_lead_module
 from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated
+from sprint_crew.config import get_settings
 from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
 
 
@@ -41,7 +42,9 @@ async def test_run_tech_lead_validated_retries_once_on_invalid_commands(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_run_tech_lead_validated_template_fallback_after_two_failures(tmp_path) -> None:
+async def test_run_tech_lead_validated_template_fallback_after_two_failures(
+    tmp_path, monkeypatch
+) -> None:
     ticket = JiraTicket(
         key="DEMO-1",
         summary="Add hello() to greeter.py",
@@ -58,8 +61,15 @@ async def test_run_tech_lead_validated_template_fallback_after_two_failures(tmp_
     )
     run_mock = AsyncMock(return_value=(bad_plan, "static"))
 
-    with patch("sprint_crew.agents.tech_lead_planning.run_tech_lead", new=run_mock):
-        plan, mode, _tool_log = await run_tech_lead_validated(ticket, tmp_path)
+    # Pin plan retries so the attempt count (max(3, MAX_PLAN_RETRIES + 2)) is
+    # independent of the production default.
+    monkeypatch.setenv("MAX_PLAN_RETRIES", "1")
+    get_settings.cache_clear()
+    try:
+        with patch("sprint_crew.agents.tech_lead_planning.run_tech_lead", new=run_mock):
+            plan, mode, _tool_log = await run_tech_lead_validated(ticket, tmp_path)
+    finally:
+        get_settings.cache_clear()
 
     assert mode == "template_fallback"
     assert plan.ticket_key == "DEMO-1"

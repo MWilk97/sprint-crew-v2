@@ -16,6 +16,6 @@
     }
   ],
   "files_to_touch": ["greeter.py"],
-  "acceptance_tests": ["pytest -q"],
+  "acceptance_tests": ["pytest -q tests/test_greeter.py"],
   "out_of_scope": ["README.md"]
 }

@@ -24,6 +24,7 @@ from sprint_crew.graph.state import (
     ticket_from_state,
     workspace_from_state,
 )
+from sprint_crew.inference.router import coder_thinking_active
 from sprint_crew.orchestrator.acceptance_failure import (
     AcceptanceFailureAnalysis,
     analyze_acceptance_output,
@@ -266,6 +267,7 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
     plan = task_plan_from_state(state)
     workspace = workspace_from_state(state)
     baseline = frozenset(state.get("baseline_paths") or ())
+    attempt = state.get("attempt", 0)
 
     await ensure_lane(Role.CODING)
     (
@@ -280,6 +282,7 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
         prior_review_feedback=state.get("prior_review_feedback", ""),
         baseline_paths=baseline or None,
         deadline_epoch=_deadline_epoch(state),
+        attempt=attempt,
     )
     workspace_diff = gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
 
@@ -298,7 +301,12 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
             "coder",
             "code_change",
             f"CodeChange for {change.ticket_key}: tests_passed={change.tests_passed}",
-            **_timed_detail(started, lane="coding+work"),
+            **_timed_detail(
+                started,
+                lane="coding+work",
+                attempt=attempt,
+                thinking=coder_thinking_active(attempt),
+            ),
         ),
     ]
     if not coverage.satisfied:

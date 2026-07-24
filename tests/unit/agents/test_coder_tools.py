@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic_ai.exceptions import ModelAPIError
+
 from sprint_crew.agents.coder import _tool_log_has_repeated_call
 from sprint_crew.schemas.ticket import PlanStep, TaskPlan
 from sprint_crew.tools.pydantic_ai import (
@@ -87,3 +90,47 @@ def test_tool_log_has_repeated_call_ignores_mixed_tools() -> None:
         {"tool": "grep", "args": {"pattern": "hello"}},
     ]
     assert _tool_log_has_repeated_call(log, threshold=3) is False
+
+
+class _RaisingRun:
+    result = None
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise ModelAPIError(model_name="laguna-s-2.1-nvfp4", message="Request timed out.")
+
+
+class _RaisingIterCM:
+    async def __aenter__(self):
+        return _RaisingRun()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _RaisingAgent:
+    def iter(self, *args, **kwargs):
+        return _RaisingIterCM()
+
+
+class _StubDeps:
+    early_exit_handoff = ""
+
+
+@pytest.mark.asyncio
+async def test_run_coder_loop_hands_off_on_model_api_error(tmp_path, monkeypatch) -> None:
+    from sprint_crew.agents import coder
+
+    monkeypatch.setattr(
+        coder,
+        "_build_coder_agent",
+        lambda *a, **k: (_RaisingAgent(), _StubDeps()),
+    )
+
+    raw_output, tool_log = await coder.run_coder_loop(_queue_plan(), tmp_path)
+
+    assert isinstance(raw_output, str)
+    assert "handing off partial work" in raw_output
+    assert tool_log == []

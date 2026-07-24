@@ -13,6 +13,7 @@ benchmarks/results/*.json
 *.log
 # Local GPU / suite run artifacts
 .*.out
+.*.path
 .full-suite-all-*.log
 .all-layers-*.log
 .trap-*.out

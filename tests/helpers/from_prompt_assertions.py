@@ -251,6 +251,7 @@ def evaluate_from_prompt_run(
     post_check_fragments: tuple[str, ...] = ("ferry", "retry"),
     include_trap_failure_class: bool = False,
     assert_plan_fragments: bool = True,
+    post_check_fatal: bool = True,
 ) -> IntegrationCheckResult:
     run = result.run
     plan = result.plan
@@ -289,8 +290,15 @@ def evaluate_from_prompt_run(
             post_check_ok = True
             post_check_dict = _post_check_to_dict(post_result)
         except AssertionError as exc:
-            failure = str(exc)
             post_check_ok = False
+            if post_check_fatal:
+                failure = str(exc)
+            else:
+                # Trap tier: the semantic-index post-check is a brittle filename-substring
+                # retrieval heuristic, not part of the trap outcome. Record it in the report
+                # but do NOT set `failure` — otherwise it short-circuits the real per-session
+                # cycle assertions (assert_cycle_passed) that actually detect the trap.
+                post_check_dict = {"error": str(exc)}
 
     for session in sessions:
         if session.task_plan is not None:

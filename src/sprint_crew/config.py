@@ -45,8 +45,26 @@ class Settings(BaseSettings):
     )
 
     max_review_retries: int = Field(default=4, alias="MAX_REVIEW_RETRIES")
-    max_plan_retries: int = Field(default=1, alias="MAX_PLAN_RETRIES")
+    max_plan_retries: int = Field(default=2, alias="MAX_PLAN_RETRIES")
     max_backlog_stories: int = Field(default=5, alias="MAX_BACKLOG_STORIES")
+
+    # Coder (Laguna S 2.1) sampling — Poolside-recommended defaults. The NVFP4
+    # quant degrades on raw/unset sampling, so we always pin these (T=0.7, top_p
+    # 0.95, top_k 20 are the eval-certified values from the model card / vLLM recipe).
+    coder_temperature: float = Field(default=0.7, alias="CODER_TEMPERATURE")
+    coder_top_p: float = Field(default=0.95, alias="CODER_TOP_P")
+    coder_top_k: int = Field(default=20, alias="CODER_TOP_K")
+
+    # Reasoning escalation: thinking is off for the first attempts (fast/cheap) and
+    # only turned on from attempt >= escalation_attempt, where a longer request
+    # timeout absorbs the reasoning trace. Requires --reasoning-parser poolside_v1
+    # on the coder lane so the trace is stripped before tool-call parsing.
+    coder_thinking_enabled: bool = Field(default=True, alias="CODER_THINKING_ENABLED")
+    coder_thinking_escalation_attempt: int = Field(
+        default=2, alias="CODER_THINKING_ESCALATION_ATTEMPT"
+    )
+    coder_request_timeout_s: float = Field(default=600.0, alias="CODER_REQUEST_TIMEOUT_S")
+    coder_thinking_timeout_s: float = Field(default=1800.0, alias="CODER_THINKING_TIMEOUT_S")
 
     workspace_base: Path = Field(
         default=Path.home() / "sprint-workspaces",
