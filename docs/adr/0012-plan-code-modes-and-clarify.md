@@ -3,12 +3,14 @@
 ## Status
 
 Accepted — partially implemented. The backend console API MVP (`/v1/console/*`,
-including clarify and confirm) is live (roadmap Phase 1.5); the browser UI that
-consumes it is still Proposed and lives in a separate repo ([ADR 0011](0011-web-console-off-gx.md)).
+including clarify and confirm) is live; the browser UI that consumes it is still
+Proposed and lives in a separate off-GX repo (see [archive/HISTORY.md](../archive/HISTORY.md)).
 
 ## Context
 
-Today a sprint starts from a single POST request and runs to completion; the user cannot steer scope before an expensive GPU run. The [product vision](../vision/product-vision.md) needs users to choose how much the system does and to refine the request first.
+Today a sprint can still start from a single POST and run to completion; the console
+MVP adds steer-before-run. Users should choose how much the system does and refine
+the request before an expensive GPU cycle.
 
 Note: TechLead's internal planning modes (`template` / `static` / `tool_loop`) are orthogonal pipeline mechanics and are **not** the user modes defined here.
 
@@ -26,4 +28,4 @@ Before any sprint run in either mode, a **clarify** step presents suggested opti
 - No sprint run starts from a raw prompt alone; confirmation is mandatory
 - Plan mode gives a cheap, side-effect-free way to explore a backlog before committing GPU time
 - The manual merge gate ([ADR 0010](0010-manual-merge-gate.md)) is unchanged; Code mode still ends at `awaiting_human`
-- The API exposes clarify options and confirmation state via `/v1/console/*` (delivered as an MVP in Phase 1.5; see [roadmap](../roadmap.md))
+- The API exposes clarify options and confirmation state via `/v1/console/*` (MVP live; Phase history in [archive/HISTORY.md](../archive/HISTORY.md))

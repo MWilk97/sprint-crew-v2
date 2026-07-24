@@ -21,8 +21,8 @@ def skip_unless_env(var: str, reason: str) -> None:
 def disable_vector_index_for_unit_tests(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Keep unit/CI tests free of Qdrant unless explicitly marked vector_agent_live."""
-    if request.node.get_closest_marker("vector_agent_live"):
+    """Keep unit/CI tests free of Qdrant unless explicitly marked agent_live."""
+    if request.node.get_closest_marker("agent_live"):
         return
     monkeypatch.setenv("VECTOR_INDEX_ENABLED", "false")
     get_settings.cache_clear()

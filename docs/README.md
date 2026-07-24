@@ -1,27 +1,38 @@
 # Documentation index
 
+## Who owns what
+
+One fact, one home. When they disagree, the owner wins:
+
+| Fact | Owner |
+|------|-------|
+| What the project is, how to install and run it, API endpoint table | [../README.md](../README.md) |
+| Invariants agents must obey: path/command safety, GX10 memory policy and per-lane tuning, merge-gate predicate, retry limits, model↔lane assignment, test and probe commands | [../AGENTS.md](../AGENTS.md) |
+| Pipeline mechanics: planning-mode ladder, plan coverage gate, Tester skip rules, vector index, environment variables | [agent-orchestration.md](agent-orchestration.md) |
+| Model candidates, probe results, rollback recipes | [model-evaluation.md](model-evaluation.md) |
+| Why a decision was made | [adr/](adr/) |
+
+Everything else links to the owner instead of restating it.
+
 ## Current
 
 | Document | Audience | Contents |
 |----------|----------|----------|
-| [agent-orchestration.md](agent-orchestration.md) | Engineers | Pipeline flow, planning modes, coverage gates, vector tiers |
-| [model-evaluation.md](model-evaluation.md) | ML ops | Model comparison matrix, rollback notes |
-| [architecture.md](architecture.md) | Visitors / CV | High-level system overview |
+| [agent-orchestration.md](agent-orchestration.md) | Engineers | Pipeline flow, planning modes, coverage gates, vector index |
+| [model-evaluation.md](model-evaluation.md) | ML ops | Live model matrix, probe legend, rollback notes |
 | [portfolio-blurb.md](portfolio-blurb.md) | Recruiters | Copy-paste project description |
 | [adr/0010-manual-merge-gate.md](adr/0010-manual-merge-gate.md) | Architects | Why agents never auto-merge |
-| [contracts/chat-console-api.md](contracts/chat-console-api.md) | UI repo devs | Console API contract: state machine, endpoints, examples (Implemented — MVP store + stub clarify) |
-| [contracts/chat-console.openapi.yaml](contracts/chat-console.openapi.yaml) | UI repo devs | OpenAPI 3.1 spec for the console API (Implemented — MVP) |
 | [adr/0012-plan-code-modes-and-clarify.md](adr/0012-plan-code-modes-and-clarify.md) | Architects | Plan/Code user modes, clarify-before-run (backend MVP live; UI proposed) |
-| [../AGENTS.md](../AGENTS.md) | Sprint agents | Policies, lane tuning, test markers |
+| [contracts/README.md](contracts/README.md) | UI repo devs | How to consume the console contracts |
+| [contracts/chat-console-api.md](contracts/chat-console-api.md) | UI repo devs | Console API contract: state machine, endpoints, examples (Implemented — MVP) |
+| [contracts/chat-console.openapi.yaml](contracts/chat-console.openapi.yaml) | UI repo devs | OpenAPI 3.1 spec for the console API (Implemented — MVP) |
+| [../AGENTS.md](../AGENTS.md) | Sprint agents | Policies, lane tuning, test and probe commands |
 
-## Target / Proposed (not implemented)
+## Archive
 
-| Document | Audience | Contents |
-|----------|----------|----------|
-| [vision/product-vision.md](vision/product-vision.md) | Everyone | Target UX: interactive sprint console (Target) |
-| [roadmap.md](roadmap.md) | Engineers / PM | Phases 0–3 with acceptance criteria (Proposed) |
-| [adr/0011-web-console-off-gx.md](adr/0011-web-console-off-gx.md) | Architects | Web console in separate repo, off GX10 (Proposed) |
-| [contracts/README.md](contracts/README.md) | UI repo devs | How to consume the console contracts; Current vs Proposed |
+| Document | Contents |
+|----------|----------|
+| [archive/HISTORY.md](archive/HISTORY.md) | Bullets: Target console (former vision/roadmap/ADR 0011), retired test tiers, past models, pre-2026-07-19 benchmark runs |
 
 ## Examples
 

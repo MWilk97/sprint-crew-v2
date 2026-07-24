@@ -1,14 +1,33 @@
 from __future__ import annotations
 
+import subprocess
 from contextlib import ExitStack, contextmanager
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from tests.helpers.agent_live_tickets import greeter_ticket
 
 
 @pytest.fixture
+def satisfied_coder_result() -> tuple:
+    """`run_coder_with_coverage` return value: handoff, empty tool log, coverage satisfied.
+
+    Built per test — the MagicMock caches auto-created children (`phantom_paths`,
+    `blocking_unexpected`), so a shared instance would leak them across tests.
+    """
+    return (
+        "handoff",
+        [],
+        MagicMock(satisfied=True, missing=[], unexpected=[], out_of_scope_hits=[]),
+        "",
+        False,
+    )
+
+
+@pytest.fixture
 def base_state(tmp_path) -> dict:
+    # init_session rejects a non-repo workspace, and the ship node commits for real.
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
     ticket = greeter_ticket(acceptance_criteria="pytest -q")
     return {
         "session_id": "test-session",
@@ -22,9 +41,9 @@ def base_state(tmp_path) -> dict:
 
 
 @pytest.fixture
-def graph_run_mocks():
-    """Factory for the common build_sprint_graph().ainvoke(...) mock bundle shared by
-    test_graph_retry_loop.py and test_graph_routing.py.
+def graph_run_mocks(satisfied_coder_result: tuple):
+    """Factory for the common build_sprint_graph().ainvoke(...) mock bundle used by
+    tests/unit/test_graph_pipeline.py.
 
     Pass tech_lead_result=None (the default) to leave run_tech_lead_validated
     unpatched, e.g. to exercise the real template fast-path. Pass
@@ -34,9 +53,9 @@ def graph_run_mocks():
     @contextmanager
     def _mocks(
         *,
-        coder_result,
         reviewer,
         formatter_result,
+        coder_result=satisfied_coder_result,
         tech_lead_result=None,
         workspace_diff: str = "diff",
         should_invoke_tester: bool | None = None,

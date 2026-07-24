@@ -11,14 +11,6 @@ import pytest
 
 from sprint_crew.config import get_settings
 from sprint_crew.schemas.session import SprintSession
-from tests.helpers.cycle_assertions import (
-    assert_cycle_passed,
-    count_semantic_retrieval_events,
-    count_tool_call_events,
-    index_chunks_from_session,
-    semantic_retrieval_diagnostics,
-)
-from tests.helpers.session_metrics import planning_mode_from_session
 from tests.helpers.vector_live import wait_vector_healthy
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -60,45 +52,6 @@ def start_vector_stack() -> None:
     )
 
 
-def count_write_tool_events(session: SprintSession) -> int:
-    write_tools = {"write_file", "apply_patch"}
-    return sum(
-        1
-        for event in session.events
-        if event.event_type == "tool_call" and (event.detail or {}).get("tool") in write_tools
-    )
-
-
-def collect_capability_metrics(
-    session: SprintSession,
-    *,
-    tier: str,
-    story_id: str,
-    duration_s: float,
-) -> dict[str, Any]:
-    total_tools = count_tool_call_events(session)
-    write_tools = count_write_tool_events(session)
-    mode = planning_mode_from_session(session)
-    chunks = index_chunks_from_session(session)
-    semantic_calls = count_semantic_retrieval_events(session)
-    return {
-        "tier": tier,
-        "story_id": story_id,
-        "duration_s": round(duration_s, 2),
-        "session_id": session.session_id,
-        "ticket_key": session.ticket_key,
-        "session_status": session.status.value,
-        "planning_mode": mode,
-        "index_chunks": chunks,
-        "semantic_tool_calls": semantic_calls,
-        "total_tool_calls": total_tools,
-        "write_tool_calls": write_tools,
-        "write_ratio": round(write_tools / total_tools, 3) if total_tools else 0.0,
-        "semantic_diagnostics": semantic_retrieval_diagnostics(session),
-        "failure_class": failure_class_from_session(session),
-    }
-
-
 def failure_class_from_session(session: SprintSession) -> str | None:
     for event in reversed(session.events):
         detail = event.detail or {}
@@ -114,32 +67,6 @@ def failure_class_from_session(session: SprintSession) -> str | None:
     if review is not None and not review.tests_passed:
         return "tests_failed"
     return None
-
-
-def assert_capability_cycle(
-    session: SprintSession,
-    *,
-    workspace: Path,
-    test_target: str,
-) -> None:
-    assert_cycle_passed(session, workspace=workspace, test_target=test_target)
-    mode = planning_mode_from_session(session)
-    assert mode in {"tool_loop", "static", "template_fallback"}, f"unexpected mode={mode}"
-    chunks = index_chunks_from_session(session)
-    assert chunks is not None and chunks > 0
-    semantic_calls = count_semantic_retrieval_events(session)
-    assert semantic_calls >= 1, semantic_retrieval_diagnostics(session)
-
-
-def write_capability_report(payload: dict, *, results_dir: Path | None = None) -> Path:
-    root = get_settings().project_root
-    out_dir = results_dir or (root / "benchmarks" / "results")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    story_id = payload.get("story_id", "unknown")
-    path = out_dir / f"capability_{story_id}_{stamp}.json"
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return path
 
 
 def write_trap_report(payload: dict, *, results_dir: Path | None = None) -> Path:

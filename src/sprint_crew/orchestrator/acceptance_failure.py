@@ -65,10 +65,6 @@ def _is_test_path(path: str) -> bool:
     return _shared_is_test_path(_normalize_repo_path(path))
 
 
-def _is_source_path(path: str) -> bool:
-    return not _is_test_path(path)
-
-
 def _extract_paths(output: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     source: set[str] = set()
     tests: set[str] = set()

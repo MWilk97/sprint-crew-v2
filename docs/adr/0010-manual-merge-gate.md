@@ -12,13 +12,9 @@ Sprint Crew agents can implement code, run tests, and open pull requests autonom
 
 Agents **never auto-merge** to the default branch. After a successful review cycle, session status becomes `awaiting_human`. A human reviews the PR and merges manually.
 
-The merge gate in code requires:
-
-```python
-review.passed and review.tests_passed and no blocker findings
-```
-
-plus plan coverage satisfaction when applicable.
+The gate predicate itself is defined in [AGENTS.md §8.1](../../AGENTS.md) and implemented in
+`sprint_crew.orchestrator.merge_gate.review_accepted`. This ADR governs only what happens
+*after* it passes: a human, not an agent, merges.
 
 ## Consequences
 

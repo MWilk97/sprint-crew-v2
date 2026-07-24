@@ -71,49 +71,6 @@ def complex_api_ticket() -> JiraTicket:
     )
 
 
-def vector_story1_ticket() -> JiraTicket:
-    return JiraTicket(
-        key="SCRUM-1",
-        summary="Persistent outbound message queue using ferry dispatch layer",
-        description=(
-            "Implement SQLite-backed outbound queue in sqlite_repo.py and wire QueueWorker "
-            "to dequeue pending messages through MessageFerry. Follow existing messaging patterns."
-        ),
-        status="To Do",
-        issue_type="Story",
-        acceptance_criteria="pytest -q tests/test_ferry_queue.py passes",
-    )
-
-
-def vector_story2_ticket() -> JiraTicket:
-    return JiraTicket(
-        key="SCRUM-2",
-        summary="Exponential backoff retry when adapter handoff fails",
-        description=(
-            "Implement exponential backoff in retry_policy.py: 3 attempts with 100ms base delay "
-            "when MessageFerry adapter handoff fails. Follow existing messaging patterns."
-        ),
-        status="To Do",
-        issue_type="Story",
-        acceptance_criteria="pytest -q tests/test_ferry_retry.py passes",
-    )
-
-
-def vector_story3_ticket() -> JiraTicket:
-    return JiraTicket(
-        key="SCRUM-3",
-        summary="REST endpoints to enqueue notifications and query delivery status",
-        description=(
-            "Add notification REST endpoints to src/api/routes.py: POST /notifications to enqueue "
-            "and GET /notifications/{id} to query delivery status. Integrate with the outbound "
-            "queue and ferry dispatch layer from prior stories."
-        ),
-        status="To Do",
-        issue_type="Story",
-        acceptance_criteria="pytest -q tests/test_notify_routes.py passes",
-    )
-
-
 @contextmanager
 def skip_template_fast_path():
     """Force TechLead static/tool_loop paths — template unavailable for this ticket."""

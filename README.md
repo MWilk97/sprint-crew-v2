@@ -9,7 +9,7 @@ LangGraph-orchestrated multi-agent pipeline that turns Jira tickets (or natural-
 - **LangGraph state machine** — TechLead → Coder+Formatter (inside `codeImplement`) → Tester (conditional) → Reviewer → merge gate → ship
 - **Strict Pydantic v2 schemas** — all agent contracts use `extra="forbid"`
 - **Dual vLLM lanes** — Coder (:8001) and Work (:8002); only one loaded at a time on 128 GB unified memory
-- **Tiered test pyramid** — unit → sandbox integration → GPU agent_live → vector tiers
+- **Lean test suite** — mock-only unit suite (CI) plus one opt-in end-to-end trap gate
 - **Safety by design** — path sandboxing (`resolve_safe_path`), allowlisted shell commands, side effects in orchestrator only
 
 ## Architecture
@@ -35,7 +35,7 @@ flowchart TD
 
 From-prompt flow: user prompt → ScrumMaster (Work lane) → Jira backlog → sequential per-ticket cycles.
 
-See [docs/agent-orchestration.md](docs/agent-orchestration.md) for planning modes, coverage gates, and vector retrieval tiers.
+See [docs/agent-orchestration.md](docs/agent-orchestration.md) for planning modes, coverage gates, and vector retrieval.
 
 ## Quick start (CPU only, no GPU)
 
@@ -84,8 +84,8 @@ uvicorn sprint_crew.api.app:app --host 0.0.0.0 --port 8080
 | E2E trap (opt-in) | `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/test_from_prompt_3story_trap.py -v` | GX10 GPU lanes + vector stack |
 
 The single retained live gate is a 3-story from-prompt run against an adversarial
-(stdlib-shadow) fixture — the full pipeline end to end. Other GPU/sandbox tiers were
-retired; `scripts/smoke_cycle.py` and `scripts/benchmark_pipeline.py` cover ad-hoc cycles.
+(stdlib-shadow) fixture — the full pipeline end to end. Manual scripts and vLLM probes
+are listed in [AGENTS.md §7](AGENTS.md).
 
 ## Project layout
 
@@ -102,18 +102,19 @@ benchmarks/          scenario matrix + scorecard tooling
 ## Documentation
 
 - [Docs index](docs/README.md)
-- [Product vision (Target) and roadmap](docs/vision/product-vision.md) — future interactive console; see [docs/roadmap.md](docs/roadmap.md)
 - [Agent orchestration](docs/agent-orchestration.md)
 - [Model evaluation](docs/model-evaluation.md)
+- [Console API contract](docs/contracts/chat-console-api.md)
 - [Agent policies (AGENTS.md)](AGENTS.md)
 - [Portfolio blurb for CV/LinkedIn](docs/portfolio-blurb.md)
+- [Archived history (bullets)](docs/archive/HISTORY.md)
 
 ## Note on hardware
 
-GPU tiers require Docker, NVIDIA runtime, and NVFP4 model weights (~46 GB Coder, ~20 GB Work). The orchestrator loads **one lane at a time** to fit 128 GB unified memory. Unit tests and sandbox integration tests do not need a GPU.
+The opt-in e2e trap gate requires Docker, NVIDIA runtime, and NVFP4 model weights. The orchestrator loads **one lane at a time** to fit 128 GB unified memory — per-lane weights and `gpu_memory_utilization` targets are in [AGENTS.md §4.1](AGENTS.md). The unit suite needs none of this.
 
 ## For recruiters
 
-Sprint Crew v2 is a production-shaped autonomous coding agent system: it plans multi-file changes, implements them with tool-using LLMs, validates with pytest, reviews for scope and correctness, and opens a GitHub PR — with human merge approval as the final gate. The codebase demonstrates LangGraph orchestration, strict schema contracts, tiered live testing, and operational concerns (lane lifecycle, retries, plan coverage gates).
+Sprint Crew v2 is a production-shaped autonomous coding agent system: it plans multi-file changes, implements them with tool-using LLMs, validates with pytest, reviews for scope and correctness, and opens a GitHub PR — with human merge approval as the final gate. The codebase demonstrates LangGraph orchestration, strict schema contracts, a lean mock-based test suite with one opt-in end-to-end trap gate, and operational concerns (lane lifecycle, retries, plan coverage gates).
 
 Copy the full blurb from [docs/portfolio-blurb.md](docs/portfolio-blurb.md).

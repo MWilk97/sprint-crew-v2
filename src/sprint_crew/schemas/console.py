@@ -143,11 +143,3 @@ class ConsoleSession(BaseModel):
     error: str | None = None
     created_at: str = Field(default_factory=_utc_now_iso)
     updated_at: str = Field(default_factory=_utc_now_iso)
-
-
-class ConsoleError(BaseModel):
-    """Error body; matches FastAPI's HTTPException ``{"detail": ...}`` envelope."""
-
-    model_config = _STRICT
-
-    detail: str = Field(..., min_length=1)

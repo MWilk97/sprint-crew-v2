@@ -1,16 +1,30 @@
-"""FastAPI routes against SessionStore / BacklogRunStore (no handler mocks)."""
+"""FastAPI routes (against real SessionStore/BacklogRunStore) + console schema validation."""
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 
-from sprint_crew.api.app import app
+from sprint_crew.api.app import FromPromptRequest, app, sprint_from_prompt
 from sprint_crew.orchestrator.backlog import BacklogRunStore
 from sprint_crew.orchestrator.session import SessionStore
 from sprint_crew.schemas.change import ReviewOutcome
+from sprint_crew.schemas.console import (
+    ClarifyAnswer,
+    ClarifyQuestion,
+    ClarifyRequest,
+    ClarifySuggestion,
+    ConsoleMode,
+    ConsoleSession,
+    ConsoleSessionStatus,
+    CreateConsoleSessionRequest,
+    SprintRunRef,
+)
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus, SprintSession
 from sprint_crew.schemas.ticket import JiraTicket
 
@@ -122,3 +136,90 @@ async def test_approve_session_not_found(api_db) -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post("/sprint/session/missing/approve")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_sprint_from_prompt_stops_work_lane_when_scrum_master_fails(tmp_path) -> None:
+    """Regression: ensure_lane/stop_lane must bracket run_scrum_master with try/finally —
+    otherwise an exception mid-call leaves the Work lane loaded (GX10 unified-memory risk,
+    see AGENTS.md 4.1: never keep 2+ vLLM lanes loaded at once)."""
+    stop_mock = AsyncMock()
+    with (
+        patch("sprint_crew.api.app.prepare_workspace", return_value=tmp_path),
+        patch("sprint_crew.api.app.maybe_index_workspace"),
+        patch("sprint_crew.api.app.enrich_repo_context", return_value=""),
+        patch("sprint_crew.api.app.ensure_lane", new=AsyncMock()),
+        patch("sprint_crew.api.app.stop_lane", new=stop_mock),
+        patch(
+            "sprint_crew.api.app.run_scrum_master",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ),
+    ):
+        with pytest.raises(RuntimeError):
+            await sprint_from_prompt(FromPromptRequest(prompt="add a feature"), BackgroundTasks())
+
+    stop_mock.assert_awaited_once()
+
+
+def _question() -> ClarifyQuestion:
+    return ClarifyQuestion(
+        question_id="q-scope",
+        text="Which part of the repo should change?",
+        suggestions=[ClarifySuggestion(suggestion_id="s-api", label="API layer only")],
+        allow_custom=True,
+    )
+
+
+def test_create_session_happy_path() -> None:
+    req = CreateConsoleSessionRequest(mode=ConsoleMode.CODE, initial_prompt="add health endpoint")
+    assert req.mode is ConsoleMode.CODE
+    assert req.target_language is None
+
+
+def test_session_round_trip_with_clarify_and_sprint_ref() -> None:
+    session = ConsoleSession(
+        session_id="cs-1",
+        mode=ConsoleMode.CODE,
+        status=ConsoleSessionStatus.RUNNING,
+        confirmed=True,
+        clarify_questions=[_question()],
+        clarify_answers=[ClarifyAnswer(question_id="q-scope", selected_suggestion_id="s-api")],
+        sprint_ref=SprintRunRef(backlog_run_id="run-1", sprint_session_ids=["session-a"]),
+    )
+    restored = ConsoleSession.model_validate(session.model_dump())
+    assert restored.status is ConsoleSessionStatus.RUNNING
+    assert restored.sprint_ref is not None
+    assert restored.sprint_ref.backlog_run_id == "run-1"
+
+
+def test_clarify_answer_requires_exactly_one() -> None:
+    with pytest.raises(ValidationError):
+        ClarifyAnswer(question_id="q-scope")
+    with pytest.raises(ValidationError):
+        ClarifyAnswer(question_id="q-scope", selected_suggestion_id="s-api", custom_text="both")
+    answer = ClarifyAnswer(question_id="q-scope", custom_text="only the CLI")
+    assert answer.custom_text == "only the CLI"
+
+
+def test_unknown_fields_rejected() -> None:
+    with pytest.raises(ValidationError):
+        CreateConsoleSessionRequest(mode=ConsoleMode.PLAN, surprise=True)
+    with pytest.raises(ValidationError):
+        ClarifyRequest(
+            answers=[ClarifyAnswer(question_id="q", custom_text="x")],
+            extra_field="nope",
+        )
+
+
+def test_console_routes_registered() -> None:
+    paths = set(app.openapi()["paths"])
+    expected = {
+        "/v1/console/sessions",
+        "/v1/console/sessions/{id}",
+        "/v1/console/sessions/{id}/messages",
+        "/v1/console/sessions/{id}/clarify",
+        "/v1/console/sessions/{id}/confirm",
+        "/v1/console/sessions/{id}/start",
+        "/v1/console/sessions/{id}/cancel",
+    }
+    assert expected <= paths

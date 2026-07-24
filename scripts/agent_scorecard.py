@@ -42,8 +42,6 @@ def _tier_of(report: dict) -> str:
         or name.startswith("from_prompt_vector_e2e_")
     ):
         return "trap"
-    if name.startswith("vector_ab"):
-        return "ab"
     return "unknown"
 
 
@@ -71,9 +69,6 @@ def _passed(report: dict) -> bool:
 
     if tier == "capability":
         return report.get("session_status") == "awaiting_human"
-
-    if tier == "ab":
-        return bool(report.get("merge_gate_ok"))
 
     if report.get("backlog_status") == "completed":
         return True

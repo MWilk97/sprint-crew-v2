@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.helpers.acceptance_output import SCRUM3_COLLECTION
+
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
 from sprint_crew.orchestrator.plan_coverage import PlanCoverageResult
 from sprint_crew.orchestrator.retry import (
@@ -10,6 +12,55 @@ from sprint_crew.orchestrator.retry import (
     resolve_retry_scope_from_coverage,
 )
 from sprint_crew.schemas.change import ReviewFinding, ReviewOutcome
+
+
+def test_collection_error_in_source_disables_tester() -> None:
+    analysis = analyze_acceptance_output(SCRUM3_COLLECTION)
+    assert analysis.kind == "collection_error"
+    assert analysis.tester_can_help is False
+    assert "src/api/routes.py" in analysis.source_paths
+
+
+def test_import_error_only_in_tests_allows_tester() -> None:
+    output = """
+$ pytest tests/test_x.py -q
+exit_code=2
+tests/test_x.py:3: in <module>
+    from missing_dep import helper
+E   ModuleNotFoundError: No module named 'missing_dep'
+"""
+    analysis = analyze_acceptance_output(output)
+    assert analysis.kind == "import_error"
+    assert analysis.tester_can_help is True
+    assert analysis.test_paths == ("tests/test_x.py",)
+
+
+def test_assertion_failure_allows_tester() -> None:
+    output = """
+$ pytest tests/test_greeter.py -q
+exit_code=1
+FAILED tests/test_greeter.py::test_hello - AssertionError: assert 'hi' == 'hello'
+"""
+    analysis = analyze_acceptance_output(output)
+    assert analysis.kind == "assertion_failure"
+    assert analysis.tester_can_help is True
+
+
+def test_green_output_is_none() -> None:
+    output = """
+$ pytest -q
+exit_code=0
+3 passed
+"""
+    analysis = analyze_acceptance_output(output)
+    assert analysis.kind == "none"
+    assert analysis.tester_can_help is False
+
+
+def test_detail_excerpt_is_bounded() -> None:
+    analysis = analyze_acceptance_output(SCRUM3_COLLECTION)
+    assert "ModuleNotFoundError" in analysis.detail_excerpt
+    assert analysis.detail_excerpt.count("\n") <= 30
 
 
 def test_resolve_retry_scope_from_coverage_phantom_paths() -> None:
@@ -267,3 +318,52 @@ def test_format_review_feedback_includes_diff_and_tests() -> None:
     assert "Workspace diff" in feedback
     assert "Latest test output" in feedback
     assert "AssertionError" in feedback
+
+
+def test_stdlib_shadow_named_in_build_failure_feedback() -> None:
+    # A collection error whose source path is a local package that shadows a
+    # stdlib module (``platform``) should surface an explicit shadow hint.
+    test_output = (
+        "exit_code=2\n"
+        "ERROR collecting tests/test_notify_routes.py\n"
+        'File "src/platform/config.py", line 3, in <module>\n'
+        "ImportError: cannot import name 'system' from 'platform'\n"
+        "!!!!!! Interrupted: 1 error during collection !!!!!!"
+    )
+    analysis = analyze_acceptance_output(test_output)
+    outcome = ReviewOutcome(
+        ticket_key="SCRUM-3",
+        passed=False,
+        summary="build failure",
+        tests_passed=False,
+    )
+    feedback = format_review_feedback(
+        outcome,
+        test_output=test_output,
+        failure_analysis=analysis,
+    )
+    assert "STDLIB SHADOW DETECTED" in feedback
+    assert "'platform'" in feedback
+
+
+def test_no_shadow_hint_when_no_stdlib_collision() -> None:
+    test_output = (
+        "exit_code=2\n"
+        "ERROR collecting tests/test_notify_routes.py\n"
+        'File "src/messaging/queue_worker.py", line 3, in <module>\n'
+        "ImportError: cannot import name 'Ferry' from 'messaging.ferry'\n"
+        "!!!!!! Interrupted: 1 error during collection !!!!!!"
+    )
+    analysis = analyze_acceptance_output(test_output)
+    outcome = ReviewOutcome(
+        ticket_key="SCRUM-3",
+        passed=False,
+        summary="build failure",
+        tests_passed=False,
+    )
+    feedback = format_review_feedback(
+        outcome,
+        test_output=test_output,
+        failure_analysis=analysis,
+    )
+    assert "STDLIB SHADOW DETECTED" not in feedback
