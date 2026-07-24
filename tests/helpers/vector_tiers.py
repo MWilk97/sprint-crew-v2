@@ -31,7 +31,15 @@ def skip_unless_vector_agent_live() -> None:
 
 
 def trap_strict_mode() -> bool:
-    return os.environ.get("VECTOR_TRAP_STRICT", "").strip() in {"1", "true", "yes"}
+    """Traps hard-fail by default; a trap the agent falls for is a real failure.
+
+    Set ``VECTOR_TRAP_SOFT=1`` for exploratory benchmark runs that should still
+    emit the trap report but not go red (legacy ``VECTOR_TRAP_STRICT`` is honored
+    as an explicit force-strict override).
+    """
+    if os.environ.get("VECTOR_TRAP_STRICT", "").strip() in {"1", "true", "yes"}:
+        return True
+    return os.environ.get("VECTOR_TRAP_SOFT", "").strip() not in {"1", "true", "yes"}
 
 
 def setup_vector_agent_env(monkeypatch: pytest.MonkeyPatch) -> None:

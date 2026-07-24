@@ -4,7 +4,7 @@ Production = rows with A+B+C+D = PASS.
 
 | Model | Slot | A | B | C | D | TTFT ms | Tok/s | Verdict |
 |-------|------|---|---|---|---|---------|-------|---------|
-| poolside/Laguna-S-2.1-NVFP4 | Coder :8001 | PASS | PASS | — | PASS | | | production candidate — Laguna S 2.1 (max_len 131072, gpu util 0.85, poolside_v1, thinking OFF — reasoning trace overran request timeout on complex tickets; image `timothystewart6/vllm-gb10:v0.25.1-gb10.2`) |
+| poolside/Laguna-S-2.1-NVFP4 | Coder :8001 | PASS | PASS | — | PASS | | | production candidate — Laguna S 2.1 (max_len 131072, gpu util 0.85, poolside_v1 tool+reasoning parser, T=0.7/top_p=0.95/top_k=20; thinking OFF early, escalated per-request from coder attempt 2 with 1800s timeout to absorb the reasoning trace that overran the default deadline; image `timothystewart6/vllm-gb10:v0.25.1-gb10.2`) |
 | gdubicki/Qwen3-Coder-Next-NVFP4-GB10 | Coder :8001 | ? | ? | — | ? | | | rollback — prior NVFP4 coder (max_len 131072, gpu util 0.85, Marlin; ungated mirror of gated saricles/… ckpt) |
 | Qwen/Qwen3-Coder-Next-FP8 | Coder :8001 | PASS | PASS | — | PASS | | | rollback baseline (max_len 12288, gpu util 0.78) |
 | NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4 | Work :8002 | n/a | n/a | ? | — | | | candidate — preflight pending re-run (max_len 131072, gpu util 0.50, qwen3_moe text-only, hermes parser, prep + TechLead + reviewer) |

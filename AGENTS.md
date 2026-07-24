@@ -120,9 +120,11 @@ Implemented in `sprint_crew.orchestrator.merge_gate.review_accepted`.
 ### 8.2 Retry
 
 - Max review retries: `MAX_REVIEW_RETRIES=4` (orchestrator, not LangGraph internal).
+- Max plan retries: `MAX_PLAN_RETRIES=2` (gives TechLead a second replan on `retry_scope=plan`).
 - Work tree preserved between retries.
-- `prior_review_feedback` injected into Coder and TechLead prompts.
+- `prior_review_feedback` injected into Coder and TechLead prompts. A source-build failure whose source package name shadows a Python stdlib module (e.g. `src/platform/`) surfaces an explicit `STDLIB SHADOW DETECTED` hint (`retry._stdlib_shadow_packages`).
 - Smart routing: `retry_scope=code` → `codeImplement` only; `retry_scope=plan` → `techLeadPlan` (Reviewer sets scope; Python keyword fallback in `resolve_retry_scope`).
+- **Reasoning escalation:** Coder attempts `0..N` run thinking-OFF; from `CODER_THINKING_ESCALATION_ATTEMPT=2` onward the Coder enables per-request `enable_thinking` and swaps to `CODER_THINKING_TIMEOUT_S=1800` (vs `CODER_REQUEST_TIMEOUT_S=600`). Cheap deterministic-ish attempts first, expensive reasoning only when they stall.
 
 ### 8.3 Manual merge
 
@@ -137,7 +139,7 @@ Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 
 | **Explorer** | TechLead (COMPLEX only) | Read-only tool loop on Work lane (:8002, `hermes` parser), then structured TaskPlan JSON |
 | **Prep** | ScrumMaster | `BacklogPlan` JSON on Work lane (:8002), loaded only for `from-prompt` |
 
-- **Coder:** `laguna-s-2.1-nvfp4` (Poolside Laguna S 2.1 NVFP4, GB10; vLLM ≥0.25.1 `poolside_v1`), T=0, thinking OFF (`enable_thinking: false`; a 118B MoE reasoning trace balloons a single generation past the request timeout — see `infra/docker-compose.yml`), `MAX_CODER_TURNS=32`, tools ON, `max-model-len=131072`, `gpu-memory-utilization=0.85`; early exit when acceptance tests pass, diff is non-empty, and plan coverage is satisfied (`CODER_EARLY_EXIT_REQUIRES_COVERAGE`). Mid-loop model errors (context overflow, request timeout) hand off partial work rather than failing the cycle. Rollback: `gdubicki/Qwen3-Coder-Next-NVFP4-GB10`.
+- **Coder:** `laguna-s-2.1-nvfp4` (Poolside Laguna S 2.1 NVFP4, GB10; vLLM ≥0.25.1 `poolside_v1`), Poolside eval-certified sampling **T=0.7 / top_p=0.95 / top_k=20** (raw defaults degrade NVFP4 output — pinned in `config.py` per request *and* via `--override-generation-config`), `MAX_CODER_TURNS=32`, tools ON, `max-model-len=131072`, `gpu-memory-utilization=0.85`. Thinking is OFF for early attempts and escalates per-request from attempt 2 (`--reasoning-parser poolside_v1` loaded so the trace is stripped before tool parsing; longer timeout absorbs the 118B MoE reasoning trace that otherwise overruns the request deadline — see `infra/docker-compose.yml` and §8.2 Reasoning escalation). Early exit when acceptance tests pass, diff is non-empty, and plan coverage is satisfied (`CODER_EARLY_EXIT_REQUIRES_COVERAGE`). Mid-loop model errors (context overflow, request timeout) hand off partial work rather than failing the cycle. Rollback: `gdubicki/Qwen3-Coder-Next-NVFP4-GB10`.
 - **Work:** `qwen3-30b-a3b-thinking` (Qwen3-30B-A3B-Thinking-2507 NVFP4, `qwen3_moe`, text-only, ~3B active), TaskPlan / CodeChange / ReviewOutcome / BacklogPlan JSON; TechLead tool_loop for COMPLEX tickets (`MAX_TECHLEAD_TURNS`, `--tool-call-parser hermes --reasoning-parser qwen3` on :8002). Also runs ScrumMaster prep decomposition (merged lane). Plain `qwen3_moe` (full attention, `Qwen2Tokenizer`): no tokenizer patch and no `--max-num-batched-tokens` Mamba workaround (both were only needed by the prior Qwen3.6 multimodal ckpt). Setup: the ModelOpt NVFP4 ckpt omits `quant_method` in `config.json`, so after `hf download` run `scripts/patch_work_quant.py` once (adds `quant_method: modelopt` so vLLM 26.04 selects the `modelopt_fp4` NVFP4 Marlin backend; otherwise it loads unquantized and dies on `w2_weight_scale_2`).
 - **File context:** orchestrator gathers `git diff` after Coder/Tester and injects into Formatter + Reviewer prompts (`workspace_diff` in graph state). Plan coverage also reads `git status --porcelain` for untracked files. TechLead receives `enrich_repo_context` (manifest, pre_search, grep, semantic hits). `validate_plan_paths_exist` rejects phantom paths before Coder; `snapshot_baseline_paths` at session start feeds coverage phantom detection.
 
@@ -148,6 +150,6 @@ Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 
 - A/B comparison: `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest -m vector_agent_live` (full cycle, not in default gx10 suite).
 - **Capability** (per-story, SOFT in full suite): `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/capability/ -m "vector_agent_live and agent_capability" -v`
 - **Integration nightly** (2-story from-prompt, HARD gate): `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/integration/ -m "vector_agent_live and agent_integration and nightly" -v` (~1–1.5h; requires `./scripts/lane-ctl.sh start vector`)
-- **Trap** (adversarial, SOFT): `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m "vector_agent_live and agent_trap" -v` (set `VECTOR_TRAP_STRICT=1` to hard-fail)
+- **Trap** (adversarial, STRICT by default — a trap the agent falls for fails the test): `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m "vector_agent_live and agent_trap" -v` (set `VECTOR_TRAP_SOFT=1` for report-only benchmark runs)
 - Scorecard: `python scripts/agent_scorecard.py` (aggregates `benchmarks/results/*.json`)
 - Vector stack without vLLM: `VECTOR_LIVE=1 pytest -m vector_live -q`

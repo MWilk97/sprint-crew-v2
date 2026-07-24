@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from sprint_crew.orchestrator.acceptance_failure import (
@@ -90,6 +91,24 @@ def _failure_analysis_from_state(
     )
 
 
+def _stdlib_shadow_packages(source_paths: tuple[str, ...]) -> list[str]:
+    """Local top-level packages whose name collides with a Python stdlib module.
+
+    A build failure plus a package like ``src/platform/`` that shadows stdlib
+    ``platform`` is the classic import-resolution trap; naming it explicitly gives
+    the Coder a concrete lead instead of a generic 'check imports' nudge.
+    """
+    stdlib = getattr(sys, "stdlib_module_names", frozenset())
+    roots = {"src", "tests", "test", "lib"}
+    shadows: set[str] = set()
+    for raw in source_paths:
+        segments = raw.replace("\\", "/").split("/")[:-1]  # drop the filename
+        for seg in segments:
+            if seg and seg not in roots and seg in stdlib:
+                shadows.add(seg)
+    return sorted(shadows)
+
+
 def _format_failure_feedback(analysis: AcceptanceFailureAnalysis) -> list[str]:
     if analysis.kind == "none":
         return []
@@ -100,6 +119,15 @@ def _format_failure_feedback(analysis: AcceptanceFailureAnalysis) -> list[str]:
         lines.append(analysis.summary)
         if analysis.source_paths:
             lines.append("Affected source files: " + ", ".join(analysis.source_paths))
+        shadows = _stdlib_shadow_packages(analysis.source_paths)
+        if shadows:
+            named = ", ".join(f"'{name}'" for name in shadows)
+            lines.append(
+                f"STDLIB SHADOW DETECTED: local package(s) {named} shadow a Python "
+                "stdlib module of the same name, so imports resolve to the wrong module. "
+                "Fix import resolution (absolute/relative imports, package __init__, or "
+                "sys.path) — do NOT rename the stdlib usage."
+            )
         lines.append(
             "The Tester agent cannot modify src/ — fix imports/syntax in source files first."
         )

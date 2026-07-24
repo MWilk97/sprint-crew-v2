@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
-from pydantic_ai.settings import ModelSettings
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from sprint_crew.agents.prompts_coder import (
@@ -16,7 +16,7 @@ from sprint_crew.agents.prompts_coder import (
     build_coder_user_prompt,
 )
 from sprint_crew.config import Role, get_settings, lane_for_role
-from sprint_crew.inference.router import pydantic_ai_model
+from sprint_crew.inference.router import coder_model_settings, pydantic_ai_model
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
 from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
 from sprint_crew.orchestrator.plan_coverage import (
@@ -74,10 +74,13 @@ def _build_coder_agent(
     workspace_root: Path,
     task_plan: TaskPlan,
     *,
+    model_settings: OpenAIChatModelSettings | None = None,
     role_specialization: str | None = None,
     tool_call_log: list[dict] | None = None,
     baseline_paths: frozenset[str] | None = None,
 ) -> tuple[Agent[WorkspaceDeps, str], WorkspaceDeps]:
+    if model_settings is None:
+        model_settings = coder_model_settings()
     deps = workspace_deps(
         workspace_root,
         mutate=True,
@@ -92,7 +95,7 @@ def _build_coder_agent(
         system_prompt=build_coder_system_prompt(role_specialization=role_specialization),
         toolsets=[build_coder_toolset()],
         retries=3,
-        model_settings=ModelSettings(temperature=0),
+        model_settings=model_settings,
     )
     return agent, deps
 
@@ -111,12 +114,15 @@ async def run_coder_loop(
     max_turns: int | None = None,
     baseline_paths: frozenset[str] | None = None,
     deadline_epoch: float = 0.0,
+    attempt: int = 0,
 ) -> tuple[str, list[dict]]:
     """Run the Coder tool loop only; returns raw handoff text and tool-call log."""
     tool_log: list[dict] = []
+    model_settings = coder_model_settings(attempt=attempt)
     agent, deps = _build_coder_agent(
         workspace_root,
         task_plan,
+        model_settings=model_settings,
         role_specialization=role_specialization,
         tool_call_log=tool_log,
         baseline_paths=baseline_paths,
@@ -137,7 +143,7 @@ async def run_coder_loop(
             prompt,
             deps=deps,
             usage_limits=usage_limits,
-            model_settings=ModelSettings(temperature=0),
+            model_settings=model_settings,
         ) as run:
             async for _ in run:
                 if deps.early_exit_handoff:
@@ -176,6 +182,7 @@ async def run_coder_plan(
     prior_review_feedback: str = "",
     baseline_paths: frozenset[str] | None = None,
     deadline_epoch: float = 0.0,
+    attempt: int = 0,
 ) -> tuple[str, list[dict]]:
     """Run Coder across TaskPlan steps (fresh session per step when step mode enabled)."""
     settings = get_settings()
@@ -189,6 +196,7 @@ async def run_coder_plan(
             prior_review_feedback=prior_review_feedback,
             baseline_paths=baseline_paths,
             deadline_epoch=deadline_epoch,
+            attempt=attempt,
         )
 
     all_logs: list[dict] = []
@@ -217,6 +225,7 @@ async def run_coder_plan(
             max_turns=step_turns,
             baseline_paths=baseline_paths,
             deadline_epoch=deadline_epoch,
+            attempt=attempt,
         )
         all_logs.extend(step_log)
         remaining_turns = max(0, remaining_turns - step_turns)
@@ -232,6 +241,7 @@ async def run_coder_with_coverage(
     prior_review_feedback: str = "",
     baseline_paths: frozenset[str] | None = None,
     deadline_epoch: float = 0.0,
+    attempt: int = 0,
 ) -> tuple[str, list[dict], PlanCoverageResult, str, bool]:
     """Run step-aware Coder, then continuation rounds until coverage satisfied or cap hit."""
     settings = get_settings()
@@ -242,6 +252,7 @@ async def run_coder_with_coverage(
         prior_review_feedback=prior_review_feedback,
         baseline_paths=baseline_paths,
         deadline_epoch=deadline_epoch,
+        attempt=attempt,
     )
 
     coverage = validate_plan_coverage(
@@ -267,6 +278,7 @@ async def run_coder_with_coverage(
             max_turns=continuation_budget,
             baseline_paths=baseline_paths,
             deadline_epoch=deadline_epoch,
+            attempt=attempt,
         )
         raw_output = continuation_output
         tool_log.extend(continuation_log)
@@ -301,6 +313,7 @@ async def run_coder_with_coverage(
                     max_turns=continuation_budget,
                     baseline_paths=baseline_paths,
                     deadline_epoch=deadline_epoch,
+                    attempt=attempt,
                 )
                 raw_output = continuation_output
                 tool_log.extend(continuation_log)

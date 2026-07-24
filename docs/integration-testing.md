@@ -75,7 +75,7 @@ Optional:
 |----------|---------|
 | `JIRA_AC_FIELD` | Enables custom-field AC test in `test_jira_roundtrip.py` |
 | `HF_TOKEN` | Required for Tier 3 (vLLM model download) |
-| `MAX_PLAN_RETRIES` | Cap expensive replan retries (default `1`) |
+| `MAX_PLAN_RETRIES` | Cap expensive replan retries (default `2`) |
 
 Local paths (`SPRINT_WORKSPACE_BASE`, etc.) default to `$HOME/...` via `config.py` when omitted.
 
@@ -119,7 +119,7 @@ Requirements: Qdrant + embed sidecar (`./scripts/lane-ctl.sh start vector`), wor
 | Vector stack only | `vector_live` | `VECTOR_LIVE=1 pytest -m vector_live -q` | no vLLM |
 | Capability (per story) | `agent_capability` | `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/capability/ -m "vector_agent_live and agent_capability" -v` | yes (~30–40 min / story) |
 | Integration nightly | `agent_integration` + `nightly` | `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/integration/ -m "vector_agent_live and agent_integration and nightly" -v` | yes (~1–1.5h) |
-| Trap (adversarial) | `agent_trap` | `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m agent_trap -v` | yes (SOFT; `VECTOR_TRAP_STRICT=1` to hard-fail) |
+| Trap (adversarial) | `agent_trap` | `VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m agent_trap -v` | yes (STRICT — falling for a trap fails; `VECTOR_TRAP_SOFT=1` for report-only benchmark runs) |
 
 `from-prompt` integration backlog runs **2 stories** (queue + retry). Trap tier optionally runs full 3-story backlog including REST trap on `vector_repo`.
 
@@ -171,7 +171,7 @@ VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/capability/ -m "vector_a
 VECTOR_LIVE=1 pytest tests/vector_live/test_postcheck_contract.py -q   # ~15s preflight
 VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/integration/ -m "vector_agent_live and agent_integration and nightly" -v
 
-# Vector trap tier — adversarial (SOFT; set VECTOR_TRAP_STRICT=1 to hard-fail)
+# Vector trap tier — adversarial (STRICT by default; set VECTOR_TRAP_SOFT=1 for report-only)
 VECTOR_AGENT_LIVE=1 VLLM_LIVE=1 pytest tests/agent_live/trap/ -m "vector_agent_live and agent_trap" -v
 
 # Benchmark scorecard from JSON reports

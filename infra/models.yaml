@@ -23,7 +23,9 @@ lanes:
   coding:
     port: 8001
     base_url: http://127.0.0.1:8001/v1
-    # Laguna S 2.1 — 118B MoE / ~8.5B active, NVFP4 (GB10); thinking max via enable_thinking
+    # Laguna S 2.1 — 118B MoE / ~8.5B active, NVFP4 (GB10). Sampling pinned to Poolside
+    # spec T=0.7/top_p=0.95/top_k=20; thinking OFF by default, escalated per-request from
+    # coder attempt 2 (needs --reasoning-parser poolside_v1). See AGENTS.md 8.2/8.4.
     # Requires vLLM >= 0.25.1 with poolside_v1 (coder image override in docker-compose)
     model_id: poolside/Laguna-S-2.1-NVFP4
     served_name: laguna-s-2.1-nvfp4

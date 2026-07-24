@@ -71,9 +71,17 @@ services:
       - --enable-auto-tool-choice
       - --tool-call-parser
       - poolside_v1
-      # Thinking OFF (no --reasoning-parser) — see AGENTS.md 8.4.
+      # Reasoning parser loaded so per-request enable_thinking:true (coder attempt-based
+      # escalation) is stripped into reasoning_content before tool-call parsing.
+      # Server default stays thinking OFF; the app opts in per request. See AGENTS.md 8.4.
+      - --reasoning-parser
+      - poolside_v1
       - --default-chat-template-kwargs
       - '{"enable_thinking": false}'
+      # Pin Poolside eval-certified sampling — raw defaults degrade NVFP4 output when a
+      # client sends no sampling params (per vLLM recipe). App also sets these per request.
+      - --override-generation-config
+      - '{"temperature": 0.7, "top_p": 0.95, "top_k": 20}'
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 30s

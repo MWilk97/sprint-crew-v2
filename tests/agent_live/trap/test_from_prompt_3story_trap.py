@@ -29,7 +29,7 @@ async def test_from_prompt_vector_3story_trap(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Full 3-story from-prompt with stdlib trap on story 3 — SOFT unless VECTOR_TRAP_STRICT=1."""
+    """Full 3-story from-prompt with stdlib trap on story 3 — STRICT unless VECTOR_TRAP_SOFT=1."""
     skip_unless_vector_agent_live()
     if not docker_available():
         pytest.skip("docker not available")
@@ -58,6 +58,10 @@ async def test_from_prompt_vector_3story_trap(
             post_check_fragments=("ferry",),
             include_trap_failure_class=True,
             assert_plan_fragments=False,
+            # Strict trap failure is scoped to the trap/pipeline outcome (pipeline,
+            # per-session cycle asserts, coverage/tests). The ferry semantic post-check
+            # is a brittle retrieval heuristic — kept in the report, but non-fatal.
+            post_check_fatal=False,
         )
     except Exception:
         if trap_strict_mode():

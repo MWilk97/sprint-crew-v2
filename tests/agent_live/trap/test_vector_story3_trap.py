@@ -32,7 +32,7 @@ async def test_vector_story3_stdlib_shadow_trap(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SCRUM-3 on base vector_repo — stdlib platform shadow trap (SOFT by default)."""
+    """SCRUM-3 on base vector_repo — stdlib platform shadow trap (STRICT by default)."""
     skip_unless_vector_agent_live()
     if not docker_available():
         pytest.skip("docker not available")
