@@ -24,8 +24,13 @@ class SqliteJsonStore:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        # WAL + a busy timeout let SSE readers coexist with a writing run instead of
+        # hitting "database is locked"; check_same_thread=False because connections are
+        # opened per-operation and may be created off the event loop's thread.
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def _init_db(self) -> None:
