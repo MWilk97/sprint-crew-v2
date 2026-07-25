@@ -22,6 +22,8 @@ class SessionStatus(str, Enum):
     AWAITING_HUMAN = "awaiting_human"
     FAILED = "failed"
     APPROVED = "approved"
+    # Domain can represent cancel; wired by RunRegistry / hard-cancel (roadmap M5).
+    CANCELLED = "cancelled"
 
 
 class AgentEvent(BaseModel):
@@ -67,6 +69,8 @@ class BacklogRunStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    # Domain can represent cancel; wired by RunRegistry / hard-cancel (roadmap M5).
+    CANCELLED = "cancelled"
 
 
 class BacklogRun(BaseModel):

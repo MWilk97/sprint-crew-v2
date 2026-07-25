@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     max_plan_retries: int = Field(default=2, alias="MAX_PLAN_RETRIES")
     max_backlog_stories: int = Field(default=5, alias="MAX_BACKLOG_STORIES")
 
+    # Shared bearer for the console + /sprint API (LAN single-user). Empty ⇒ auth disabled
+    # so unit tests and smoke_cycle keep working without a header. GET /health is exempt.
+    console_api_token: str = Field(default="", alias="CONSOLE_API_TOKEN")
+    # Comma-separated browser origins for CORS (ADR 0011). Default "*" is DEV ONLY.
+    console_cors_origins: str = Field(default="*", alias="CONSOLE_CORS_ORIGINS")
+
     # Interpreter / clarify (ADR 0013). The console generates questions with an LLM; when
     # the Work lane is cold we fall back to the deterministic stub rather than making an
     # interactive caller wait out a lane load. Set autostart when latency does not matter.
@@ -82,10 +88,18 @@ class Settings(BaseSettings):
     coder_request_timeout_s: float = Field(default=600.0, alias="CODER_REQUEST_TIMEOUT_S")
     coder_thinking_timeout_s: float = Field(default=1800.0, alias="CODER_THINKING_TIMEOUT_S")
 
+    # Wall-clock caps on the two subprocess.run calls that previously ran unbounded
+    # (acceptance test commands, git). A hung child otherwise blocks the event loop forever.
+    acceptance_test_timeout_s: float = Field(default=900.0, alias="ACCEPTANCE_TEST_TIMEOUT_S")
+    git_timeout_s: float = Field(default=120.0, alias="GIT_TIMEOUT_S")
+
     workspace_base: Path = Field(
         default=Path.home() / "sprint-workspaces",
         alias="SPRINT_WORKSPACE_BASE",
     )
+    # Stopgap workspace GC: clones older than this are swept on the next prepare_workspace.
+    # TODO(M8): delete once the store-aware reaper lands (see roadmap milestone M8).
+    workspace_ttl_days: float = Field(default=14.0, alias="WORKSPACE_TTL_DAYS")
     checkpoint_db: Path = Field(
         default=Path.home() / ".sprint-crew" / "checkpoints.db",
         alias="SPRINT_CHECKPOINT_DB",
@@ -129,6 +143,10 @@ class Settings(BaseSettings):
     @property
     def project_root(self) -> Path:
         return Path(__file__).resolve().parents[2]
+
+    @property
+    def console_cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.console_cors_origins.split(",") if o.strip()]
 
 
 @lru_cache

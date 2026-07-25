@@ -11,6 +11,10 @@ from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
 from tests.helpers.agent_live_tickets import greeter_code_change, greeter_task_plan, greeter_ticket
 from tests.helpers.vector_ab import copy_fixture_workspace
 
+# A dummy bearer used across the suite so tests exercise the real auth gate without
+# ever touching the developer's real CONSOLE_API_TOKEN from .env. Not a secret.
+TEST_API_TOKEN = "test-console-token"
+
 
 def skip_unless_env(var: str, reason: str) -> None:
     if os.environ.get(var, "").strip() not in {"1", "true", "yes"}:
@@ -25,12 +29,23 @@ def isolate_unit_tests_from_services(
 
     CLARIFY_LLM_ENABLED matters here: console session creation would otherwise probe
     lane health over real HTTP and, on a GX10 box with the work lane up, call the model.
+
+    CONSOLE_API_TOKEN is pinned to a known test value (env var beats the .env file in
+    pydantic-settings) so the auth gate is on with a predictable token and the real
+    secret never leaks into the suite. test_api_auth overrides it per-case.
     """
     if request.node.get_closest_marker("agent_live"):
         return
     monkeypatch.setenv("VECTOR_INDEX_ENABLED", "false")
     monkeypatch.setenv("CLARIFY_LLM_ENABLED", "false")
+    monkeypatch.setenv("CONSOLE_API_TOKEN", TEST_API_TOKEN)
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def auth_headers() -> dict[str, str]:
+    """Authorization header carrying the pinned test bearer (see TEST_API_TOKEN)."""
+    return {"Authorization": f"Bearer {TEST_API_TOKEN}"}
 
 
 @pytest.fixture

@@ -124,13 +124,17 @@ def graph_run_mocks(satisfied_coder_result: tuple):
 
 
 @pytest.fixture
-def console_client():
-    """TestClient with a clean console store — the store is module-global state."""
+def console_client(auth_headers: dict[str, str]):
+    """TestClient with a clean console store — the store is module-global state.
+
+    Carries the test bearer so requests pass the auth gate (pinned by the autouse
+    isolate_unit_tests_from_services fixture).
+    """
     from fastapi.testclient import TestClient
 
     from sprint_crew.api import console as console_module
     from sprint_crew.api.app import app
 
     console_module.reset_console_store()
-    yield TestClient(app)
+    yield TestClient(app, headers=auth_headers)
     console_module.reset_console_store()

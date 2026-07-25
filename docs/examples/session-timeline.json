@@ -1,7 +1,8 @@
 {
   "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "ticket_key": "DEMO-42",
   "status": "awaiting_human",
+  "ticket_key": "DEMO-42",
+  "workspace_root": "/home/user/sprint-workspaces/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "branch": "feature/demo-42",
   "pr_url": "https://github.com/example-org/example-repo/pull/123",
   "events": [
@@ -9,31 +10,36 @@
       "timestamp": "2026-07-09T18:00:01Z",
       "agent": "tech_lead",
       "event_type": "plan_created",
+      "summary": "Planned greeter.py via the template fast path.",
       "detail": {"mode": "template", "files_to_touch": ["greeter.py"]}
     },
     {
       "timestamp": "2026-07-09T18:02:15Z",
       "agent": "coder",
       "event_type": "tool_call",
+      "summary": "Wrote greeter.py.",
       "detail": {"tool": "write_file", "path": "greeter.py"}
     },
     {
       "timestamp": "2026-07-09T18:05:30Z",
       "agent": "merge_gate",
       "event_type": "gate_result",
+      "summary": "Merge gate accepted: coverage satisfied and review passed.",
       "detail": {"accepted": true, "coverage_satisfied": true}
     },
     {
       "timestamp": "2026-07-09T18:05:45Z",
       "agent": "orchestrator",
-      "event_type": "pr_created",
+      "event_type": "shipped",
+      "summary": "Opened PR #123; awaiting human approval.",
       "detail": {"pr_url": "https://github.com/example-org/example-repo/pull/123"}
     }
   ],
   "review_outcome": {
+    "ticket_key": "DEMO-42",
     "passed": true,
-    "tests_passed": true,
     "summary": "Implementation matches acceptance criteria.",
-    "findings": []
+    "findings": [],
+    "tests_passed": true
   }
 }

@@ -258,6 +258,8 @@ def get_github_client(*, repo_slug: str | None = None) -> GitHubClient:
 def git_run(
     argv: list[str], *, cwd: Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
+    # timeout guards against a hung git (e.g. a network push) blocking the event loop
+    # forever; TimeoutExpired propagates so the caller fails loudly rather than silently.
     return subprocess.run(
         ["git", *argv],
         cwd=cwd,
@@ -265,6 +267,7 @@ def git_run(
         text=True,
         env=env or os.environ.copy(),
         check=False,
+        timeout=get_settings().git_timeout_s,
     )
 
 

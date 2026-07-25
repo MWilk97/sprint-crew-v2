@@ -297,6 +297,44 @@ def test_route_after_gate_no_deadline_when_zero(passing_review: ReviewOutcome) -
     assert route_after_gate(state) == "retry"  # type: ignore[arg-type]
 
 
+@pytest.mark.asyncio
+async def test_deadline_epoch_survives_graph_input_roundtrip() -> None:
+    """deadline_epoch must be a declared SprintState channel or LangGraph's input
+    mapping drops it, leaving _deadline_exceeded permanently False. The route_* tests
+    above pass hand-built dicts straight to the routing functions and so cannot catch
+    the drop — this exercises a real graph input round-trip.
+    """
+    from langgraph.graph import END, START, StateGraph
+
+    from sprint_crew.graph.pipeline import _deadline_exceeded
+    from sprint_crew.graph.state import SprintState
+
+    seen: dict = {}
+
+    def capture(state: SprintState) -> dict:
+        seen.update(state)
+        return {}
+
+    graph: StateGraph = StateGraph(SprintState)
+    graph.add_node("capture", capture)
+    graph.add_edge(START, "capture")
+    graph.add_edge("capture", END)
+    app = graph.compile()
+
+    await app.ainvoke(
+        {
+            "session_id": "deadline-roundtrip",
+            "workspace_root": "/tmp/does-not-matter",
+            "status": SessionStatus.RUNNING,
+            "events": [],
+            "deadline_epoch": time.time() - 60,
+        }
+    )
+
+    assert "deadline_epoch" in seen
+    assert _deadline_exceeded(seen) is True  # type: ignore[arg-type]
+
+
 def test_route_after_retry_routes_by_scope(passing_review: ReviewOutcome) -> None:
     code_state = {
         "retry_scope": "code",

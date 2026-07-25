@@ -29,17 +29,27 @@ from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionSta
 from sprint_crew.schemas.ticket import JiraTicket
 
 
-@pytest.mark.asyncio
-async def test_health_ok() -> None:
+@pytest.fixture
+async def api_client(auth_headers: dict[str, str]):
+    """Authenticated httpx client against the ASGI app (asyncio_mode=auto)."""
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/health")
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=auth_headers
+    ) as client:
+        yield client
+
+
+@pytest.mark.asyncio
+async def test_health_ok(api_client: AsyncClient) -> None:
+    resp = await api_client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
 
 @pytest.mark.asyncio
-async def test_get_sprint_session_found(api_db, sample_ticket: JiraTicket) -> None:
+async def test_get_sprint_session_found(
+    api_client: AsyncClient, api_db, sample_ticket: JiraTicket
+) -> None:
     session = SprintSession(
         session_id="session-abc",
         status=SessionStatus.RUNNING,
@@ -49,23 +59,19 @@ async def test_get_sprint_session_found(api_db, sample_ticket: JiraTicket) -> No
     )
     SessionStore(api_db).save(session)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/sprint/session/session-abc")
+    resp = await api_client.get("/sprint/session/session-abc")
     assert resp.status_code == 200
     assert resp.json()["session_id"] == "session-abc"
 
 
 @pytest.mark.asyncio
-async def test_get_sprint_session_not_found(api_db) -> None:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/sprint/session/missing")
+async def test_get_sprint_session_not_found(api_client: AsyncClient, api_db) -> None:
+    resp = await api_client.get("/sprint/session/missing")
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_get_backlog_run_found(api_db) -> None:
+async def test_get_backlog_run_found(api_client: AsyncClient, api_db) -> None:
     run = BacklogRun(
         run_id="run-abc",
         status=BacklogRunStatus.COMPLETED,
@@ -74,23 +80,21 @@ async def test_get_backlog_run_found(api_db) -> None:
     )
     BacklogRunStore(api_db).save(run)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/sprint/backlog/run-abc")
+    resp = await api_client.get("/sprint/backlog/run-abc")
     assert resp.status_code == 200
     assert resp.json()["run_id"] == "run-abc"
 
 
 @pytest.mark.asyncio
-async def test_get_backlog_run_not_found(api_db) -> None:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/sprint/backlog/missing")
+async def test_get_backlog_run_not_found(api_client: AsyncClient, api_db) -> None:
+    resp = await api_client.get("/sprint/backlog/missing")
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_approve_session_success(api_db, sample_ticket: JiraTicket) -> None:
+async def test_approve_session_success(
+    api_client: AsyncClient, api_db, sample_ticket: JiraTicket
+) -> None:
     session = SprintSession(
         session_id=f"approve-{uuid4().hex[:8]}",
         status=SessionStatus.AWAITING_HUMAN,
@@ -106,15 +110,15 @@ async def test_approve_session_success(api_db, sample_ticket: JiraTicket) -> Non
     )
     SessionStore(api_db).save(session)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(f"/sprint/session/{session.session_id}/approve")
+    resp = await api_client.post(f"/sprint/session/{session.session_id}/approve")
     assert resp.status_code == 200
     assert resp.json()["status"] == SessionStatus.APPROVED.value
 
 
 @pytest.mark.asyncio
-async def test_approve_session_bad_status(api_db, sample_ticket: JiraTicket) -> None:
+async def test_approve_session_bad_status(
+    api_client: AsyncClient, api_db, sample_ticket: JiraTicket
+) -> None:
     session = SprintSession(
         session_id="session-bad",
         status=SessionStatus.RUNNING,
@@ -124,17 +128,13 @@ async def test_approve_session_bad_status(api_db, sample_ticket: JiraTicket) -> 
     )
     SessionStore(api_db).save(session)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/sprint/session/session-bad/approve")
+    resp = await api_client.post("/sprint/session/session-bad/approve")
     assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_approve_session_not_found(api_db) -> None:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/sprint/session/missing/approve")
+async def test_approve_session_not_found(api_client: AsyncClient, api_db) -> None:
+    resp = await api_client.post("/sprint/session/missing/approve")
     assert resp.status_code == 404
 
 

@@ -4,6 +4,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
+from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.pytest_cmd import normalize_test_command
 from sprint_crew.tools.run_command import ALLOWED_COMMANDS
 
@@ -105,21 +106,30 @@ def validate_acceptance_tests(commands: list[str]) -> list[str]:
 
 
 def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[str, bool]:
+    timeout_s = get_settings().acceptance_test_timeout_s
     lines: list[str] = []
     all_passed = True
     for cmd in commands:
         normalized = normalize_test_command(cmd, workspace_root)
-        proc = subprocess.run(
-            normalized,
-            shell=True,
-            cwd=workspace_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        lines.append(f"$ {normalized}")
+        try:
+            proc = subprocess.run(
+                normalized,
+                shell=True,
+                cwd=workspace_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            # A hung command is a failed acceptance test, not a crashed run.
+            all_passed = False
+            lines.append(f"timed out after {timeout_s:.0f}s")
+            lines.append("")
+            continue
         passed = proc.returncode == 0
         all_passed = all_passed and passed
-        lines.append(f"$ {normalized}")
         lines.append(f"exit_code={proc.returncode}")
         if proc.stdout.strip():
             lines.append(proc.stdout.strip()[-2000:])

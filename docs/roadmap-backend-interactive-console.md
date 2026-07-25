@@ -115,6 +115,11 @@ Legend: **FE →** marks a front-end consequence for the other roadmap.
 
 ### M0 — Contract hygiene, auth, and the four latent bugs
 
+**Status (2026-07-25):** Partially landed before this milestone — `deadline_epoch` channel + round-trip
+test, subprocess timeouts, SQLite WAL, and timeline example validation were already in tree. Remaining
+M0 work is auth, `cancelled` enums, CORS→Settings, and contract hygiene. Wall-clock `max_wall_seconds`
+wiring deferred by choice (guards stay opt-in / off until a later session).
+
 **Goal.** Make the published contract true, put a token in front of the API, and kill the bugs that will
 otherwise be misdiagnosed as streaming bugs later.
 
@@ -375,7 +380,7 @@ time; codebase chat needs an index that is not thrown away. Today the workspace 
 - **Re-key Qdrant collections from session to repo.** `collection_name(session_id)` (`vector/store.py:23`) becomes `collection_name(repo_key, git_sha)` where `repo_key` is a sanitised hash of the repo URL. Stop deleting collections after runs; keep an LRU cap (`VECTOR_MAX_COLLECTIONS`, default 10) instead.
 - **Make reindexing incremental.** Today it is all-or-nothing on `HEAD` (`indexer.py:52-66`): if the sha matches it skips entirely, otherwise it deletes and rebuilds everything. Two consequences: uncommitted working-tree edits never refresh the index (so it goes stale *during* a Coder run), and a one-line commit costs a full rebuild. Add per-file content hashing so only changed chunks are re-embedded, and add a `reindex_dirty_files()` call after `codeImplement`.
 - Index at session create, not at run start. Emit `index_progress` events — first-time indexing of a real repo is slow (60 chunks on the fixture; a real repo is thousands) and the embed sidecar loads its model lazily on first request (`infra/embed-sidecar/app.py:42-47`).
-- The reaper from M1 must now also delete the workspace directory — and this is where the workspace GC debt (`session.py:67`) finally gets paid.
+- The reaper from M1 must now also delete the workspace directory — and this is where the workspace GC debt (`session.py:67`) finally gets paid. **Delete the interim stopgap when this lands:** the bug-fix session added an age-based `collect_stale_workspaces()` (`orchestrator/session.py`, `WORKSPACE_TTL_DAYS`) called from `prepare_workspace`; remove that function, its call site, its setting, and its test once the store-aware reaper here supersedes it.
 
 **Done when.** Creating two sessions against the same `repo_url` reuses one Qdrant collection and the second
 session's index step completes in <2 s. `semantic_search` returns hits before any run is started. A commit
@@ -572,7 +577,7 @@ Consolidated for the front-end roadmap session. Ordered by milestone; `†` mark
 
 | # | From | Change | Kind |
 |---|---|---|---|
-| 1 | M0 | `Authorization: Bearer <token>` required on every request | † auth |
+| 1 | M0 | `Authorization: Bearer <token>` required on `/v1/console/*` and `/sprint/*` (`GET /health` exempt) | † auth |
 | 2 | M0 | `cancelled` added to `SessionStatus` and `BacklogRunStatus` | additive enum |
 | 3 | M0 | OpenAPI corrected; `ConsoleSession.required` tightened (optional→required flips) | † codegen |
 | 4 | M0 | `session-timeline.json` reference example now actually validates | fix |

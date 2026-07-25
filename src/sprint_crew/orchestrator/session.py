@@ -55,6 +55,34 @@ def session_store() -> SessionStore:
     return SessionStore(get_settings().session_db)
 
 
+def collect_stale_workspaces(*, keep: str | None = None) -> list[str]:
+    """Stopgap GC: delete workspace clones older than ``WORKSPACE_TTL_DAYS``.
+
+    Age-based on directory mtime so an in-flight workspace (recently written) is never
+    removed; ``keep`` protects the session about to be (re)created. This exists only
+    because workspaces are otherwise never collected.
+
+    TODO(M8): delete this and its call site once the store-aware reaper lands.
+    """
+    settings = get_settings()
+    base = settings.workspace_base
+    if not base.exists():
+        return []
+    cutoff = time.time() - settings.workspace_ttl_days * 86400.0
+    removed: list[str] = []
+    for child in base.iterdir():
+        if not child.is_dir() or (keep is not None and child.name == keep):
+            continue
+        try:
+            if child.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(child)
+        except OSError:
+            continue
+        removed.append(child.name)
+    return removed
+
+
 def prepare_workspace(
     session_id: str,
     source: Path | None = None,
@@ -62,6 +90,7 @@ def prepare_workspace(
     repo_url: str | None = None,
 ) -> Path:
     settings = get_settings()
+    collect_stale_workspaces(keep=session_id)
     dest = settings.workspace_base / session_id
     if dest.exists():
         shutil.rmtree(dest)
