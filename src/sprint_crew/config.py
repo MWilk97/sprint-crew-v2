@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     max_plan_retries: int = Field(default=2, alias="MAX_PLAN_RETRIES")
     max_backlog_stories: int = Field(default=5, alias="MAX_BACKLOG_STORIES")
 
+    # Shared bearer for the console + /sprint API (LAN single-user). Empty ⇒ auth disabled
+    # so unit tests and smoke_cycle keep working without a header. GET /health is exempt.
+    console_api_token: str = Field(default="", alias="CONSOLE_API_TOKEN")
+    # Comma-separated browser origins for CORS (ADR 0011). Default "*" is DEV ONLY.
+    console_cors_origins: str = Field(default="*", alias="CONSOLE_CORS_ORIGINS")
+
     # Interpreter / clarify (ADR 0013). The console generates questions with an LLM; when
     # the Work lane is cold we fall back to the deterministic stub rather than making an
     # interactive caller wait out a lane load. Set autostart when latency does not matter.
@@ -129,6 +135,10 @@ class Settings(BaseSettings):
     @property
     def project_root(self) -> Path:
         return Path(__file__).resolve().parents[2]
+
+    @property
+    def console_cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.console_cors_origins.split(",") if o.strip()]
 
 
 @lru_cache

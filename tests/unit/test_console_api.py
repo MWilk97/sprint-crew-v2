@@ -31,8 +31,8 @@ def fresh_console_store():
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def client(auth_headers: dict[str, str]) -> TestClient:
+    return TestClient(app, headers=auth_headers)
 
 
 def _create(client: TestClient, mode: str = "plan", prompt: str | None = "Add a hello() helper"):

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from sprint_crew.agents.scrum_master import run_scrum_master
+from sprint_crew.api.auth import require_token
 from sprint_crew.api.console import router as console_router
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_health, stop_lane
@@ -27,20 +27,20 @@ from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionSta
 
 app = FastAPI(title="Sprint Crew API", version="0.1.0")
 
-# CORS for the browser console (separate repo/origin, ADR 0011). Origins are
-# comma-separated in CONSOLE_CORS_ORIGINS; default "*" suits local dev. Auth is
-# TBD, so no credentials are allowed (incompatible with a "*" wildcard anyway).
-_cors_origins = [
-    o.strip() for o in os.environ.get("CONSOLE_CORS_ORIGINS", "*").split(",") if o.strip()
-]
+# CORS for the browser console (separate repo/origin, ADR 0011). Origins come from
+# Settings.CONSOLE_CORS_ORIGINS; default "*" suits local dev. Auth is a shared bearer
+# (CONSOLE_API_TOKEN); credentials stay off — Bearer rides in Authorization, not cookies.
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
+    allow_origins=_settings.console_cors_origin_list,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.include_router(console_router)
+
+sprint_router = APIRouter(prefix="/sprint", tags=["sprint"], dependencies=[Depends(require_token)])
 
 
 class FromPromptRequest(BaseModel):
@@ -59,6 +59,17 @@ class SessionCreatedResponse(BaseModel):
 
 class BacklogRunCreatedResponse(BaseModel):
     run_id: str
+
+
+@app.get("/")
+async def root() -> dict[str, str]:
+    """Friendly landing for browsers / FE base-URL checks (API has no HTML UI)."""
+    return {
+        "service": "sprint-crew",
+        "docs": "/docs",
+        "health": "/health",
+        "console": "/v1/console/sessions",
+    }
 
 
 @app.get("/health")
@@ -113,7 +124,7 @@ async def start_from_prompt_run(
     return run_id
 
 
-@app.post("/sprint/from-prompt", response_model=BacklogRunCreatedResponse)
+@sprint_router.post("/from-prompt", response_model=BacklogRunCreatedResponse)
 async def sprint_from_prompt(
     body: FromPromptRequest, background_tasks: BackgroundTasks
 ) -> BacklogRunCreatedResponse:
@@ -121,7 +132,7 @@ async def sprint_from_prompt(
     return BacklogRunCreatedResponse(run_id=run_id)
 
 
-@app.post("/sprint/from-ticket", response_model=SessionCreatedResponse)
+@sprint_router.post("/from-ticket", response_model=SessionCreatedResponse)
 async def sprint_from_ticket(
     body: FromTicketRequest, background_tasks: BackgroundTasks
 ) -> SessionCreatedResponse:
@@ -150,7 +161,7 @@ async def sprint_from_ticket(
     return SessionCreatedResponse(session_id=session_id)
 
 
-@app.get("/sprint/backlog/{run_id}", response_model=BacklogRun)
+@sprint_router.get("/backlog/{run_id}", response_model=BacklogRun)
 async def get_backlog(run_id: str) -> BacklogRun:
     run = get_backlog_run(run_id)
     if run is None:
@@ -158,7 +169,7 @@ async def get_backlog(run_id: str) -> BacklogRun:
     return run
 
 
-@app.get("/sprint/session/{session_id}", response_model=SprintSession)
+@sprint_router.get("/session/{session_id}", response_model=SprintSession)
 async def get_sprint_session(session_id: str) -> SprintSession:
     session = get_session(session_id)
     if session is None:
@@ -166,7 +177,7 @@ async def get_sprint_session(session_id: str) -> SprintSession:
     return session
 
 
-@app.post("/sprint/session/{session_id}/approve", response_model=SprintSession)
+@sprint_router.post("/session/{session_id}/approve", response_model=SprintSession)
 async def approve_sprint_session(session_id: str) -> SprintSession:
     try:
         return approve_session(session_id)
@@ -174,3 +185,6 @@ async def approve_sprint_session(session_id: str) -> SprintSession:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+app.include_router(sprint_router)

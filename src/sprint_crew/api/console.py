@@ -22,9 +22,10 @@ import threading
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from sprint_crew.agents.interpreter import run_interpreter, to_clarify_questions
+from sprint_crew.api.auth import require_token
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_status
 from sprint_crew.orchestrator.backlog import get_backlog_run
@@ -50,7 +51,11 @@ from sprint_crew.schemas.session import BacklogRunStatus
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/console", tags=["console"])
+router = APIRouter(
+    prefix="/v1/console",
+    tags=["console"],
+    dependencies=[Depends(require_token)],
+)
 
 _TERMINAL_STATUSES = frozenset(
     {
