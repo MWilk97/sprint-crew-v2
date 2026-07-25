@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 from tests.helpers.agent_live_tickets import greeter_task_plan
 
@@ -51,3 +55,14 @@ def test_run_acceptance_tests_red_when_tests_fail(tmp_workspace) -> None:
     output, passed = run_acceptance_tests(tmp_workspace, plan.acceptance_tests)
     assert passed is False
     assert "exit_code=" in output
+
+
+def test_run_acceptance_tests_marks_timeout_as_failure(tmp_path: Path) -> None:
+    # A hung acceptance command must count as a failed test, not crash the run.
+    with patch(
+        "sprint_crew.orchestrator.acceptance_tests.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="pytest -q", timeout=900),
+    ):
+        output, passed = run_acceptance_tests(tmp_path, ["pytest -q"])
+    assert passed is False
+    assert "timed out" in output
