@@ -13,6 +13,7 @@ from sprint_crew.config import get_settings
 from sprint_crew.graph.pipeline import run_sprint_cycle
 from sprint_crew.graph.state import SprintState
 from sprint_crew.integrations.jira_client import default_git_env
+from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.orchestrator.store import SqliteJsonStore
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
 from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession
@@ -204,6 +205,7 @@ async def create_and_run_cycle(
     use_real_ship: bool = False,
     max_wall_seconds: float | None = None,
     backlog_run_id: str | None = None,
+    console_session_id: str | None = None,
     initial_events: list[AgentEvent] | None = None,
 ) -> SprintSession:
     sid = session_id or str(uuid4())
@@ -216,11 +218,20 @@ async def create_and_run_cycle(
         selected_ticket=ticket,
         user_prompt=user_prompt,
         backlog_run_id=backlog_run_id,
+        console_session_id=console_session_id,
         events=list(initial_events or []),
     )
     initial_events_snapshot = list(session.events)
     store = session_store()
     store.save(session)
+    # M2 timeline: mirror events into the console-scoped append-only log. ``seq`` is
+    # monotonic per console session across every sprint session it spawns. Only the
+    # per-node delta is appended each tick — on_node_complete hands us the full
+    # accumulated list, so we slice past what we already logged.
+    log = event_log() if console_session_id else None
+    if log is not None and initial_events_snapshot:
+        log.append_many(console_session_id, sid, initial_events_snapshot)
+    logged_event_count = len(initial_events_snapshot)
 
     deadline_epoch = (
         time.time() + max_wall_seconds
@@ -234,9 +245,14 @@ async def create_and_run_cycle(
     )
 
     async def _persist_progress(partial: dict[str, Any]) -> None:
-        nonlocal session
+        nonlocal session, logged_event_count
         session = _session_from_state(partial, session, initial_events=initial_events_snapshot)
         store.save(session)
+        if log is not None:
+            new_events = session.events[logged_event_count:]
+            if new_events:
+                log.append_many(console_session_id, sid, new_events)
+                logged_event_count += len(new_events)
 
     try:
         final_state = await run_sprint_cycle(state, on_node_complete=_persist_progress)

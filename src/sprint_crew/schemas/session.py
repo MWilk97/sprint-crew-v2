@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
-from typing import Any
+from enum import Enum, StrEnum
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,6 +26,39 @@ class SessionStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class EventType(StrEnum):
+    """Closed vocabulary for ``AgentEvent.event_type`` (roadmap M2).
+
+    The wire type stays ``str`` so an unknown future value from a newer backend
+    degrades to "render generically" on the client instead of a 422. This enum is
+    the source of truth for emitters and is grep-enforced by a unit test: every
+    ``event_type`` string emitted in ``src/`` must be a member here.
+    """
+
+    SESSION_STARTED = "session_started"
+    VECTOR_INDEXED = "vector_indexed"
+    VECTOR_INDEX_SKIPPED = "vector_index_skipped"
+    PRE_SEARCH = "pre_search"
+    PLAN_CREATED = "plan_created"
+    PLAN_ABORTED = "plan_aborted"
+    TOOL_CALL = "tool_call"
+    CODE_CHANGE = "code_change"
+    PLAN_COVERAGE_INCOMPLETE = "plan_coverage_incomplete"
+    SKIPPED = "skipped"
+    TESTS_ADDED = "tests_added"
+    REVIEW_COMPLETE = "review_complete"
+    GATE_RESULT = "gate_result"
+    RETRY_PREPARED = "retry_prepared"
+    AWAITING_HUMAN = "awaiting_human"
+    FAILED = "failed"
+    SHIPPED = "shipped"
+    SHIPPED_STUB = "shipped_stub"
+    APPROVED = "approved"
+
+
+EventLevel = Literal["debug", "info", "warning", "error"]
+
+
 class AgentEvent(BaseModel):
     model_config = _STRICT
 
@@ -34,6 +67,12 @@ class AgentEvent(BaseModel):
     event_type: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)
     detail: dict[str, Any] | None = None
+    # M2 cursor/timeline fields. ``seq`` is stamped by the EventLog at append time
+    # (an in-graph event cannot know its console-scoped sequence at construction),
+    # so it is None on events living only inside SprintState / SprintSession.
+    seq: int | None = None
+    phase: str | None = None
+    level: EventLevel = "info"
 
 
 def agent_event(agent: str, event_type: str, summary: str, **detail: Any) -> AgentEvent:
@@ -57,6 +96,9 @@ class SprintSession(BaseModel):
     jira_url: str | None = None
     user_prompt: str | None = None
     backlog_run_id: str | None = None
+    # Set when this sprint run was started from a console session (roadmap M2);
+    # the events table joins on it so the console can serve one merged timeline.
+    console_session_id: str | None = None
     events: list[AgentEvent] = Field(default_factory=list)
     error: str | None = None
     attempt: int = Field(default=0, ge=0)

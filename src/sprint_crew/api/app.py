@@ -98,7 +98,10 @@ async def health() -> dict[str, object]:
 
 
 async def start_from_prompt_run(
-    prompt: str, repo_url: str | None, background_tasks: BackgroundTasks
+    prompt: str,
+    repo_url: str | None,
+    background_tasks: BackgroundTasks,
+    console_session_id: str | None = None,
 ) -> str:
     """From-prompt orchestration shared by /sprint/from-prompt and console code-mode start."""
     settings = get_settings()
@@ -140,6 +143,7 @@ async def start_from_prompt_run(
         user_prompt=prompt,
         repo_url=repo_url,
         use_real_ship=not settings.use_mock_integrations,
+        console_session_id=console_session_id,
     )
     return run_id
 

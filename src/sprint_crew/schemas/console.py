@@ -13,6 +13,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from sprint_crew.schemas.session import AgentEvent
+
 _STRICT = ConfigDict(extra="forbid")
 
 
@@ -169,3 +171,19 @@ class ConsoleSession(BaseModel):
     error: str | None = None
     created_at: str = Field(default_factory=_utc_now_iso)
     updated_at: str = Field(default_factory=_utc_now_iso)
+
+
+class ConsoleEventsPage(BaseModel):
+    """A page of the console-session timeline (roadmap M2).
+
+    Served by polling ``GET /v1/console/sessions/{id}/events?since=&limit=``. ``seq``
+    is monotonic across every sprint session the console run spawned; poll again with
+    ``since=next_seq`` for the next page. ``complete`` is true once the console session
+    reaches a terminal status, so a client knows no more events will arrive.
+    """
+
+    model_config = _STRICT
+
+    events: list[AgentEvent] = Field(default_factory=list)
+    next_seq: int = 0
+    complete: bool = False
