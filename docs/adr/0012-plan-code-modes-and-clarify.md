@@ -23,6 +23,8 @@ Two user-facing modes:
 
 Before any sprint run in either mode, a **clarify** step presents suggested options (scope, target files, test expectations) and accepts a user-custom answer. The run starts only after an **explicit confirmation** from the user.
 
+How those questions are produced is decided separately: [ADR 0013](0013-interpreter-clarify.md) replaced the original deterministic stub with the LLM Interpreter. The confirmation gate below is unchanged by that.
+
 ## Consequences
 
 - No sprint run starts from a raw prompt alone; confirmation is mandatory

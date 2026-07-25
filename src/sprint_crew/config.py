@@ -25,6 +25,7 @@ class LaneConfig(BaseModel):
     max_model_len: int = 8192
     gpu_memory_utilization: float = 0.28
     is_moe: bool = False
+    supports_vision: bool = False
     request_limit_multiplier: float = 1.0
 
 
@@ -47,6 +48,21 @@ class Settings(BaseSettings):
     max_review_retries: int = Field(default=4, alias="MAX_REVIEW_RETRIES")
     max_plan_retries: int = Field(default=2, alias="MAX_PLAN_RETRIES")
     max_backlog_stories: int = Field(default=5, alias="MAX_BACKLOG_STORIES")
+
+    # Interpreter / clarify (ADR 0013). The console generates questions with an LLM; when
+    # the Work lane is cold we fall back to the deterministic stub rather than making an
+    # interactive caller wait out a lane load. Set autostart when latency does not matter.
+    clarify_llm_enabled: bool = Field(default=True, alias="CLARIFY_LLM_ENABLED")
+    clarify_autostart_lane: bool = Field(default=False, alias="CLARIFY_AUTOSTART_LANE")
+    max_clarify_questions: int = Field(default=4, alias="MAX_CLARIFY_QUESTIONS")
+    interpreter_timeout_s: float = Field(default=120.0, alias="INTERPRETER_TIMEOUT_S")
+    # Qwen3.6 has hybrid thinking on by default. Clarify is interactive, so the reasoning
+    # trace is paid for while a human waits — see docs/model-evaluation.md probe E. Turning
+    # it on needs the longer deadline too: measured 177s, over the interactive timeout.
+    interpreter_thinking_enabled: bool = Field(default=False, alias="INTERPRETER_THINKING_ENABLED")
+    interpreter_thinking_timeout_s: float = Field(
+        default=600.0, alias="INTERPRETER_THINKING_TIMEOUT_S"
+    )
 
     # Coder (Laguna S 2.1) sampling — Poolside-recommended defaults. The NVFP4
     # quant degrades on raw/unset sampling, so we always pin these (T=0.7, top_p

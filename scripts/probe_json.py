@@ -10,14 +10,18 @@ import sys
 
 from openai import OpenAI
 
+from sprint_crew.config import Role, lane_for_role
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.ticket import TaskPlan
 
+# Read the lane from models.yaml so a model swap does not strand the probes.
+_WORK = lane_for_role(Role.WORK)
+
 LANES = {
-    "work": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking", TaskPlan),
-    "work-review": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking", ReviewOutcome),
-    "backlog": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking", BacklogPlan),
+    "work": (_WORK.base_url, _WORK.served_name, TaskPlan),
+    "work-review": (_WORK.base_url, _WORK.served_name, ReviewOutcome),
+    "backlog": (_WORK.base_url, _WORK.served_name, BacklogPlan),
 }
 
 WORK_PROMPT = """Produce a TaskPlan JSON for ticket DEMO-1.

@@ -5,7 +5,9 @@
 Implementation status / MVP limitations:
 
 - Sessions are held in a **process-local in-memory store**: they do not survive an API restart and are not shared across workers (single-worker assumption).
-- **Clarify is a deterministic stub** — 2–3 fixed questions (scope, tests, and API compatibility when the prompt mentions an API/endpoint/route), lightly derived from the prompt text, no LLM call. All stub questions set `allow_custom: true`.
+- **Clarify questions are model-generated** by the Interpreter on the Work lane ([ADR 0013](../adr/0013-interpreter-clarify.md)). Question count and wording vary by request; `clarify_questions` may legitimately be **empty**, in which case the session opens directly in `ready`. Clients must not assume a fixed set of `question_id`s.
+- **Fallback:** when the Work lane is cold or the Interpreter call fails, the backend serves the older deterministic questions instead (`q-scope`, `q-tests`, and `q-compat` when the prompt mentions an API/endpoint/route). These have `recommended_suggestion_id: null` and `why_asked: null`, which is how a client can tell the two apart. Clarify never fails the request.
+- **Attachments (files/images) are not implemented yet.** The Interpreter model is multimodal and the endpoints are designed in ADR 0013, but no attachment routes exist in this contract version.
 - `POST /start` with `mode=code` reuses the same orchestration as `POST /sprint/from-prompt` (which remains unchanged for direct callers); the clarify answers are appended to the prompt.
 - `POST /cancel` on a `running` code-mode session marks the console session `cancelled` but does **not** stop the already-dispatched backlog run (no kill support today).
 - Progress mirroring: `GET /sessions/{id}` refreshes a running code-mode session from the backlog run (`sprint_ref.sprint_session_ids`, completed/failed status); clients may also poll `GET /sprint/backlog/{run_id}` directly.
@@ -21,7 +23,8 @@ Notes:
 ```mermaid
 stateDiagram-v2
   [*] --> collecting: POST /sessions
-  collecting --> clarifying: backend emits clarify questions
+  collecting --> clarifying: Interpreter emits clarify questions
+  collecting --> ready: Interpreter has no questions
   clarifying --> ready: all questions answered
   ready --> running: POST /start (after confirm)
   running --> completed
@@ -32,23 +35,48 @@ stateDiagram-v2
   running --> cancelled: POST /cancel
 ```
 
-Statuses: `collecting | clarifying | ready | running | completed | failed | cancelled`. Confirmation is a separate boolean (`confirmed`) set by `POST /confirm` while `ready`; `POST /start` is rejected until `status == "ready"` and `confirmed == true`. Per [ADR 0012](../adr/0012-plan-code-modes-and-clarify.md), no sprint run ever starts from a raw prompt alone.
+Statuses: `collecting | clarifying | ready | running | completed | failed | cancelled`. A session can reach `ready` without ever passing through `clarifying` — clients must drive off `status`, not off having seen questions. Confirmation is a separate boolean (`confirmed`) set by `POST /confirm` while `ready`; `POST /start` is rejected until `status == "ready"` and `confirmed == true`. Per [ADR 0012](../adr/0012-plan-code-modes-and-clarify.md), no sprint run ever starts from a raw prompt alone.
 
 Modes: `plan` (analysis/backlog preview only — never ships, no branch/PR) and `code` (after start, maps to today's ship-to-PR pipeline ending at `awaiting_human` per ADR 0010).
 
 ## Shared shapes
 
-`ClarifyQuestion` — one open point the backend wants settled before a run:
+`ClarifyQuestion` — one open point the backend wants settled before a run. `recommended_suggestion_id` is the answer the backend would pick if the user said "just decide"; a client may render it preselected and let the user accept everything in one action. `why_asked` names the ambiguity that prompted the question. Both are null on fallback questions.
 
 ```json
 {
-  "question_id": "q-scope",
-  "text": "Which part of the repo should change?",
+  "question_id": "q-1",
+  "text": "Should /metrics require authentication?",
+  "why_asked": "The service has no auth layer today and metrics are usually scraped anonymously",
   "suggestions": [
-    {"suggestion_id": "s-api", "label": "API layer only", "detail": "src/sprint_crew/api"},
-    {"suggestion_id": "s-full", "label": "API + orchestrator", "detail": null}
+    {
+      "suggestion_id": "s-1-1",
+      "label": "No auth",
+      "detail": "src/sprint_crew/api/app.py",
+      "rationale": "matches Prometheus scraper defaults; no new wiring"
+    },
+    {
+      "suggestion_id": "s-1-2",
+      "label": "Reuse the existing API auth",
+      "detail": null,
+      "rationale": "safer if the endpoint is public, but pulls auth into a new module"
+    }
   ],
-  "allow_custom": true
+  "allow_custom": true,
+  "recommended_suggestion_id": "s-1-1"
+}
+```
+
+Question and suggestion ids are assigned by the backend (`q-<n>`, `s-<n>-<m>`) and are stable **within a session** only. `recommended_suggestion_id`, when non-null, always matches one of the listed `suggestion_id`s.
+
+`IntentSummary` — what the Interpreter understood, echoed back so the user can correct it before confirming. Null when the fallback path produced the questions:
+
+```json
+{
+  "restated_goal": "Add a /metrics endpoint exposing per-route request counters",
+  "assumptions": ["Prometheus text format", "no persistence between restarts"],
+  "unknowns": ["authentication"],
+  "confidence": 0.7
 }
 ```
 
@@ -79,7 +107,7 @@ Create a console session. Request:
 }
 ```
 
-Response `201` — full session object, `status: "collecting"` (or `"clarifying"` if the backend already produced questions from `initial_prompt`):
+Response `201` — full session object. With no `initial_prompt` the status is `collecting`. With one, the backend runs the Interpreter immediately and returns either `clarifying` (questions to answer, `intent` populated) or `ready` (nothing ambiguous — still requires `POST /confirm` before `/start`):
 
 ```json
 {
@@ -92,6 +120,7 @@ Response `201` — full session object, `status: "collecting"` (or `"clarifying"
   "messages": [
     {"role": "user", "content": "Add a /metrics endpoint with request counters", "timestamp": "2026-07-16T09:00:00+00:00"}
   ],
+  "intent": null,
   "clarify_questions": [],
   "clarify_answers": [],
   "sprint_ref": null,

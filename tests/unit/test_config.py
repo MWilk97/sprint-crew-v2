@@ -17,10 +17,12 @@ def test_lane_for_role_coding() -> None:
 
 def test_lane_for_role_work() -> None:
     lane = lane_for_role(Role.WORK)
-    assert lane.served_name == "qwen3-30b-a3b-thinking"
+    assert lane.served_name == "qwen3.6-35b-a3b-nvfp4"
     assert "8002" in lane.base_url
     assert lane.max_model_len == 131072
-    assert lane.gpu_memory_utilization == 0.50
+    assert lane.gpu_memory_utilization == 0.65
+    # The Interpreter sends images on this lane; downstream roles stay text-only (ADR 0013).
+    assert lane.supports_vision is True
 
 
 def test_vllm_work_url_accepts_legacy_planner_env(monkeypatch: pytest.MonkeyPatch) -> None:

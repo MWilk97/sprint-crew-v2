@@ -43,7 +43,13 @@ def structured_completion(
     timeout_seconds: float = 600,
     max_retries: int = _MAX_RETRIES,
     max_tokens: int | None = None,
+    extra_body: dict[str, object] | None = None,
 ) -> T:
+    """Structured JSON completion with schema-guided decoding and repair retries.
+
+    ``extra_body`` reaches vLLM verbatim — used to carry ``chat_template_kwargs`` such as
+    ``enable_thinking`` for models whose template gates reasoning on it.
+    """
     lane = lane_for_role(role)
     client = _client(lane.base_url, timeout_seconds)
     schema = output_type.model_json_schema()
@@ -73,6 +79,8 @@ def structured_completion(
         }
         if max_tokens is not None:
             create_kwargs["max_tokens"] = max_tokens
+        if extra_body:
+            create_kwargs["extra_body"] = extra_body
 
         resp = client.chat.completions.create(**create_kwargs)
         raw = resp.choices[0].message.content or ""

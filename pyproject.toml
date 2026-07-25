@@ -52,8 +52,9 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = ["--strict-markers"]
 markers = [
-    # Name is load-bearing: tests/conftest.py::disable_vector_index_for_unit_tests keys on it
-    # to decide whether to force VECTOR_INDEX_ENABLED=false. Rename both together.
+    # Name is load-bearing: tests/conftest.py::isolate_unit_tests_from_services keys on it
+    # to decide whether to force VECTOR_INDEX_ENABLED / CLARIFY_LLM_ENABLED false.
+    # Rename both together.
     "agent_live: opt-in e2e gate against real vLLM lanes (VECTOR_AGENT_LIVE=1 VLLM_LIVE=1)",
 ]
 timeout = 1200

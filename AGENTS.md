@@ -26,7 +26,8 @@ in [`docs/README.md`](docs/README.md).
 ## 4. Architecture (v2)
 
 - **Single pipeline:** LangGraph `build_sprint_graph` / `run_sprint_cycle` is the only sprint-cycle engine (from-ticket and backlog). [`batch_cycle.py`](src/sprint_crew/orchestrator/batch_cycle.py) is a thin Jira/workspace orchestrator that calls `create_and_run_cycle` per ticket (no dual CrewAI flows).
-- **Inference:** two vLLM lanes — Coder :8001, Work :8002 (Work hosts ScrumMaster prep, TechLead, Formatter, and Reviewer; the separate Nemotron prep lane was merged into Work).
+- **Inference:** two vLLM lanes — Coder :8001, Work :8002 (Work hosts Interpreter clarify, ScrumMaster prep, TechLead, Formatter, and Reviewer; the separate Nemotron prep lane was merged into Work).
+- **Multimodal boundary:** the Work model (Qwen3.6) accepts images, but **only the Interpreter may send them** ([ADR 0013](docs/adr/0013-interpreter-clarify.md)). Every other role is text-only and consumes the Interpreter's derived text. Do not add image content parts to ScrumMaster, TechLead, Coder, Tester, or Reviewer prompts.
 - **Lane lifecycle:** do not keep all lanes loaded 24/7 on 128 GB unified memory; start lanes on demand.
 
 ### 4.1 GX10 unified memory (128 GB)
@@ -35,7 +36,7 @@ in [`docs/README.md`](docs/README.md).
 - **from-prompt API:** ScrumMaster prep runs on Work lane in [`src/sprint_crew/api/app.py`](src/sprint_crew/api/app.py) before backlog orchestration (BacklogPlan → Jira tickets).
 - **Per-ticket LangGraph cycle:** `techLeadPlan` → `codeImplement` → `testImplement` (when required) → `review` → merge gate → ship; lane swaps: Work → Coder → Work within each cycle.
 - `smoke_cycle` / API: do **not** call `lane-ctl start all` before a cycle (optional `--preflight-lanes` starts coder only).
-- Target `gpu_memory_utilization` per lane (one lane loaded at a time) — **per-lane tuning** on GX10/GB10 ([`infra/models.yaml`](infra/models.yaml)), NVFP4 weights: coding **0.85** (~46 GB weights, 131k+ context), work **0.50** (~20 GB weights, 131k context). NVFP4 MoE on GB10 (sm121) needs Marlin GEMM env flags (`VLLM_NVFP4_GEMM_BACKEND=marlin`) — see [`infra/docker-compose.yml`](infra/docker-compose.yml); 0.90+ still risks wedging the host ([vLLM #46307](https://github.com/vllm-project/vllm/issues/46307), [vllm-gb10](https://github.com/shamily/vllm-gb10)). Do not sum utilization across containers.
+- Target `gpu_memory_utilization` per lane (one lane loaded at a time) — **per-lane tuning** on GX10/GB10 ([`infra/models.yaml`](infra/models.yaml)), NVFP4 weights: coding **0.85** (~46 GB weights, 131k+ context), work **0.65** (~23 GB weights incl. vision tower, 131k context). NVFP4 MoE on GB10 (sm121) needs Marlin GEMM env flags (`VLLM_NVFP4_GEMM_BACKEND=marlin`) — see [`infra/docker-compose.yml`](infra/docker-compose.yml); 0.90+ still risks wedging the host ([vLLM #46307](https://github.com/vllm-project/vllm/issues/46307), [vllm-gb10](https://github.com/shamily/vllm-gb10)). Do not sum utilization across containers.
 - Backlog runs: `run_backlog_batched` creates Jira tickets and sequentially calls `create_and_run_cycle` (same LangGraph as from-ticket). `backlog_run_id` skips stopping the Work lane after review within a cycle; `_stop_all_lanes` runs in `finally`.
 - **Model serving split:** vLLM container flags and HF model IDs live in [`infra/docker-compose.yml`](infra/docker-compose.yml); [`infra/models.yaml`](infra/models.yaml) is the Python client config (ports, `served_name`). Its `tool_call_parser` fields are documentation-only — the parser vLLM actually uses comes from the compose flags.
 - After a failed lane test, always `./scripts/lane-ctl.sh stop all` before retrying.
@@ -89,7 +90,8 @@ other real-cycle verification is manual, on demand.
 | `scripts/benchmark_pipeline.py` | Scenario matrix → JSON metrics |
 
 Manual vLLM probes: `scripts/probe_vllm_tools.py` (tool_calls on work/coder lanes),
-`scripts/probe_json.py` (structured JSON), `scripts/probe_vector_index.py` (Qdrant round-trip).
+`scripts/probe_json.py` (structured JSON), `scripts/probe_interpreter.py` (clarify quality
+and, with `--image`, vision), `scripts/probe_vector_index.py` (Qdrant round-trip).
 Probe A–D legend for the model matrix: [docs/model-evaluation.md](docs/model-evaluation.md).
 
 ## 8. Agent roles
@@ -143,3 +145,14 @@ Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 
 - Dev stack: `./scripts/lane-ctl.sh start vector` (Qdrant :6333 + embed sidecar :8080).
 
 Indexing triggers, agent-by-agent integration, and tuning env vars: [`docs/agent-orchestration.md`](docs/agent-orchestration.md#vector-index-qdrant--embeddings).
+
+### 8.6 Interpreter (clarify)
+
+Runs on the Work lane before any planning, for `/v1/console/*` sessions only ([ADR 0013](docs/adr/0013-interpreter-clarify.md)).
+
+- **Structured output only** — no tools, no repo writes, no side effects.
+- **Zero questions is a valid answer.** A clear request must go straight to `ready`; do not add a floor on question count.
+- **Every question carries a recommendation** (`recommended_suggestion_id` + per-option `rationale`). A user who accepts only the recommendations must get sensible work.
+- **Python owns identifiers.** The model returns ordered questions and a `recommended_index`; ids are assigned and the index clamped in `agents/interpreter.py`. Never trust model-generated ids.
+- **Clarify degrades, never blocks.** Cold lane or a failed call falls back to the deterministic questions in `api/console.py`; `CLARIFY_AUTOSTART_LANE=true` opts into waiting for a lane load instead.
+- Interpreter maps to `Role.WORK`. Adding a dedicated `Role` for it is safe: `ensure_lane` stops other lanes by lane name, not by `Role`, so two roles sharing the work lane will not stop the container they are about to start.

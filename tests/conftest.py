@@ -18,13 +18,18 @@ def skip_unless_env(var: str, reason: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def disable_vector_index_for_unit_tests(
+def isolate_unit_tests_from_services(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Keep unit/CI tests free of Qdrant unless explicitly marked agent_live."""
+    """Keep unit/CI tests off Qdrant and the vLLM lanes unless marked agent_live.
+
+    CLARIFY_LLM_ENABLED matters here: console session creation would otherwise probe
+    lane health over real HTTP and, on a GX10 box with the work lane up, call the model.
+    """
     if request.node.get_closest_marker("agent_live"):
         return
     monkeypatch.setenv("VECTOR_INDEX_ENABLED", "false")
+    monkeypatch.setenv("CLARIFY_LLM_ENABLED", "false")
     get_settings.cache_clear()
 
 

@@ -54,6 +54,8 @@ class ClarifySuggestion(BaseModel):
     suggestion_id: str = Field(..., min_length=1)
     label: str = Field(..., min_length=1)
     detail: str | None = None
+    # What this choice costs or buys — shown next to the option so the user can judge it.
+    rationale: str | None = None
 
 
 class ClarifyQuestion(BaseModel):
@@ -63,6 +65,18 @@ class ClarifyQuestion(BaseModel):
     text: str = Field(..., min_length=1)
     suggestions: list[ClarifySuggestion] = Field(..., min_length=1)
     allow_custom: bool = True
+    # Which ambiguity prompted the question; null for legacy/fallback questions.
+    why_asked: str | None = None
+    # The answer the backend would pick if the user said "just decide".
+    recommended_suggestion_id: str | None = None
+
+    @model_validator(mode="after")
+    def _recommendation_is_offered(self) -> ClarifyQuestion:
+        if self.recommended_suggestion_id is not None and self.recommended_suggestion_id not in {
+            s.suggestion_id for s in self.suggestions
+        }:
+            raise ValueError("recommended_suggestion_id must match one of the suggestions")
+        return self
 
 
 class ClarifyAnswer(BaseModel):
@@ -77,6 +91,17 @@ class ClarifyAnswer(BaseModel):
         if (self.selected_suggestion_id is None) == (self.custom_text is None):
             raise ValueError("provide exactly one of selected_suggestion_id or custom_text")
         return self
+
+
+class IntentSummary(BaseModel):
+    """What the Interpreter understood, echoed back so the user can correct it."""
+
+    model_config = _STRICT
+
+    restated_goal: str = Field(..., min_length=1)
+    assumptions: list[str] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
 class SprintRunRef(BaseModel):
@@ -136,6 +161,7 @@ class ConsoleSession(BaseModel):
     repo_url: str | None = None
     target_language: str | None = None
     messages: list[ConsoleMessage] = Field(default_factory=list)
+    intent: IntentSummary | None = None
     clarify_questions: list[ClarifyQuestion] = Field(default_factory=list)
     clarify_answers: list[ClarifyAnswer] = Field(default_factory=list)
     sprint_ref: SprintRunRef | None = None

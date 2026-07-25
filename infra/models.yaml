@@ -13,6 +13,13 @@
 #   max_model_len: 12288
 #   gpu_memory_utilization: 0.78
 #
+# Rollback work — Qwen3-30B-A3B-Thinking-2507 NVFP4 (previous production, text-only):
+#   model_id: NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4
+#   served_name: qwen3-30b-a3b-thinking
+#   gpu_memory_utilization: 0.50
+#   tool_call_parser: hermes
+#   requires: scripts/patch_work_quant.py run once after download
+#
 # gpu_memory_utilization assumes ONE lane loaded at a time (sequential pipeline).
 # GX10/GB10 unified memory — per-lane tuning (128 GB unified), NVFP4 weights:
 #   coding  Laguna S 2.1 NVFP4 (~72 GB): ~0.85 leaves KV headroom @ 131k
@@ -39,19 +46,22 @@ lanes:
   work:
     port: 8002
     base_url: http://127.0.0.1:8002/v1
-    # Work lane — ScrumMaster (prep), TechLead, Formatter, Reviewer, Tester reporter
-    # Qwen3-30B-A3B-Thinking-2507 NVFP4 (qwen3_moe, text-only, ~18 GB, 3B active) — reasoning + tools
-    # Plain qwen3_moe (full attention, Qwen2Tokenizer): no tokenizer patch, no Mamba flags.
+    # Work lane — Interpreter (clarify), ScrumMaster (prep), TechLead, Formatter, Reviewer,
+    # Tester reporter
+    # Qwen3.6-35B-A3B NVFP4 (qwen3_5_moe, ~22 GB, 3B active) — reasoning + tools + vision.
+    # Multimodal: the Interpreter is the only role that sends images; everything
+    # downstream stays text-only and consumes its derived context (ADR 0013).
     # Runtime tool/reasoning flags: infra/docker-compose.yml (LaneConfig ignores these YAML fields)
-    # SETUP: after `hf download`, run scripts/patch_work_quant.py once — the ModelOpt ckpt
-    # omits `quant_method` in config.json, so vLLM 26.04 won't auto-detect NVFP4 without it.
-    model_id: NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4
-    served_name: qwen3-30b-a3b-thinking
+    # No quant patch needed — this ckpt declares quant_method: compressed-tensors itself
+    # (the old ModelOpt work ckpt did not; that is what scripts/patch_work_quant.py was for).
+    model_id: RedHatAI/Qwen3.6-35B-A3B-NVFP4
+    served_name: qwen3.6-35b-a3b-nvfp4
     max_model_len: 131072
-    gpu_memory_utilization: 0.50
-    tool_call_parser: hermes
+    gpu_memory_utilization: 0.65
+    tool_call_parser: qwen3_coder
     enable_auto_tool_choice: true
     is_moe: true
+    supports_vision: true
     request_limit_multiplier: 1.0
 
 embeddings:

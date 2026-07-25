@@ -121,3 +121,16 @@ def graph_run_mocks(satisfied_coder_result: tuple):
             yield mocks
 
     return _mocks
+
+
+@pytest.fixture
+def console_client():
+    """TestClient with a clean console store — the store is module-global state."""
+    from fastapi.testclient import TestClient
+
+    from sprint_crew.api import console as console_module
+    from sprint_crew.api.app import app
+
+    console_module.reset_console_store()
+    yield TestClient(app)
+    console_module.reset_console_store()

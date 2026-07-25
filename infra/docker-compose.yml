@@ -5,7 +5,10 @@
 #   docker compose --profile vector up -d         # qdrant + embed-sidecar
 
 x-vllm-common: &vllm-common
-  image: nvcr.io/nvidia/vllm:26.04-py3
+  # Both lanes need this image, for different reasons: Laguna needs vLLM >= 0.25 for the
+  # poolside_v1 parsers, and Qwen3.6 needs transformers 5.x for its tokenizer backend
+  # (NGC 26.04 ships vLLM 0.19 / transformers 4.57 and fails both).
+  image: timothystewart6/vllm-gb10:v0.25.1-gb10.2
   restart: "no"
   ipc: host
   shm_size: "16gb"
@@ -29,8 +32,6 @@ x-vllm-common: &vllm-common
 services:
   vllm-coder:
     <<: *vllm-common
-    # Laguna needs vLLM >= 0.25 with poolside_v1 (NGC 26.04 is v0.19 — Work stays on NGC)
-    image: timothystewart6/vllm-gb10:v0.25.1-gb10.2
     profiles: [coder, all]
     # NVFP4 MoE on GB10 (sm121): force Marlin FP4/FP8 GEMM (FlashInfer FP4 MoE off)
     environment:
@@ -92,6 +93,9 @@ services:
   vllm-work:
     <<: *vllm-common
     profiles: [work, all]
+    # Qwen3.6-35B-A3B NVFP4 — natively multimodal (vision tower ships unquantized in
+    # model_visual.safetensors). Published DGX Spark recipes pass --language-model-only to
+    # reclaim ~900 MB; we must NOT, the Interpreter role needs image input (ADR 0013).
     # NVFP4 MoE on GB10 (sm121): force Marlin FP4/FP8 GEMM (FlashInfer FP4 MoE off)
     environment:
       <<: *vllm-env
@@ -104,13 +108,13 @@ services:
     command:
       - vllm
       - serve
-      - NVFP4/Qwen3-30B-A3B-Thinking-2507-FP4
+      - RedHatAI/Qwen3.6-35B-A3B-NVFP4
       - --host
       - "0.0.0.0"
       - --port
       - "8000"
       - --served-model-name
-      - qwen3-30b-a3b-thinking
+      - qwen3.6-35b-a3b-nvfp4
       - --trust-remote-code
       - --tensor-parallel-size
       - "1"
@@ -119,19 +123,25 @@ services:
       - --max-model-len
       - "131072"
       - --gpu-memory-utilization
-      - "0.50"
+      - "0.65"
       - --attention-backend
       - flashinfer
       - --enable-prefix-caching
       - --enable-chunked-prefill
+      # Qwen3.6 is a Mamba hybrid: prefix caching forces Mamba cache 'align' mode, which
+      # asserts block_size (2096) <= max_num_batched_tokens. The 2048 default fails init.
+      - --max-num-batched-tokens
+      - "8192"
       - --enforce-eager
       - --kv-cache-dtype
       - fp8
       - --reasoning-parser
       - qwen3
       - --enable-auto-tool-choice
+      # Qwen3.6 chat template emits <tool_call><function=..><parameter=..>, not the
+      # hermes JSON envelope the previous work model used.
       - --tool-call-parser
-      - hermes
+      - qwen3_coder
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 30s
