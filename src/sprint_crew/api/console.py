@@ -30,11 +30,14 @@ from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_status
 from sprint_crew.orchestrator.backlog import get_backlog_run
 from sprint_crew.orchestrator.console_store import console_store, reap_console_sessions
+from sprint_crew.orchestrator.event_log import EventLog, event_log
+from sprint_crew.orchestrator.session import get_session
 from sprint_crew.schemas.console import (
     ClarifyAnswer,
     ClarifyQuestion,
     ClarifyRequest,
     ClarifySuggestion,
+    ConsoleEventsPage,
     ConsoleMessage,
     ConsoleMessageRole,
     ConsoleMode,
@@ -85,6 +88,7 @@ def _lock_for(session_id: str) -> asyncio.Lock:
 
 def reset_console_store() -> None:
     console_store().clear()
+    event_log().clear()
     _locks.clear()
 
 
@@ -423,6 +427,7 @@ async def start_console_run(id: str, background_tasks: BackgroundTasks) -> Conso
                 prompt=build_run_prompt(session),
                 repo_url=session.repo_url,
                 background_tasks=background_tasks,
+                console_session_id=session.session_id,
             )
         except Exception as exc:
             session.status = ConsoleSessionStatus.FAILED
@@ -433,6 +438,45 @@ async def start_console_run(id: str, background_tasks: BackgroundTasks) -> Conso
         session.status = ConsoleSessionStatus.RUNNING
         _touch(session)
         return session
+
+
+def _backfill_events(session: ConsoleSession, log: EventLog) -> None:
+    """Project a legacy session's sprint-session events into the events table.
+
+    Sessions that ran before the events table existed have events only inside their
+    sprint sessions. Concatenate them in sprint-session order (stories run
+    sequentially, so this preserves chronology) so the timeline endpoint can still
+    render them. Runs live-appending events never reach here — ``has_events`` is
+    already true for them.
+    """
+    if session.sprint_ref is None:
+        return
+    for sprint_session_id in session.sprint_ref.sprint_session_ids:
+        sprint_session = get_session(sprint_session_id)
+        if sprint_session is None or not sprint_session.events:
+            continue
+        log.append_many(session.session_id, sprint_session_id, sprint_session.events)
+
+
+@router.get("/sessions/{id}/events", response_model=ConsoleEventsPage)
+async def get_console_events(id: str, since: int = 0, limit: int = 500) -> ConsoleEventsPage:
+    """The console timeline, served by polling (SSE transport arrives in M3).
+
+    ``seq`` is monotonic across every sprint session this console run spawned; poll
+    again with ``since=next_seq`` to drain the next page. ``complete`` reports whether
+    the session reached a terminal status, not whether this page is the last — a client
+    keeps polling until it receives an empty page while ``complete`` is true.
+    """
+    limit = max(1, min(limit, 1000))
+    async with _lock_for(id):
+        session = _get_session_or_404(id)
+        log = event_log()
+        if since <= 0 and not log.has_events(id):
+            _backfill_events(session, log)
+        events = log.read(id, since=since, limit=limit)
+        next_seq = events[-1].seq if events and events[-1].seq is not None else since
+        complete = session.status in _TERMINAL_STATUSES
+        return ConsoleEventsPage(events=events, next_seq=next_seq, complete=complete)
 
 
 @router.post("/sessions/{id}/cancel", response_model=ConsoleSession)

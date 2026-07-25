@@ -265,6 +265,44 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/StateConflict"
+  /v1/console/sessions/{id}/events:
+    get:
+      operationId: getConsoleEvents
+      summary: Console timeline, one monotonic seq cursor per session (polling)
+      description: |
+        Merged event timeline across every sprint session this console run spawned.
+        Poll with since=<last next_seq> to drain new events; each seq is delivered
+        exactly once. Transport is polling here; M3 adds an SSE stream with the same
+        payload. complete reports whether the session reached a terminal status, not
+        whether this page is the last — keep polling until an empty page arrives while
+        complete is true.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: since
+          in: query
+          required: false
+          description: Return events with seq strictly greater than this cursor.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 500
+            minimum: 1
+            maximum: 1000
+      responses:
+        "200":
+          description: A page of the timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleEventsPage"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     bearerAuth:
@@ -530,6 +568,77 @@ components:
           type: string
         updated_at:
           type: string
+    EventType:
+      type: string
+      description: |
+        Closed vocabulary for AgentEvent.event_type. The wire type stays a plain
+        string on purpose: an unknown value from a newer backend must render
+        generically on the client, never 422. Treat any value not listed here as
+        "unknown — render as a generic event", do not reject it.
+      enum:
+        - session_started
+        - vector_indexed
+        - vector_index_skipped
+        - pre_search
+        - plan_created
+        - plan_aborted
+        - tool_call
+        - code_change
+        - plan_coverage_incomplete
+        - skipped
+        - tests_added
+        - review_complete
+        - gate_result
+        - retry_prepared
+        - awaiting_human
+        - failed
+        - shipped
+        - shipped_stub
+        - approved
+    AgentEvent:
+      type: object
+      additionalProperties: false
+      required: [timestamp, agent, event_type, summary, level]
+      properties:
+        timestamp:
+          type: string
+        agent:
+          type: string
+          minLength: 1
+        event_type:
+          allOf:
+            - $ref: "#/components/schemas/EventType"
+          description: One of EventType; unknown future values may appear — render generically.
+        summary:
+          type: string
+          minLength: 1
+        detail:
+          type: [object, "null"]
+          additionalProperties: true
+        seq:
+          type: [integer, "null"]
+          description: Monotonic per console session; null on events not served from the log.
+        phase:
+          type: [string, "null"]
+        level:
+          type: string
+          enum: [debug, info, warning, error]
+          default: info
+    ConsoleEventsPage:
+      type: object
+      additionalProperties: false
+      required: [events, next_seq, complete]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentEvent"
+        next_seq:
+          type: integer
+          description: Poll again with since=next_seq to fetch the following page.
+        complete:
+          type: boolean
+          description: True once the session is terminal; more pages may still remain.
     ConsoleError:
       type: object
       additionalProperties: false

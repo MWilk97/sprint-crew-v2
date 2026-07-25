@@ -52,6 +52,7 @@ async def run_backlog_batched(
     user_prompt: str,
     repo_url: str | None = None,
     use_real_ship: bool = False,
+    console_session_id: str | None = None,
 ) -> BacklogRun:
     store = backlog_store()
     run = BacklogRun(
@@ -84,6 +85,7 @@ async def run_backlog_batched(
                 user_prompt=user_prompt,
                 use_real_ship=use_real_ship,
                 backlog_run_id=run_id,
+                console_session_id=console_session_id,
             )
 
             if session.status == SessionStatus.AWAITING_HUMAN:

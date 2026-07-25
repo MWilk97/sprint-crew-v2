@@ -15,7 +15,7 @@ Implementation status / MVP limitations:
 Notes:
 
 - **Auth:** when `CONSOLE_API_TOKEN` is set, every `/v1/console/*` and `/sprint/*` request requires `Authorization: Bearer <token>`. Empty or unset token disables auth (keeps unit tests and `smoke_cycle` working). `GET /health` is always open for probes.
-- **Streaming (SSE/WebSocket) is a non-goal** for this contract version; the UI polls.
+- **Timeline (M2):** `GET /v1/console/sessions/{id}/events?since=&limit=` serves one merged event stream per console session with a monotonic `seq` cursor — see [Events](#get-v1consolesessionsidevents). Transport is **polling** here; SSE (`WebSocket` is not planned) arrives in M3 with the *same* payload, so a timeline built against polling now carries over unchanged.
 - `target_language` is a nullable placeholder for Phase 3 language-specialized lanes; senders should pass `null`.
 
 ## Auth (M0)
@@ -226,6 +226,29 @@ Errors: `404`; `409` not ready or not confirmed (e.g. `{"detail": "session must 
 ### POST /v1/console/sessions/{id}/cancel
 
 Cancel from any non-terminal state. Empty body. Response `200` with `status: "cancelled"`. Errors: `404`; `409` if already `completed`, `failed`, or `cancelled`.
+
+### GET /v1/console/sessions/{id}/events
+
+The event timeline for a session, served by polling. One monotonic `seq` cursor spans **every** sprint session the console run spawned, so the client assembles the whole run from a single endpoint instead of walking `sprint_ref.sprint_session_ids` and polling `/sprint/session/{id}` per story.
+
+Query params: `since` (default `0`, returns events with `seq` strictly greater), `limit` (default `500`, max `1000`). Response `200`:
+
+```json
+{
+  "events": [
+    {"seq": 1, "timestamp": "2026-07-25T09:00:01+00:00", "agent": "orchestrator", "event_type": "session_started", "phase": null, "level": "info", "summary": "Session started", "detail": null},
+    {"seq": 2, "timestamp": "2026-07-25T09:04:12+00:00", "agent": "coder", "event_type": "tool_call", "phase": null, "level": "info", "summary": "apply_patch (ok)", "detail": {"tool": "apply_patch", "ok": true}}
+  ],
+  "next_seq": 2,
+  "complete": false
+}
+```
+
+Poll again with `since=next_seq` to drain the next page; every `seq` is delivered exactly once and never re-sent. `complete` reports whether the **session** reached a terminal status — not whether this page is the last. Keep polling until you receive an empty `events` array while `complete` is `true`. Errors: `404` unknown session.
+
+Legacy sessions that ran before the events table existed are projected from their sprint sessions on first read, so old sessions stay renderable.
+
+**Closed event vocabulary.** `event_type` is drawn from a documented closed set (`EventType` in the OpenAPI spec): `session_started`, `vector_indexed`, `vector_index_skipped`, `pre_search`, `plan_created`, `plan_aborted`, `tool_call`, `code_change`, `plan_coverage_incomplete`, `skipped`, `tests_added`, `review_complete`, `gate_result`, `retry_prepared`, `awaiting_human`, `failed`, `shipped`, `shipped_stub`, `approved`. The wire type stays a plain string on purpose: **a client must render an unknown `event_type` generically, never reject the event** — later milestones (M4) add new types (`lane_loading`, `phase_started`, …) and an older client must not break on them. `phase` and `level` (`debug | info | warning | error`) are present for filtering; `phase` is lightly populated in M2 and fleshed out in M4.
 
 ## Mapping to the current /sprint/* API
 
