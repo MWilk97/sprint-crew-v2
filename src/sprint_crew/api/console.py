@@ -2,8 +2,9 @@
 
 MVP implementation notes:
 
-- Sessions live in a process-local in-memory dict — they do not survive a
-  restart and are not shared across API workers (single-worker assumption).
+- Sessions are durable in SQLite (``ConsoleSessionStore``) and survive a restart.
+  Single-worker assumption still holds: the per-session asyncio locks below are
+  process-local, so this is not safe across multiple API workers.
 - Clarify questions come from the Interpreter on the Work lane (ADR 0013). When the
   lane is cold or the call fails, the deterministic stub below answers instead — an
   interactive caller must not block on a model load.
@@ -18,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -29,6 +29,7 @@ from sprint_crew.api.auth import require_token
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_status
 from sprint_crew.orchestrator.backlog import get_backlog_run
+from sprint_crew.orchestrator.console_store import console_store, reap_console_sessions
 from sprint_crew.schemas.console import (
     ClarifyAnswer,
     ClarifyQuestion,
@@ -65,13 +66,34 @@ _TERMINAL_STATUSES = frozenset(
     }
 )
 
-_sessions: dict[str, ConsoleSession] = {}
-_sessions_lock = threading.Lock()
+# One asyncio.Lock per session id, held across each handler's read-modify-write.
+# threading.Lock did not protect across await points inside one event loop, so
+# concurrent clarify + start could interleave. Entries are evicted when a session
+# is reaped. Single-worker assumption: this dict is not shared across processes.
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock_for(session_id: str) -> asyncio.Lock:
+    # Safe without its own guard: the event loop never preempts between these two
+    # lines (no await), so two callers cannot create competing locks for one id.
+    lock = _locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _locks[session_id] = lock
+    return lock
 
 
 def reset_console_store() -> None:
-    with _sessions_lock:
-        _sessions.clear()
+    console_store().clear()
+    _locks.clear()
+
+
+def run_console_reaper() -> list[str]:
+    """Delete stale terminal sessions and evict their locks. Returns reaped ids."""
+    reaped = reap_console_sessions()
+    for session_id in reaped:
+        _locks.pop(session_id, None)
+    return reaped
 
 
 def _utc_now_iso() -> str:
@@ -79,12 +101,13 @@ def _utc_now_iso() -> str:
 
 
 def _touch(session: ConsoleSession) -> None:
+    """Persist the session, stamping updated_at. The single save seam for every handler."""
     session.updated_at = _utc_now_iso()
+    console_store().save(session)
 
 
 def _get_session_or_404(session_id: str) -> ConsoleSession:
-    with _sessions_lock:
-        session = _sessions.get(session_id)
+    session = console_store().load(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Console session not found")
     return session
@@ -305,112 +328,122 @@ async def create_console_session(body: CreateConsoleSessionRequest) -> ConsoleSe
         repo_url=body.repo_url,
         target_language=body.target_language,
     )
-    if body.initial_prompt:
-        session.messages.append(
-            ConsoleMessage(role=ConsoleMessageRole.USER, content=body.initial_prompt)
-        )
-        await _enter_clarifying(session)
-    with _sessions_lock:
-        _sessions[session.session_id] = session
+    async with _lock_for(session.session_id):
+        if body.initial_prompt:
+            session.messages.append(
+                ConsoleMessage(role=ConsoleMessageRole.USER, content=body.initial_prompt)
+            )
+            await _enter_clarifying(session)
+        _touch(session)
     return session
 
 
 @router.get("/sessions/{id}", response_model=ConsoleSession)
 async def get_console_session(id: str) -> ConsoleSession:
-    session = _get_session_or_404(id)
-    _sync_sprint_progress(session)
-    return session
+    async with _lock_for(id):
+        session = _get_session_or_404(id)
+        _sync_sprint_progress(session)
+        if session.status in _TERMINAL_STATUSES:
+            run_console_reaper()
+        return session
 
 
 @router.post("/sessions/{id}/messages", response_model=ConsoleSession)
 async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSession:
-    session = _get_session_or_404(id)
-    if session.status is ConsoleSessionStatus.RUNNING or session.status in _TERMINAL_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"session is {session.status.value}; no further messages accepted",
-        )
-    session.messages.append(ConsoleMessage(role=ConsoleMessageRole.USER, content=body.content))
-    if session.status is ConsoleSessionStatus.COLLECTING:
-        await _enter_clarifying(session)
-    _touch(session)
-    return session
+    async with _lock_for(id):
+        session = _get_session_or_404(id)
+        if session.status is ConsoleSessionStatus.RUNNING or session.status in _TERMINAL_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"session is {session.status.value}; no further messages accepted",
+            )
+        session.messages.append(ConsoleMessage(role=ConsoleMessageRole.USER, content=body.content))
+        if session.status is ConsoleSessionStatus.COLLECTING:
+            await _enter_clarifying(session)
+        _touch(session)
+        return session
 
 
 @router.post("/sessions/{id}/clarify", response_model=ConsoleSession)
 async def submit_clarify_answers(id: str, body: ClarifyRequest) -> ConsoleSession:
-    session = _get_session_or_404(id)
-    if session.status is not ConsoleSessionStatus.CLARIFYING:
-        raise HTTPException(
-            status_code=409,
-            detail=f"session is {session.status.value}, not awaiting clarification",
-        )
-    try:
-        apply_clarify_answers(session, body.answers)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _touch(session)
-    return session
+    async with _lock_for(id):
+        session = _get_session_or_404(id)
+        if session.status is not ConsoleSessionStatus.CLARIFYING:
+            raise HTTPException(
+                status_code=409,
+                detail=f"session is {session.status.value}, not awaiting clarification",
+            )
+        try:
+            apply_clarify_answers(session, body.answers)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _touch(session)
+        return session
 
 
 @router.post("/sessions/{id}/confirm", response_model=ConsoleSession)
 async def confirm_console_session(id: str) -> ConsoleSession:
-    session = _get_session_or_404(id)
-    if session.status is not ConsoleSessionStatus.READY:
-        raise HTTPException(
-            status_code=409,
-            detail=f"session is {session.status.value}; confirm requires ready",
-        )
-    session.confirmed = True
-    _touch(session)
-    return session
+    async with _lock_for(id):
+        session = _get_session_or_404(id)
+        if session.status is not ConsoleSessionStatus.READY:
+            raise HTTPException(
+                status_code=409,
+                detail=f"session is {session.status.value}; confirm requires ready",
+            )
+        session.confirmed = True
+        _touch(session)
+        return session
 
 
 @router.post("/sessions/{id}/start", response_model=ConsoleSession)
 async def start_console_run(id: str, background_tasks: BackgroundTasks) -> ConsoleSession:
-    session = _get_session_or_404(id)
-    if session.status is not ConsoleSessionStatus.READY:
-        raise HTTPException(
-            status_code=409,
-            detail=f"session is {session.status.value}; start requires ready",
-        )
-    if not session.confirmed:
-        raise HTTPException(status_code=409, detail="session must be confirmed before start")
+    async with _lock_for(id):
+        session = _get_session_or_404(id)
+        if session.status is not ConsoleSessionStatus.READY:
+            raise HTTPException(
+                status_code=409,
+                detail=f"session is {session.status.value}; start requires ready",
+            )
+        if not session.confirmed:
+            raise HTTPException(status_code=409, detail="session must be confirmed before start")
 
-    if session.mode is ConsoleMode.PLAN:
-        # Plan mode never ships: no from-prompt run, no Jira, no git writes (ADR 0012).
-        session.plan_result = build_plan_result(session)
-        session.status = ConsoleSessionStatus.COMPLETED
+        if session.mode is ConsoleMode.PLAN:
+            # Plan mode never ships: no from-prompt run, no Jira, no git writes (ADR 0012).
+            session.plan_result = build_plan_result(session)
+            session.status = ConsoleSessionStatus.COMPLETED
+            _touch(session)
+            run_console_reaper()
+            return session
+
+        # Lazy import: app.py imports this router at module load.
+        from sprint_crew.api.app import start_from_prompt_run
+
+        try:
+            run_id = await start_from_prompt_run(
+                prompt=build_run_prompt(session),
+                repo_url=session.repo_url,
+                background_tasks=background_tasks,
+            )
+        except Exception as exc:
+            session.status = ConsoleSessionStatus.FAILED
+            session.error = str(exc)
+            _touch(session)
+            raise
+        session.sprint_ref = SprintRunRef(backlog_run_id=run_id)
+        session.status = ConsoleSessionStatus.RUNNING
         _touch(session)
         return session
-
-    # Lazy import: app.py imports this router at module load.
-    from sprint_crew.api.app import start_from_prompt_run
-
-    try:
-        run_id = await start_from_prompt_run(
-            prompt=build_run_prompt(session),
-            repo_url=session.repo_url,
-            background_tasks=background_tasks,
-        )
-    except Exception as exc:
-        session.status = ConsoleSessionStatus.FAILED
-        session.error = str(exc)
-        _touch(session)
-        raise
-    session.sprint_ref = SprintRunRef(backlog_run_id=run_id)
-    session.status = ConsoleSessionStatus.RUNNING
-    _touch(session)
-    return session
 
 
 @router.post("/sessions/{id}/cancel", response_model=ConsoleSession)
 async def cancel_console_session(id: str) -> ConsoleSession:
-    session = _get_session_or_404(id)
-    if session.status in _TERMINAL_STATUSES:
-        raise HTTPException(status_code=409, detail=f"session already {session.status.value}")
-    # Best effort: a running backlog run is not killed, only the console session
-    # is marked cancelled (documented limitation).
-    session.status = ConsoleSessionStatus.CANCELLED
-    _touch(session)
-    return session
+    async with _lock_for(id):
+        session = _get_session_or_404(id)
+        if session.status in _TERMINAL_STATUSES:
+            raise HTTPException(status_code=409, detail=f"session already {session.status.value}")
+        # Best effort: a running backlog run is not killed, only the console session
+        # is marked cancelled (documented limitation).
+        session.status = ConsoleSessionStatus.CANCELLED
+        _touch(session)
+        run_console_reaper()
+        return session

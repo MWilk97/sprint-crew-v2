@@ -17,10 +17,15 @@ from sprint_crew.schemas.session import (
 
 
 @pytest.fixture(autouse=True)
-def fresh_console_store():
+def fresh_console_store(tmp_path, monkeypatch):
+    # Console sessions are SQLite-backed; redirect to tmp so the suite stays hermetic.
+    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
+    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
+    get_settings.cache_clear()
     console_module.reset_console_store()
     yield
     console_module.reset_console_store()
+    get_settings.cache_clear()
 
 
 @pytest.fixture
