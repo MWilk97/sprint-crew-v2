@@ -18,7 +18,11 @@ import urllib.request
 from pathlib import Path
 from uuid import uuid4
 
-from tests.helpers.cycle_assertions import assert_cycle_passed
+# Run as a script (`scripts/smoke_cycle.py`), so the repo root is not on sys.path — only
+# pytest gets that from pyproject's `pythonpath`. Needed for the tests.helpers import below.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tests.helpers.cycle_assertions import assert_cycle_passed  # noqa: E402
 
 from sprint_crew.agents.coder import run_coder_loop
 from sprint_crew.agents.formatter import run_formatter
@@ -153,6 +157,10 @@ async def run_full_cycle(
         issue_type="Story",
         acceptance_criteria="pytest -q passes",
     )
+    # fixtures/repo is red on purpose: tests/test_validators.py targets a *different*
+    # ticket the agent has not been asked to implement. An unscoped pytest can never be
+    # green there, so the post-check is scoped to this story (see commit ceda3a6).
+    test_target = "tests/test_greeter.py"
     if repo is None:
         repo = prepare_workspace(f"smoke-{uuid4().hex[:8]}", source=fixture)
         print(f"Using workspace: {repo}")
@@ -181,7 +189,11 @@ async def run_full_cycle(
     )
     print(f"Session {session.session_id} status={session.status.value}")
     try:
-        assert_cycle_passed(session, workspace=Path(session.workspace_root))
+        assert_cycle_passed(
+            session,
+            workspace=Path(session.workspace_root),
+            test_target=test_target,
+        )
     except AssertionError as exc:
         print(f"FAIL: {exc}")
         if session.review_outcome:
