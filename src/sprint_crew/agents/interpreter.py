@@ -63,14 +63,14 @@ async def run_interpreter(
     # GX10 (probe E), well past the default timeout. Same invariant as the Coder lane's
     # escalation in inference/router.py: thinking implies the longer deadline.
     timeout = (
-        settings.interpreter_thinking_timeout_s if enable_thinking else settings.interpreter_timeout_s
+        settings.interpreter_thinking_timeout_s
+        if enable_thinking
+        else settings.interpreter_timeout_s
     )
     return await asyncio.to_thread(
         structured_completion,
         lane,
-        system_prompt=build_interpreter_system_prompt(
-            max_questions=settings.max_clarify_questions
-        ),
+        system_prompt=build_interpreter_system_prompt(max_questions=settings.max_clarify_questions),
         user_prompt=build_interpreter_user_prompt(
             user_prompt=user_prompt,
             repo_context=repo_context,

@@ -182,9 +182,7 @@ async def _enter_clarifying(session: ConsoleSession) -> None:
         understood = f"Understood: {intent.restated_goal}. " if intent is not None else ""
         content = f"{understood}No open questions — confirm to start."
         session.status = ConsoleSessionStatus.READY
-    session.messages.append(
-        ConsoleMessage(role=ConsoleMessageRole.ASSISTANT, content=content)
-    )
+    session.messages.append(ConsoleMessage(role=ConsoleMessageRole.ASSISTANT, content=content))
 
 
 def apply_clarify_answers(session: ConsoleSession, answers: list[ClarifyAnswer]) -> None:
