@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException
@@ -10,6 +13,7 @@ from pydantic import BaseModel, Field
 from sprint_crew.agents.scrum_master import run_scrum_master
 from sprint_crew.api.auth import require_token
 from sprint_crew.api.console import router as console_router
+from sprint_crew.api.console import run_console_reaper
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_health, stop_lane
 from sprint_crew.integrations.jira_client import get_jira_client
@@ -25,7 +29,23 @@ from sprint_crew.orchestrator.session import (
 )
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus, SprintSession
 
-app = FastAPI(title="Sprint Crew API", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Sweep stale terminal console sessions (and their workspaces) once at startup;
+    # the per-completion sweep in console.py keeps it current afterward.
+    try:
+        reaped = run_console_reaper()
+        if reaped:
+            logger.info("startup: reaped %d stale console session(s)", len(reaped))
+    except Exception:
+        logger.exception("startup console reaper failed")
+    yield
+
+
+app = FastAPI(title="Sprint Crew API", version="0.1.0", lifespan=lifespan)
 
 # CORS for the browser console (separate repo/origin, ADR 0011). Origins come from
 # Settings.CONSOLE_CORS_ORIGINS; default "*" suits local dev. Auth is a shared bearer

@@ -108,6 +108,9 @@ class Settings(BaseSettings):
         default=Path.home() / ".sprint-crew" / "sessions.db",
         alias="SPRINT_SESSION_DB",
     )
+    # Console sessions in a terminal state older than this are reaped (row + workspace)
+    # on startup and after each session completes. No scheduler; runs inline.
+    console_session_ttl_days: float = Field(default=14.0, alias="CONSOLE_SESSION_TTL_DAYS")
 
     jira_url: str = Field(default="", alias="JIRA_URL")
     jira_email: str = Field(default="", alias="JIRA_EMAIL")

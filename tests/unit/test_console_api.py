@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from sprint_crew.api import console as console_module
 from sprint_crew.api.app import app
+from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.backlog import BacklogRunStore
 from sprint_crew.schemas.console import (
     ClarifyAnswer,
@@ -24,10 +25,16 @@ START_RUN_PATCH = "sprint_crew.api.app.start_from_prompt_run"
 
 
 @pytest.fixture(autouse=True)
-def fresh_console_store():
+def fresh_console_store(tmp_path, monkeypatch):
+    # Console sessions are now SQLite-backed; keep them off the real home DB and
+    # workspace tree so the suite stays hermetic.
+    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
+    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
+    get_settings.cache_clear()
     console_module.reset_console_store()
     yield
     console_module.reset_console_store()
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -83,6 +90,32 @@ def test_create_with_prompt_enters_clarifying(client: TestClient) -> None:
     for question in session["clarify_questions"]:
         assert question["suggestions"]
         assert question["allow_custom"] is True
+
+
+def test_session_survives_restart(client: TestClient) -> None:
+    # No in-memory dict: every handler loads from the store, so dropping the
+    # process-local locks (a restart) must not lose the session.
+    session = _create(client, mode="code", prompt="Add a /metrics endpoint")
+    sid = session["session_id"]
+    console_module._locks.clear()
+
+    resp = client.get(f"/v1/console/sessions/{sid}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "clarifying"
+
+
+def test_get_after_reap_returns_404(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setenv("CONSOLE_SESSION_TTL_DAYS", "0")
+    get_settings.cache_clear()
+    session = _make_ready_confirmed(client, mode="plan")
+    sid = session["session_id"]
+
+    resp = client.post(f"/v1/console/sessions/{sid}/start")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
+    # TTL=0: the completion sweep reaps the just-finished session immediately.
+    assert client.get(f"/v1/console/sessions/{sid}").status_code == 404
 
 
 def test_create_without_prompt_collecting_then_message_clarifies(client: TestClient) -> None:

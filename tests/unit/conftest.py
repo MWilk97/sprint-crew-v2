@@ -124,17 +124,24 @@ def graph_run_mocks(satisfied_coder_result: tuple):
 
 
 @pytest.fixture
-def console_client(auth_headers: dict[str, str]):
-    """TestClient with a clean console store — the store is module-global state.
+def console_client(auth_headers: dict[str, str], tmp_path, monkeypatch):
+    """TestClient with a clean, tmp-backed console store.
 
-    Carries the test bearer so requests pass the auth gate (pinned by the autouse
+    Console sessions are SQLite-backed (roadmap M1); redirect the store DB and
+    workspace tree to tmp so the suite never touches the real home paths. Carries
+    the test bearer so requests pass the auth gate (pinned by the autouse
     isolate_unit_tests_from_services fixture).
     """
     from fastapi.testclient import TestClient
 
     from sprint_crew.api import console as console_module
     from sprint_crew.api.app import app
+    from sprint_crew.config import get_settings
 
+    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
+    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
+    get_settings.cache_clear()
     console_module.reset_console_store()
     yield TestClient(app, headers=auth_headers)
     console_module.reset_console_store()
+    get_settings.cache_clear()

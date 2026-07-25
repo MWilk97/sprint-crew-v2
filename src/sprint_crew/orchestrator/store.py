@@ -57,3 +57,20 @@ class SqliteJsonStore:
         if row is None:
             return None
         return str(row["payload"])
+
+    def _delete(self, key: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"DELETE FROM {self.table} WHERE {self.key_column} = ?",
+                (key,),
+            )
+        return cur.rowcount > 0
+
+    def _list_payloads(self) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(f"SELECT payload FROM {self.table}").fetchall()
+        return [str(row["payload"]) for row in rows]
+
+    def _clear_all(self) -> None:
+        with self._connect() as conn:
+            conn.execute(f"DELETE FROM {self.table}")
