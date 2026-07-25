@@ -9,9 +9,15 @@ import sys
 
 from openai import OpenAI
 
+from sprint_crew.config import Role, lane_for_role
+
+# Read lanes from models.yaml so a model swap does not strand the probes.
+_CODER = lane_for_role(Role.CODING)
+_WORK = lane_for_role(Role.WORK)
+
 LANES = {
-    "coder": ("http://127.0.0.1:8001/v1", "laguna-s-2.1-nvfp4"),
-    "work": ("http://127.0.0.1:8002/v1", "qwen3-30b-a3b-thinking"),
+    "coder": (_CODER.base_url, _CODER.served_name),
+    "work": (_WORK.base_url, _WORK.served_name),
 }
 
 READ_FILE_TOOL = {

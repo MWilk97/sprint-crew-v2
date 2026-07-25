@@ -12,6 +12,15 @@ def pydantic_ai_model(role: Role) -> OpenAIChatModel:
     return OpenAIChatModel(lane.served_name, provider=provider)
 
 
+def thinking_chat_template_kwargs(enabled: bool) -> dict[str, object]:
+    """vLLM knob that gates a model's reasoning trace.
+
+    Sole spelling of this vendor detail — Qwen3.x and Laguna templates both branch on
+    ``enable_thinking``, and callers should not re-type the nesting.
+    """
+    return {"chat_template_kwargs": {"enable_thinking": enabled}}
+
+
 def coder_thinking_active(attempt: int) -> bool:
     """True when reasoning escalation should engage for this coder attempt."""
     settings = get_settings()
@@ -31,7 +40,7 @@ def coder_model_settings(*, attempt: int = 0) -> OpenAIChatModelSettings:
     extra_body: dict[str, object] = {"top_k": settings.coder_top_k}
     thinking = coder_thinking_active(attempt)
     if thinking:
-        extra_body["chat_template_kwargs"] = {"enable_thinking": True}
+        extra_body.update(thinking_chat_template_kwargs(True))
     timeout = settings.coder_thinking_timeout_s if thinking else settings.coder_request_timeout_s
     return OpenAIChatModelSettings(
         temperature=settings.coder_temperature,

@@ -140,6 +140,11 @@ Tester tool calls that target paths outside `tests/` return an error message to 
 | `MAX_TECHLEAD_TURNS` | `12` | Read-only TechLead tool loop limit |
 | `MAX_WRITE_FILE_BYTES` | `65536` | `write_file` size cap |
 | `MAX_CODER_TURNS` | `32` | Total Coder turn budget (split per step) |
+| `CLARIFY_LLM_ENABLED` | `true` | Interpreter generates clarify questions (unit tests autouse `false`) |
+| `CLARIFY_AUTOSTART_LANE` | `false` | Wait for a Work lane load instead of falling back to stub questions |
+| `MAX_CLARIFY_QUESTIONS` | `4` | Upper bound on questions per console session |
+| `INTERPRETER_TIMEOUT_S` | `120` | Interpreter request deadline |
+| `INTERPRETER_THINKING_ENABLED` | `false` | Qwen3.6 reasoning trace for clarify — 12x slower, no quality gain (probe E) |
 | `VECTOR_INDEX_ENABLED` | `true` | Qdrant semantic index (unit tests autouse `false`) |
 | `QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant HTTP API |
 | `EMBED_URL` | `http://127.0.0.1:8080/v1` | CPU embedding sidecar (Jina code model) |
@@ -175,6 +180,7 @@ Default embedding model: `jinaai/jina-embeddings-v2-base-code` (Apache 2.0, CPU 
 
 | Consumer | Behavior |
 |----------|----------|
+| **Interpreter** (console clarify) | No index today — questions are grounded in the prompt only; wiring a workspace into clarify is follow-up work (ADR 0013) |
 | **ScrumMaster** (`from-prompt`) | `enrich_repo_context` adds repo manifest + pre_search + semantic hits |
 | **TechLead static** (SIMPLE) | `enrich_repo_context` pre-fetches manifest + pre_search into Work lane prompt |
 | **TechLead tool_loop** (COMPLEX) | Seeded manifest/pre_search in loop prompt; `semantic_search` tool + verify with `grep` / `read_file`; JSON step uses ground-truth `repo_context` + handoff |

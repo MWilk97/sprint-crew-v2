@@ -4,8 +4,9 @@ MVP implementation notes:
 
 - Sessions live in a process-local in-memory dict — they do not survive a
   restart and are not shared across API workers (single-worker assumption).
-- Clarify is a deterministic stub: fixed questions lightly derived from the
-  prompt text, no LLM call.
+- Clarify questions come from the Interpreter on the Work lane (ADR 0013). When the
+  lane is cold or the call fails, the deterministic stub below answers instead — an
+  interactive caller must not block on a model load.
 - mode=code start reuses the same orchestration as POST /sprint/from-prompt
   (``start_from_prompt_run`` in app.py); mode=plan never touches
   from-prompt/ship/Jira/git.
@@ -15,12 +16,17 @@ MVP implementation notes:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import threading
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
+from sprint_crew.agents.interpreter import run_interpreter, to_clarify_questions
+from sprint_crew.config import Role, get_settings
+from sprint_crew.graph.lanes import ensure_lane, lane_status
 from sprint_crew.orchestrator.backlog import get_backlog_run
 from sprint_crew.schemas.console import (
     ClarifyAnswer,
@@ -34,11 +40,15 @@ from sprint_crew.schemas.console import (
     ConsoleSession,
     ConsoleSessionStatus,
     CreateConsoleSessionRequest,
+    IntentSummary,
     PlanPreviewStory,
     PostMessageRequest,
     SprintRunRef,
 )
+from sprint_crew.schemas.intent import IntentAnalysis
 from sprint_crew.schemas.session import BacklogRunStatus
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/console", tags=["console"])
 
@@ -76,7 +86,7 @@ def _get_session_or_404(session_id: str) -> ConsoleSession:
 
 
 def build_clarify_questions(prompt: str | None) -> list[ClarifyQuestion]:
-    """Deterministic clarify stub: fixed questions, lightly derived from the prompt."""
+    """Fallback clarify questions: fixed, lightly derived from the prompt, no LLM call."""
     text = (prompt or "").lower()
     questions = [
         ClarifyQuestion(
@@ -124,16 +134,57 @@ def build_clarify_questions(prompt: str | None) -> list[ClarifyQuestion]:
     return questions
 
 
-def _enter_clarifying(session: ConsoleSession) -> None:
-    prompt = next((m.content for m in session.messages if m.role is ConsoleMessageRole.USER), None)
-    session.clarify_questions = build_clarify_questions(prompt)
+def _user_text(session: ConsoleSession) -> str:
+    return "\n".join(m.content for m in session.messages if m.role is ConsoleMessageRole.USER)
+
+
+async def _work_lane_available() -> bool:
+    """True when the Interpreter can run now without making the caller wait on a load."""
+    if get_settings().clarify_autostart_lane:
+        await ensure_lane(Role.WORK)
+        return True
+    return await asyncio.to_thread(lane_status, Role.WORK) == "ok"
+
+
+async def _analyze(session: ConsoleSession, prompt: str) -> IntentAnalysis | None:
+    """Interpreter output, or None when clarify must fall back to the stub."""
+    if not get_settings().clarify_llm_enabled or not prompt.strip():
+        return None
+    try:
+        if not await _work_lane_available():
+            logger.info("console clarify: work lane not ready, using deterministic questions")
+            return None
+        return await run_interpreter(user_prompt=prompt, project_hint=session.repo_url or "")
+    except Exception:
+        logger.exception("console clarify: interpreter failed, using deterministic questions")
+        return None
+
+
+async def _interpret(session: ConsoleSession) -> tuple[list[ClarifyQuestion], IntentSummary | None]:
+    """LLM clarify, degrading to the deterministic stub instead of failing the request."""
+    prompt = _user_text(session)
+    analysis = await _analyze(session, prompt)
+    if analysis is None:
+        return build_clarify_questions(prompt), None
+    questions = to_clarify_questions(analysis, limit=get_settings().max_clarify_questions)
+    return questions, IntentSummary.model_validate(analysis, from_attributes=True)
+
+
+async def _enter_clarifying(session: ConsoleSession) -> None:
+    questions, intent = await _interpret(session)
+    session.clarify_questions = questions
+    session.intent = intent
+    if questions:
+        content = "Before starting, please answer the clarify questions."
+        session.status = ConsoleSessionStatus.CLARIFYING
+    else:
+        # Nothing ambiguous is worth interrupting for; confirm still gates the run.
+        understood = f"Understood: {intent.restated_goal}. " if intent is not None else ""
+        content = f"{understood}No open questions — confirm to start."
+        session.status = ConsoleSessionStatus.READY
     session.messages.append(
-        ConsoleMessage(
-            role=ConsoleMessageRole.ASSISTANT,
-            content="Before starting, please answer the clarify questions.",
-        )
+        ConsoleMessage(role=ConsoleMessageRole.ASSISTANT, content=content)
     )
-    session.status = ConsoleSessionStatus.CLARIFYING
 
 
 def apply_clarify_answers(session: ConsoleSession, answers: list[ClarifyAnswer]) -> None:
@@ -183,12 +234,16 @@ def _clarification_lines(session: ConsoleSession) -> list[str]:
 
 
 def build_run_prompt(session: ConsoleSession) -> str:
-    """Combine user messages and clarify answers into a from-prompt input."""
-    user_text = "\n".join(m.content for m in session.messages if m.role is ConsoleMessageRole.USER)
+    """Combine user messages, interpreter assumptions, and clarify answers for from-prompt."""
+    parts = [_user_text(session)]
+    # Assumptions the user saw and did not correct are decisions; ScrumMaster should not
+    # rediscover them.
+    if session.intent is not None and session.intent.assumptions:
+        parts.append("Assumptions:\n" + "\n".join(f"- {a}" for a in session.intent.assumptions))
     lines = _clarification_lines(session)
     if lines:
-        return user_text + "\n\nClarifications:\n" + "\n".join(lines)
-    return user_text
+        parts.append("Clarifications:\n" + "\n".join(lines))
+    return "\n\n".join(parts)
 
 
 def build_plan_result(session: ConsoleSession) -> ConsolePlanResult:
@@ -251,7 +306,7 @@ async def create_console_session(body: CreateConsoleSessionRequest) -> ConsoleSe
         session.messages.append(
             ConsoleMessage(role=ConsoleMessageRole.USER, content=body.initial_prompt)
         )
-        _enter_clarifying(session)
+        await _enter_clarifying(session)
     with _sessions_lock:
         _sessions[session.session_id] = session
     return session
@@ -274,7 +329,7 @@ async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSess
         )
     session.messages.append(ConsoleMessage(role=ConsoleMessageRole.USER, content=body.content))
     if session.status is ConsoleSessionStatus.COLLECTING:
-        _enter_clarifying(session)
+        await _enter_clarifying(session)
     _touch(session)
     return session
 

@@ -49,7 +49,7 @@ def _lane_healthy(role: Role) -> bool:
         return False
 
 
-def _lane_status(role: Role) -> str:
+def lane_status(role: Role) -> str:
     url = _health_url(role)
     try:
         with urllib.request.urlopen(url, timeout=2) as resp:
@@ -59,8 +59,12 @@ def _lane_status(role: Role) -> str:
 
 
 def lane_health() -> dict[str, str]:
-    """Per-lane health summary ("ok" / "degraded" / "down"), keyed by lane name."""
-    return {_lane_name(role): _lane_status(role) for role in Role}
+    """Per-lane health summary ("ok" / "degraded" / "down"), keyed by lane name.
+
+    Probes every lane. Callers that care about one should use ``lane_status`` instead of
+    paying a round-trip — and a timeout — on the lanes they discard.
+    """
+    return {_lane_name(role): lane_status(role) for role in Role}
 
 
 def _lane_container_running(role: Role) -> bool:
@@ -93,8 +97,10 @@ async def wait_lane_stopped(role: Role, *, timeout: float = _STOP_TIMEOUT_SECOND
 async def ensure_lane(role: Role) -> None:
     if await asyncio.to_thread(_lane_healthy, role):
         return
+    # Dedupe by lane, not by Role: _ROLE_TO_LANE is many-to-one, so two roles sharing a
+    # lane would otherwise make this stop the container it is about to start.
     for other in Role:
-        if other != role:
+        if _lane_name(other) != _lane_name(role):
             await stop_lane(other)
     lane_name = _lane_name(role)
     proc = await asyncio.create_subprocess_exec(
