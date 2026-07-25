@@ -22,6 +22,7 @@ class SprintState(TypedDict, total=False):
     status: SessionStatus
     events: Annotated[list[AgentEvent], operator.add]
     error: str | None
+    deadline_epoch: float
     branch: str | None
     pr_url: str | None
     use_real_ship: bool
