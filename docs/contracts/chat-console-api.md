@@ -1,6 +1,6 @@
 # Chat console API contract
 
-**Status: Implemented (MVP store + stub clarify).** The `/v1/console/*` routes are live in [console.py](../../src/sprint_crew/api/console.py), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
+**Status: Implemented (MVP; in-memory sessions + model-generated clarify).** The `/v1/console/*` routes are live in [console.py](../../src/sprint_crew/api/console.py), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
 
 Implementation status / MVP limitations:
 
@@ -14,9 +14,28 @@ Implementation status / MVP limitations:
 
 Notes:
 
-- **Auth: TBD.** The contract assumes an authenticated caller; the mechanism is decided before Phase 2 ships.
+- **Auth:** when `CONSOLE_API_TOKEN` is set, every `/v1/console/*` and `/sprint/*` request requires `Authorization: Bearer <token>`. Empty or unset token disables auth (keeps unit tests and `smoke_cycle` working). `GET /health` is always open for probes.
 - **Streaming (SSE/WebSocket) is a non-goal** for this contract version; the UI polls.
 - `target_language` is a nullable placeholder for Phase 3 language-specialized lanes; senders should pass `null`.
+
+## Auth (M0)
+
+```http
+Authorization: Bearer <CONSOLE_API_TOKEN>
+```
+
+| Route family | Auth when token set |
+|--------------|---------------------|
+| `/v1/console/*` | required → `401` without / wrong bearer |
+| `/sprint/*` | required → `401` without / wrong bearer |
+| `GET /health` | always open (probes / lane status) |
+
+CORS: browser origins come from `CONSOLE_CORS_ORIGINS` (comma-separated; default `*` for local dev). Credentials are not used — send the token in `Authorization`, not cookies.
+
+Related sprint/backlog status strings the UI may see when polling (additive `cancelled` reserved for a later hard-cancel; not set by console cancel today):
+
+- Sprint session: `pending | running | awaiting_human | failed | approved | cancelled`
+- Backlog run: `pending | running | completed | failed | cancelled`
 
 ## Session state machine
 
@@ -113,7 +132,7 @@ Response `201` — full session object. With no `initial_prompt` the status is `
 {
   "session_id": "cs-7f3a",
   "mode": "code",
-  "status": "collecting",
+  "status": "clarifying",
   "confirmed": false,
   "repo_url": "https://github.com/example/service",
   "target_language": null,
@@ -121,7 +140,19 @@ Response `201` — full session object. With no `initial_prompt` the status is `
     {"role": "user", "content": "Add a /metrics endpoint with request counters", "timestamp": "2026-07-16T09:00:00+00:00"}
   ],
   "intent": null,
-  "clarify_questions": [],
+  "clarify_questions": [
+    {
+      "question_id": "q-scope",
+      "text": "Which part of the repo should change?",
+      "why_asked": null,
+      "recommended_suggestion_id": null,
+      "suggestions": [
+        {"suggestion_id": "s-scope-focused", "label": "Only the files needed for this change"},
+        {"suggestion_id": "s-scope-broad", "label": "Related modules too", "detail": "including tests and docs touched by the change"}
+      ],
+      "allow_custom": true
+    }
+  ],
   "clarify_answers": [],
   "sprint_ref": null,
   "plan_result": null,
@@ -154,7 +185,7 @@ Submit answers to pending clarify questions.
 ```json
 {
   "answers": [
-    {"question_id": "q-scope", "selected_suggestion_id": "s-api", "custom_text": null},
+    {"question_id": "q-scope", "selected_suggestion_id": "s-scope-focused", "custom_text": null},
     {"question_id": "q-tests", "selected_suggestion_id": null, "custom_text": "unit tests only, no live tiers"}
   ]
 }

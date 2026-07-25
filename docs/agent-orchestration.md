@@ -54,7 +54,7 @@ All tickets enter **`techLeadPlan`** (no separate graph branch). Mode selection 
 
 - **`template`** — TRIVIAL/SIMPLE tickets: deterministic TaskPlan in Python first (no Work lane). Fast path for stub/greeter/email-style work.
 - **`static`** — when template validation fails or SIMPLE needs LLM: Python repo snapshot → TaskPlan JSON on Work lane (:8002).
-- **`tool_loop`** — COMPLEX tickets only: seeded `enrich_repo_context` (manifest + pre_search + grep) → read-only tools on Work lane → handoff → TaskPlan JSON with separate ground-truth `repo_context`. Requires vLLM `--tool-call-parser hermes` on :8002.
+- **`tool_loop`** — COMPLEX tickets only: seeded `enrich_repo_context` (manifest + pre_search + grep) → read-only tools on Work lane → handoff → TaskPlan JSON with separate ground-truth `repo_context`. Requires vLLM `--tool-call-parser qwen3_coder` on :8002.
 - **`template_fallback`** — after two failed LLM plan validations, fall back to deterministic template.
 
 Fallback chain: template fast-path → static LLM → (COMPLEX) tool_loop with empty-handoff → static → template_fallback after validation retries.
