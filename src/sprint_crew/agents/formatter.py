@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import ValidationError
 
 from sprint_crew.agents.prompts_formatter import (
@@ -63,7 +65,8 @@ async def run_formatter(*, task_plan: TaskPlan, raw_output: str, git_diff: str =
 
     plan_json = task_plan.model_dump_json(indent=2)
     try:
-        change = structured_completion(
+        change = await asyncio.to_thread(
+            structured_completion,
             Role.WORK,
             system_prompt=build_formatter_system_prompt(),
             user_prompt=build_formatter_user_prompt(

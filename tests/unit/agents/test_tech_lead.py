@@ -307,7 +307,7 @@ async def test_run_tech_lead_complex_uses_tool_loop(tmp_path) -> None:
         patch.object(
             tech_lead_module,
             "_structured_plan_from_context",
-            return_value=expected,
+            new=AsyncMock(return_value=expected),
         ) as structured_mock,
         patch(
             "sprint_crew.orchestrator.template_plan.build_template_task_plan_validated",

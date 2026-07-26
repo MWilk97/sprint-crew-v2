@@ -20,6 +20,7 @@ dependencies = [
     "pydantic>=2.13",
     "pydantic-settings",
     "pydantic-ai[openai]",
+    "sse-starlette>=2,<4",
     "langgraph",
     "langgraph-checkpoint-sqlite",
     "aiosqlite",

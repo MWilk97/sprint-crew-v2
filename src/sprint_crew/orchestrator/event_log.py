@@ -18,6 +18,7 @@ import sqlite3
 from pathlib import Path
 
 from sprint_crew.config import get_settings
+from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.schemas.session import AgentEvent
 
 _CREATE_SQL = """
@@ -101,12 +102,17 @@ class EventLog:
                     ),
                 )
             conn.commit()
-            return stamped
         except BaseException:
             conn.rollback()
             raise
         finally:
             conn.close()
+        # Append-then-publish (M3): the table is committed above, so it is the source of
+        # truth; the bus only notifies live SSE subscribers. A no-op when none are attached.
+        bus = event_bus()
+        for event in stamped:
+            bus.publish(console_session_id, event)
+        return stamped
 
     def read(self, console_session_id: str, since: int = 0, limit: int = 500) -> list[AgentEvent]:
         """Events with ``seq > since`` in seq order, capped at ``limit``."""

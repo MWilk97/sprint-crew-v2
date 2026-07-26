@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from pydantic_ai import Agent
@@ -65,7 +66,8 @@ async def run_tester_loop(
 
 async def run_tester_reporter(task_plan: TaskPlan, raw_output: str) -> TestAdditions:
     plan_json = task_plan.model_dump_json(indent=2)
-    additions = structured_completion(
+    additions = await asyncio.to_thread(
+        structured_completion,
         Role.WORK,
         system_prompt="Convert tester handoff to TestAdditions JSON.",
         user_prompt=build_tester_reporter_user_prompt(

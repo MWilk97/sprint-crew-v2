@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     # Comma-separated browser origins for CORS (ADR 0011). Default "*" is DEV ONLY.
     console_cors_origins: str = Field(default="*", alias="CONSOLE_CORS_ORIGINS")
 
+    # SSE event stream (roadmap M3). Heartbeat keeps idle connections alive through
+    # proxy idle-reap and GPU-work silences. Queue maxsize bounds per-subscriber memory;
+    # on overflow the subscriber is dropped and reconnects to replay from the events table.
+    sse_heartbeat_s: float = Field(default=15.0, alias="SSE_HEARTBEAT_S")
+    sse_queue_maxsize: int = Field(default=1000, alias="SSE_QUEUE_MAXSIZE")
+
     # Interpreter / clarify (ADR 0013). The console generates questions with an LLM; when
     # the Work lane is cold we fall back to the deterministic stub rather than making an
     # interactive caller wait out a lane load. Set autostart when latency does not matter.
