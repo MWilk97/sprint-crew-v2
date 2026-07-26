@@ -22,7 +22,7 @@ from uuid import uuid4
 # pytest gets that from pyproject's `pythonpath`. Needed for the tests.helpers import below.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tests.helpers.cycle_assertions import assert_cycle_passed  # noqa: E402
+from tests.helpers.cycle_assertions import assert_cycle_passed
 
 from sprint_crew.agents.coder import run_coder_loop
 from sprint_crew.agents.formatter import run_formatter

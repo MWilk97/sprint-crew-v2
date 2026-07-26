@@ -98,7 +98,7 @@ class TypedJsonStore[T: BaseModel](SqliteJsonStore):
             "payload": json.dumps(item.model_dump(mode="json")),
         }
         if self.tracks_updated_at:
-            columns["updated_at"] = str(getattr(item, "updated_at"))
+            columns["updated_at"] = str(item.updated_at)
         self._save_row(columns)
 
     def load(self, key: str) -> T | None:

@@ -68,5 +68,16 @@ src = ["src", "tests", "scripts"]
 extend-exclude = ["fixtures"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
-ignore = ["E501", "UP042", "UP047"]
+# B and RUF caught a vestigial if/else, stale noqa comments and unused unpacked variables
+# that E,F,I,UP miss. Note what they still do NOT catch: dead module-level *constants*
+# (four were removed by hand in this cleanup). No ruff rule finds those — F covers unused
+# imports and locals only — so that class needs a whole-program tool such as vulture.
+select = ["E", "F", "I", "UP", "B", "RUF", "C901"]
+# E501: line length is enforced by the formatter. UP042/UP047: generics/StrEnum rewrites we
+# do not want. RUF001: the prose in comments and docstrings uses en/em dashes deliberately.
+ignore = ["E501", "UP042", "UP047", "RUF001"]
+
+[tool.ruff.lint.mccabe]
+# Ratchet, not an aspiration: 23 is today's worst (_build_toolset in tools/pydantic_ai.py).
+# Lower it as functions get split; do not raise it to make a new one fit.
+max-complexity = 23

@@ -231,7 +231,7 @@ async def test_run_coder_loop_usage_limit_returns_partial(tmp_path) -> None:
         def iter(self, *args, **kwargs):
             return FakeIter()
 
-    agent, deps = coder._build_coder_agent(tmp_path, plan)
+    _agent, deps = coder._build_coder_agent(tmp_path, plan)
     with patch.object(coder, "_build_coder_agent", return_value=(FakeAgent(), deps)):
         output, log = await coder.run_coder_loop(plan, tmp_path, max_turns=3)
 
@@ -308,7 +308,7 @@ async def test_run_coder_loop_handles_model_http_error(tmp_path) -> None:
     with patch.object(
         coder, "_build_coder_agent", return_value=(agent_mock, MagicMock(early_exit_handoff=None))
     ):
-        handoff, tool_log = await coder.run_coder_loop(plan, tmp_path)
+        handoff, _tool_log = await coder.run_coder_loop(plan, tmp_path)
 
     assert "handing off partial work" in handoff
     assert "400" in handoff

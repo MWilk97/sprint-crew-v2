@@ -55,6 +55,7 @@ start_console_run = _routes.start_console_run
 cancel_console_session = _routes.cancel_console_session
 
 __all__ = [
+    "_locks",
     "apply_clarify_answers",
     "build_clarify_questions",
     "build_plan_result",
@@ -73,5 +74,4 @@ __all__ = [
     "stream_console_events",
     "submit_clarify_answers",
     "sync_sprint_progress",
-    "_locks",
 ]
