@@ -317,3 +317,34 @@ async def test_cancel_of_unknown_or_finished_run_is_false() -> None:
     registry.submit("done", _body)
     await _settle()
     assert registry.cancel("done") is False
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancel_arms_only_one_escalation() -> None:
+    """A user can click Stop as many times as they like; each click must not leak a task.
+
+    The watchdog sleeps CANCEL_GRACE_S before hard-cancelling, so an unguarded re-arm
+    leaves an unreferenced task per click with nothing bounding how many exist.
+    """
+    registry = RunRegistry()
+    release = asyncio.Event()
+
+    async def _body() -> None:
+        await release.wait()
+
+    registry.submit("run", _body)
+    await _settle()
+
+    assert registry.cancel("run") is True
+    entry = registry.get("run")
+    assert entry is not None
+    first = entry.escalate_task
+
+    for _ in range(4):
+        assert registry.cancel("run") is True
+    assert entry.escalate_task is first
+
+    release.set()
+    await _settle()
+    if first is not None:
+        first.cancel()

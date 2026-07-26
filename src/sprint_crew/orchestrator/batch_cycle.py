@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from pathlib import Path
 from uuid import uuid4
 
@@ -157,7 +158,10 @@ async def run_backlog_batched(
                 "session_ids": session_ids,
                 "completed_session_ids": completed_session_ids,
                 "failed_ticket_key": failed_ticket_key,
-                "error": str(exc),
+                # Traceback tail matches session.py's arm for the same failure mode — without
+                # it a backlog-run crash is strictly harder to diagnose than a single-session
+                # one, from the same stored field.
+                "error": f"{exc}\n{traceback.format_exc()[-1500:]}",
             }
         )
         store.save(run)

@@ -113,6 +113,9 @@ class RunEntry:
     # cancel target. See the module docstring for why this split exists.
     wrapper_task: asyncio.Task[None] | None = None
     body_task: asyncio.Task[None] | None = None
+    # Held so the hard-cancel watchdog is not garbage-collected mid-sleep, and so cancel()
+    # can tell an escalation is already armed.
+    escalate_task: asyncio.Task[None] | None = None
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -236,8 +239,15 @@ class RunRegistry:
             if entry.wrapper_task is not None:
                 entry.wrapper_task.cancel()
             return True
+        if entry.state == "cancelling":
+            # Already escalating. Re-arming would spawn a second untracked watchdog per
+            # repeated Stop (double-click, client retry) — harmless individually, but the
+            # tasks are unreferenced and nothing bounds how many a user can create.
+            return True
         entry.state = "cancelling"
-        asyncio.create_task(self._escalate(entry), name=f"run-cancel:{run_id}")
+        entry.escalate_task = asyncio.create_task(
+            self._escalate(entry), name=f"run-cancel:{run_id}"
+        )
         return True
 
     async def _escalate(self, entry: RunEntry) -> None:
