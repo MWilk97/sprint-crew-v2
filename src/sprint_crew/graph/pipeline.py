@@ -334,10 +334,8 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         acceptance_output = str(state["acceptance_test_output"])
         acceptance_green = True
     else:
-        acceptance_output, acceptance_green = await asyncio.to_thread(
-            run_acceptance_tests,
-            workspace,
-            plan.acceptance_tests,
+        acceptance_output, acceptance_green = await run_acceptance_tests(
+            workspace, plan.acceptance_tests
         )
     failure_analysis = (
         analyze_acceptance_output(acceptance_output) if acceptance_output.strip() else None
@@ -556,10 +554,8 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
         if state.get("tests_run_this_cycle") and cached:
             test_output = str(cached)
         else:
-            test_output, _ = await asyncio.to_thread(
-                run_acceptance_tests,
-                workspace_from_state(state),
-                plan.acceptance_tests,
+            test_output, _ = await run_acceptance_tests(
+                workspace_from_state(state), plan.acceptance_tests
             )
 
     failure_analysis, bugs_observed = resolve_failure_feedback(

@@ -54,14 +54,15 @@ async def test_reviewer_acceptance_tests_do_not_freeze_event_loop(
 ) -> None:
     """run_acceptance_tests is a subprocess bounded by ACCEPTANCE_TEST_TIMEOUT_S (900 s).
 
-    Unwrapped it stalls the process so hard that POST /cancel cannot even be accepted,
-    breaking the cancel contract api/console.py documents. Reached whenever tests did not
-    already pass this cycle — i.e. exactly the failing-test retry loop where Stop gets hit.
-    """
+    Run on the loop it stalls the process so hard that POST /cancel cannot even be
+    accepted, breaking the cancel contract api/console.py documents. Reached whenever tests
+    did not already pass this cycle — i.e. exactly the failing-test retry loop where Stop
+    gets hit.
 
-    def _slow_tests(*args: object, **kwargs: object) -> tuple[str, bool]:
-        time.sleep(0.4)  # stand-in for a pytest subprocess
-        return ("collected 1 item", True)
+    Deliberately drives the real subprocess path rather than a stub: the guarantee now
+    lives in sprint_crew.proc, so mocking run_acceptance_tests would assert nothing.
+    """
+    task_plan = task_plan.model_copy(update={"acceptance_tests": ["sleep 0.4"]})
 
     ticks = 0
 
@@ -74,7 +75,6 @@ async def test_reviewer_acceptance_tests_do_not_freeze_event_loop(
     review = ReviewOutcome(ticket_key="DEMO-1", passed=True, summary="ok", tests_passed=True)
 
     with (
-        patch.object(rv, "run_acceptance_tests", _slow_tests),
         patch.object(rv, "gather_workspace_diff", return_value="diff"),
         patch.object(rv, "structured_completion", return_value=review),
     ):

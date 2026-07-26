@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import shlex
-import subprocess
 from pathlib import Path
 
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.pytest_cmd import normalize_test_command
+from sprint_crew.proc import run_shell
 from sprint_crew.tools.run_command import ALLOWED_COMMANDS
 
 # Prose tokens that must not appear as bare pytest arguments (not after -k/-m/etc.).
@@ -105,35 +105,32 @@ def validate_acceptance_tests(commands: list[str]) -> list[str]:
     return commands
 
 
-def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[str, bool]:
+async def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[str, bool]:
+    """Run each acceptance command, returning combined output and whether all passed.
+
+    Async rather than sync-in-a-thread so a cancelled run actually kills the child. See
+    sprint_crew.proc: a to_thread'd subprocess.run survives cancellation and keeps a pytest
+    alive for up to ACCEPTANCE_TEST_TIMEOUT_S after the user pressed Stop.
+    """
     timeout_s = get_settings().acceptance_test_timeout_s
     lines: list[str] = []
     all_passed = True
     for cmd in commands:
         normalized = normalize_test_command(cmd, workspace_root)
         lines.append(f"$ {normalized}")
-        try:
-            proc = subprocess.run(
-                normalized,
-                shell=True,
-                cwd=workspace_root,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_s,
-            )
-        except subprocess.TimeoutExpired:
+        result = await run_shell(normalized, cwd=workspace_root, timeout=timeout_s)
+        if result.timed_out:
             # A hung command is a failed acceptance test, not a crashed run.
             all_passed = False
             lines.append(f"timed out after {timeout_s:.0f}s")
             lines.append("")
             continue
-        passed = proc.returncode == 0
+        passed = result.returncode == 0
         all_passed = all_passed and passed
-        lines.append(f"exit_code={proc.returncode}")
-        if proc.stdout.strip():
-            lines.append(proc.stdout.strip()[-2000:])
-        if proc.stderr.strip():
-            lines.append("stderr: " + proc.stderr.strip()[-1000:])
+        lines.append(f"exit_code={result.returncode}")
+        if result.stdout.strip():
+            lines.append(result.stdout.strip()[-2000:])
+        if result.stderr.strip():
+            lines.append("stderr: " + result.stderr.strip()[-1000:])
         lines.append("")
     return "\n".join(lines), all_passed

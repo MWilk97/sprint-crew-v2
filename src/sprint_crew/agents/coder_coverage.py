@@ -7,7 +7,6 @@ then verify with acceptance tests" policy on top of it.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from sprint_crew.agents.coder import (
@@ -101,15 +100,11 @@ async def run_coder_with_coverage(
     acceptance_output = ""
     acceptance_verified = False
     if coverage.satisfied and not _deadline_reached(deadline_epoch) and not cancel_requested():
-        # to_thread: a synchronous subprocess run here would hold the event loop for up to
-        # ACCEPTANCE_TEST_TIMEOUT_S (900 s), during which no SSE frame flushes and /health
-        # cannot answer — the same unblocking the pipeline already does at its two call sites.
-        # Cancel is checked too: starting a 900 s child after Stop is what makes a cancel
-        # feel broken, and the token is invisible to the graph until the child returns.
-        acceptance_output, acceptance_green = await asyncio.to_thread(
-            run_acceptance_tests,
-            workspace_root,
-            task_plan.acceptance_tests,
+        # Cancel is checked before starting: launching a 900 s child after Stop is what
+        # makes a cancel feel broken. Once running, the child dies with the task
+        # (sprint_crew.proc) rather than outliving the run that spawned it.
+        acceptance_output, acceptance_green = await run_acceptance_tests(
+            workspace_root, task_plan.acceptance_tests
         )
         acceptance_verified = acceptance_green
         if not acceptance_green and acceptance_output.strip():
