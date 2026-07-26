@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-ROLE = "Sprint TechLead"
-
 GOAL = (
     "Read the ticket and the relevant parts of the repository, then "
     "produce a TaskPlan with concrete ordered steps, files to touch, "

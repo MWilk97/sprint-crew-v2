@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-import pytest
+import re
+from pathlib import Path
 
-from sprint_crew.config import Role, lane_for_role
+import pytest
+from pydantic import AliasChoices
+
+from sprint_crew.config import Role, Settings, lane_for_role
 
 
 def test_lane_for_role_coding() -> None:
@@ -32,6 +36,27 @@ def test_vllm_work_url_accepts_legacy_planner_env(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("VLLM_PLANNER_URL", "http://127.0.0.1:8999/v1")
     settings = Settings()
     assert settings.vllm_work_url == "http://127.0.0.1:8999/v1"
+
+
+def test_every_setting_is_documented_in_env_example() -> None:
+    """.env.example is the only operator-facing list of knobs; a setting absent from it is
+    invisible. Five (CANCEL_GRACE_S, CONSOLE_SESSION_TTL_DAYS, MAX_BACKLOG_STORIES,
+    MAX_CODER_TURNS, MAX_TESTER_TURNS) had drifted out before this test existed.
+    """
+    env_text = Path(__file__).resolve().parents[2].joinpath(".env.example").read_text()
+    documented = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", env_text, flags=re.M))
+
+    undocumented = set()
+    for name, field in Settings.model_fields.items():
+        alias = field.validation_alias
+        if isinstance(alias, AliasChoices):
+            names = {str(c).upper() for c in alias.choices}
+        else:
+            names = {str(alias or name).upper()}
+        if not names & documented:
+            undocumented.add(sorted(names)[0])
+
+    assert not undocumented, f"settings missing from .env.example: {sorted(undocumented)}"
 
 
 @pytest.mark.asyncio
