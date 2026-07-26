@@ -10,7 +10,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from sprint_crew.agents.coder import normalize_change, run_coder_with_coverage
+from sprint_crew.agents.coder import normalize_change
+from sprint_crew.agents.coder_coverage import run_coder_with_coverage
 from sprint_crew.agents.formatter import run_formatter
 from sprint_crew.agents.reviewer import run_reviewer
 from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated

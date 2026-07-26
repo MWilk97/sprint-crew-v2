@@ -158,7 +158,7 @@ async def test_run_coder_with_coverage_skips_unfixable_continuation(
     plan_with_missing_source: TaskPlan,
     tmp_path,
 ) -> None:
-    from sprint_crew.agents import coder
+    from sprint_crew.agents import coder_coverage as coder
 
     unsatisfied = PlanCoverageResult(
         missing=["tests/test_feature.py"],
@@ -184,7 +184,7 @@ async def test_run_coder_with_coverage_skips_unfixable_continuation(
 async def test_run_coder_with_coverage_stops_on_stall(
     plan_with_missing_source: TaskPlan, tmp_path
 ) -> None:
-    from sprint_crew.agents import coder
+    from sprint_crew.agents import coder_coverage as coder
 
     stalled = PlanCoverageResult(
         missing=["feature.py"],

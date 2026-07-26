@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import time
 from pathlib import Path
 
@@ -11,22 +10,12 @@ from pydantic_ai.usage import UsageLimits
 
 from sprint_crew.agents._factory import build_tool_agent
 from sprint_crew.agents.prompts_coder import (
-    build_coder_build_fix_prompt,
-    build_coder_continuation_prompt,
     build_coder_step_prompt,
     build_coder_system_prompt,
     build_coder_user_prompt,
 )
 from sprint_crew.config import Role, get_settings, lane_for_role
 from sprint_crew.inference.router import coder_model_settings
-from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
-from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
-from sprint_crew.orchestrator.plan_coverage import (
-    PlanCoverageResult,
-    continuation_makes_sense,
-    coverage_improved,
-    validate_plan_coverage,
-)
 from sprint_crew.orchestrator.run_registry import cancel_requested
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
 from sprint_crew.schemas.change import CodeChange
@@ -247,102 +236,3 @@ async def run_coder_plan(
         remaining_turns = max(0, remaining_turns - step_turns)
 
     return raw_output, all_logs
-
-
-async def run_coder_with_coverage(
-    task_plan: TaskPlan,
-    workspace_root: Path,
-    *,
-    role_specialization: str | None = None,
-    prior_review_feedback: str = "",
-    baseline_paths: frozenset[str] | None = None,
-    deadline_epoch: float = 0.0,
-    attempt: int = 0,
-) -> tuple[str, list[dict], PlanCoverageResult, str, bool]:
-    """Run step-aware Coder, then continuation rounds until coverage satisfied or cap hit."""
-    settings = get_settings()
-    # One shared log for every loop this node runs, so tool-call ``index`` is continuous
-    # across steps and continuation rounds (see run_coder_loop). The callees append into
-    # it and return it, so the returned value is discarded rather than merged.
-    tool_log: list[dict] = []
-    raw_output, _ = await run_coder_plan(
-        task_plan,
-        workspace_root,
-        role_specialization=role_specialization,
-        prior_review_feedback=prior_review_feedback,
-        baseline_paths=baseline_paths,
-        deadline_epoch=deadline_epoch,
-        attempt=attempt,
-        tool_call_log=tool_log,
-    )
-
-    coverage = validate_plan_coverage(
-        task_plan,
-        workspace_root,
-        baseline_paths=baseline_paths,
-    )
-    continuation_budget = _continuation_turn_budget()
-    prior_coverage = coverage
-    for _ in range(settings.max_coverage_rounds):
-        if coverage.satisfied:
-            break
-        if _deadline_reached(deadline_epoch) or cancel_requested():
-            break
-        if not continuation_makes_sense(coverage, workspace_root, task_plan):
-            break
-        continuation_prompt = build_coder_continuation_prompt(coverage)
-        continuation_output, _ = await run_coder_loop(
-            task_plan,
-            workspace_root,
-            role_specialization=role_specialization,
-            user_prompt=continuation_prompt,
-            max_turns=continuation_budget,
-            baseline_paths=baseline_paths,
-            deadline_epoch=deadline_epoch,
-            attempt=attempt,
-            tool_call_log=tool_log,
-        )
-        raw_output = continuation_output
-        new_coverage = validate_plan_coverage(
-            task_plan,
-            workspace_root,
-            baseline_paths=baseline_paths,
-        )
-        if not coverage_improved(prior_coverage, new_coverage):
-            coverage = new_coverage
-            break
-        prior_coverage = coverage
-        coverage = new_coverage
-
-    acceptance_output = ""
-    acceptance_verified = False
-    if coverage.satisfied and not _deadline_reached(deadline_epoch) and not cancel_requested():
-        # to_thread: a synchronous subprocess run here would hold the event loop for up to
-        # ACCEPTANCE_TEST_TIMEOUT_S (900 s), during which no SSE frame flushes and /health
-        # cannot answer — the same unblocking the pipeline already does at its two call sites.
-        # Cancel is checked too: starting a 900 s child after Stop is what makes a cancel
-        # feel broken, and the token is invisible to the graph until the child returns.
-        acceptance_output, acceptance_green = await asyncio.to_thread(
-            run_acceptance_tests,
-            workspace_root,
-            task_plan.acceptance_tests,
-        )
-        acceptance_verified = acceptance_green
-        if not acceptance_green and acceptance_output.strip():
-            analysis = analyze_acceptance_output(acceptance_output)
-            if analysis.kind != "none" and not analysis.tester_can_help:
-                build_fix_prompt = build_coder_build_fix_prompt(analysis)
-                continuation_output, _ = await run_coder_loop(
-                    task_plan,
-                    workspace_root,
-                    role_specialization=role_specialization,
-                    user_prompt=build_fix_prompt,
-                    max_turns=continuation_budget,
-                    baseline_paths=baseline_paths,
-                    deadline_epoch=deadline_epoch,
-                    attempt=attempt,
-                    tool_call_log=tool_log,
-                )
-                raw_output = continuation_output
-
-    return raw_output, tool_log, coverage, acceptance_output, acceptance_verified
