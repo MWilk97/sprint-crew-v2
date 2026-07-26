@@ -1,6 +1,7 @@
 # Backend roadmap — interactive console ("Cursor-like") for sprint-crew-v2
 
-**Status:** Proposed. Plan only — nothing in this document has been implemented.
+**Status:** Phases A and B (M0–M5) are **landed**; Phase C onward (M6–M12) is **proposed**.
+Each milestone below carries its own status line — the per-milestone marker is authoritative.
 **Scope:** backend (`sprint-crew-v2`) only. Front-end work is *flagged but not planned* here; every
 contract change carries an `FE →` note for the separate front-end roadmap session.
 **Written:** 2026-07-25, from branch `feature/interpreter-clarify` (2 commits ahead of `origin/main`, unpushed).
@@ -23,6 +24,12 @@ Stop. This is minimal hard-cancel only — not the mid-run steering that was exc
 # Part 0 — Where we actually are
 
 Verified against the code, not the docs. This is the baseline every milestone is a delta from.
+
+> **Snapshot as of 2026-07-25 — kept as the historical baseline, not a current bug list.**
+> M0–M5 have since landed, so most problems and latent bugs catalogued below are fixed:
+> event-loop blocking, fire-and-forget runs, blocking `POST /start`, `deadline_epoch`,
+> subprocess timeouts, SQLite WAL, the timeline example, and the stale OpenAPI description.
+> Read the per-milestone status lines in Part 2 for what is actually outstanding.
 
 **What already works and should not be rebuilt:**
 
@@ -157,6 +164,8 @@ where you opt in.
 
 ### M1 — Durable console sessions
 
+**Status (2026-07-26):** Landed. Sessions persist via `orchestrator/console_store.py`.
+
 **Goal.** Console sessions survive an API restart and have exactly one writer at a time.
 
 **Backend changes.**
@@ -180,6 +189,8 @@ disappear after the TTL.
 ---
 
 ### M2 — Event backbone: closed vocabulary, monotonic cursor, append-only table
+
+**Status (2026-07-26):** Landed. See `orchestrator/event_log.py` and `GET /events`.
 
 **Goal.** One event stream per console session, with a stable machine-readable vocabulary and a cursor,
 served by polling. This is the most important contract decision in the whole roadmap.
@@ -217,6 +228,8 @@ transport, not the payload.
 
 ### M3 — SSE transport
 
+**Status (2026-07-26):** Landed. `GET /stream` with Last-Event-ID resume.
+
 **Goal.** The UI stops polling; events arrive as they are produced; a dropped connection resumes without gaps.
 
 **Backend changes.**
@@ -240,6 +253,8 @@ does not handle open-ended streams well. Budget time for that.
 ---
 
 ### M4 — Fine-grained, honestly-timestamped progress
+
+**Status (2026-07-26):** Landed. Phase/lane events via `_phased` in the graph.
 
 **Goal.** No silence longer than a few seconds during an active run.
 

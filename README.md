@@ -67,7 +67,9 @@ cp .env.example .env          # set HF_TOKEN for model download
 | `GET /sprint/session/{id}` | Session status and event timeline |
 | `GET /sprint/backlog/{run_id}` | Backlog orchestration status |
 | `POST /sprint/session/{id}/approve` | Record human approval (no auto-merge) |
-| `POST /v1/console/sessions` (+ `messages`/`clarify`/`confirm`/`start`/`cancel`) | Interactive console MVP — see [contract](docs/contracts/chat-console-api.md) |
+| `POST /v1/console/sessions` (+ `messages`/`clarify`/`confirm`/`start`/`cancel`) | Interactive console — see [contract](docs/contracts/chat-console-api.md) |
+| `GET /v1/console/sessions/{id}/events` | Durable, monotonically sequenced run timeline (polling) |
+| `GET /v1/console/sessions/{id}/stream` | Same timeline over SSE, resumable via `Last-Event-ID` |
 | `GET /health` | API health + vLLM lane status |
 
 Start the API:

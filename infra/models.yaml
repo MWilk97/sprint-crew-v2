@@ -23,7 +23,8 @@
 # gpu_memory_utilization assumes ONE lane loaded at a time (sequential pipeline).
 # GX10/GB10 unified memory — per-lane tuning (128 GB unified), NVFP4 weights:
 #   coding  Laguna S 2.1 NVFP4 (~72 GB): ~0.85 leaves KV headroom @ 131k
-#   work    MoE 30B/3B NVFP4 (~18 GB): ~0.50 covers weights + KV @ 131k
+#   work    Qwen3.6-35B-A3B NVFP4 (~22 GB incl. vision tower): ~0.65 covers weights + KV @ 131k
+#           (the ~18 GB / ~0.50 figures belong to the rollback ckpt above, not this lane)
 # NVFP4 MoE on GB10 (sm121) needs Marlin GEMM env flags — see infra/docker-compose.yml.
 # See https://github.com/shamily/vllm-gb10 — do not use 0.95+ like on discrete VRAM GPUs.
 lanes:

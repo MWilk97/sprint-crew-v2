@@ -40,6 +40,23 @@ def test_openapi_event_vocabulary_matches_the_code() -> None:
     assert set(schemas["ConsoleSessionStatus"]["enum"]) == {s.value for s in ConsoleSessionStatus}
 
 
+def test_markdown_contract_does_not_restate_the_event_vocabulary() -> None:
+    """The prose copy of the event list in chat-console-api.md fell four milestones behind
+    the enum before anyone noticed, because no test read it. The fix was to delete the copy
+    and point at the OpenAPI enum; this keeps anyone from reintroducing one.
+    """
+    path = get_settings().project_root / "docs" / "contracts" / "chat-console-api.md"
+    text = path.read_text(encoding="utf-8")
+
+    # A restated list would name most of the enum inline; a pointer names only a few
+    # examples. Anything approaching the full vocabulary is a second source of truth.
+    inline = {e.value for e in EventType if f"`{e.value}`" in text}
+    assert len(inline) < len(EventType) // 2, (
+        f"chat-console-api.md appears to restate the event vocabulary ({len(inline)} of "
+        f"{len(EventType)} types inline). Cite the OpenAPI EventType enum instead."
+    )
+
+
 def test_openapi_console_session_properties_match_the_model() -> None:
     spec_props = set(_openapi()["components"]["schemas"]["ConsoleSession"]["properties"])
     from sprint_crew.schemas.console import ConsoleSession
