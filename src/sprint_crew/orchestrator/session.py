@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -13,11 +14,12 @@ from sprint_crew.config import get_settings
 from sprint_crew.graph.pipeline import run_sprint_cycle
 from sprint_crew.graph.state import SprintState
 from sprint_crew.integrations.jira_client import default_git_env
-from sprint_crew.orchestrator.emitter import Emitter, reset_emitter, set_emitter
+from sprint_crew.orchestrator.emitter import Emitter, emit_live, reset_emitter, set_emitter
 from sprint_crew.orchestrator.event_log import event_log
+from sprint_crew.orchestrator.run_registry import RunCancelled
 from sprint_crew.orchestrator.store import SqliteJsonStore
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
-from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession
+from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession, agent_event
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
 
 
@@ -51,6 +53,9 @@ class SessionStore(SqliteJsonStore):
         if payload is None:
             return None
         return SprintSession.model_validate(json.loads(payload))
+
+    def list_all(self) -> list[SprintSession]:
+        return [SprintSession.model_validate(json.loads(p)) for p in self._list_payloads()]
 
 
 def session_store() -> SessionStore:
@@ -272,6 +277,31 @@ async def create_and_run_cycle(
     try:
         final_state = await run_sprint_cycle(state, on_node_complete=_persist_progress)
         session = _session_from_state(final_state, session, initial_events=initial_events_snapshot)
+    except (RunCancelled, asyncio.CancelledError) as exc:
+        # Both cancel paths must land on CANCELLED, not FAILED. RunCancelled would
+        # otherwise be swallowed by the arm below; CancelledError is a BaseException and
+        # would skip it entirely, leaving the row stuck at RUNNING. The cancelled event is
+        # published here rather than by a graph node — the graph is unwinding, not routing.
+        cancelled = agent_event(
+            "orchestrator",
+            "cancelled",
+            "Run cancelled",
+            level="warning",
+            reason=str(exc) or None,
+            hard=isinstance(exc, asyncio.CancelledError),
+        )
+        session = session.model_copy(
+            update={
+                "status": SessionStatus.CANCELLED,
+                "error": str(exc) or "cancelled",
+                "updated_at": _utc_now_iso(),
+                "events": [*session.events, emit_live(cancelled) or cancelled],
+            }
+        )
+        store.save(session)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        return session
     except Exception as exc:
         import traceback
 

@@ -273,6 +273,13 @@ virtualisation and a level filter.
 
 ### M5 — Run lifecycle: registry, queue, non-blocking start, real cancel
 
+**Status (2026-07-26):** Landed. See [ADR 0014](adr/0014-run-queue-and-cancel.md).
+Two deliberate deviations from the plan below: the graph checks cancel once at `_phased` node
+entry rather than in each routing function (equivalent coverage — a route runs between two phased
+nodes — for a fraction of the surface), and the "stopping…" state is a `cancel_requested_at` field
+rather than a new `cancelling` status (additive, so it does not break a client's state machine).
+Cancel targets an inner *body* task so the wrapper's lane teardown is never itself cancelled.
+
 **Goal.** Starting a run returns immediately; the user can see they are queued; Stop actually stops.
 
 **Backend changes.**

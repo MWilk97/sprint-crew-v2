@@ -111,7 +111,7 @@ def test_get_after_reap_returns_404(client: TestClient, monkeypatch) -> None:
     sid = session["session_id"]
 
     resp = client.post(f"/v1/console/sessions/{sid}/start")
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     assert resp.json()["status"] == "completed"
 
     # TTL=0: the completion sweep reaps the just-finished session immediately.
@@ -169,7 +169,7 @@ def test_message_rejected_when_terminal_or_running(client: TestClient) -> None:
     with patch(START_RUN_PATCH, new=AsyncMock(return_value="run-1")):
         running = _make_ready_confirmed(client, mode="code")
         rid = running["session_id"]
-        assert client.post(f"/v1/console/sessions/{rid}/start").status_code == 200
+        assert client.post(f"/v1/console/sessions/{rid}/start").status_code == 202
     resp = client.post(f"/v1/console/sessions/{rid}/messages", json={"content": "more"})
     assert resp.status_code == 409
 
@@ -323,7 +323,9 @@ def test_plan_start_completes_with_plan_result(client: TestClient) -> None:
     session = _make_ready_confirmed(client, mode="plan")
     sid = session["session_id"]
     resp = client.post(f"/v1/console/sessions/{sid}/start")
-    assert resp.status_code == 200
+    # 202 even though plan mode finishes inside the request: one status code per route
+    # keeps the generated client simple, and plan mode goes async in M10 anyway.
+    assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "completed"
     assert body["sprint_ref"] is None
@@ -338,7 +340,7 @@ def test_code_start_sets_sprint_ref_with_mocked_orchestration(client: TestClient
     with patch(START_RUN_PATCH, new=run_mock):
         session = _make_ready_confirmed(client, mode="code")
         resp = client.post(f"/v1/console/sessions/{session['session_id']}/start")
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "running"
     assert body["sprint_ref"]["backlog_run_id"] == "run-91c2"
@@ -353,7 +355,7 @@ def test_get_running_code_session_mirrors_backlog(client: TestClient, api_db) ->
     with patch(START_RUN_PATCH, new=AsyncMock(return_value="run-mirror")):
         session = _make_ready_confirmed(client, mode="code")
         sid = session["session_id"]
-        assert client.post(f"/v1/console/sessions/{sid}/start").status_code == 200
+        assert client.post(f"/v1/console/sessions/{sid}/start").status_code == 202
 
     store = BacklogRunStore(api_db)
     store.save(
@@ -407,7 +409,7 @@ def test_cancel_running_code_session(client: TestClient) -> None:
     with patch(START_RUN_PATCH, new=AsyncMock(return_value="run-c")):
         session = _make_ready_confirmed(client, mode="code")
         sid = session["session_id"]
-        assert client.post(f"/v1/console/sessions/{sid}/start").status_code == 200
+        assert client.post(f"/v1/console/sessions/{sid}/start").status_code == 202
     resp = client.post(f"/v1/console/sessions/{sid}/cancel")
     assert resp.status_code == 200
     assert resp.json()["status"] == "cancelled"

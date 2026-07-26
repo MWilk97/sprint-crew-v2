@@ -50,6 +50,7 @@ from sprint_crew.orchestrator.retry import (
     resolve_failure_feedback,
     resolve_retry_scope,
 )
+from sprint_crew.orchestrator.run_registry import check_cancelled
 from sprint_crew.orchestrator.ship_cycle import orchestrator_ship
 from sprint_crew.orchestrator.template_plan import work_lane_required_for_ticket
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
@@ -716,10 +717,16 @@ def _phased(phase: str, fn: _NodeFn) -> _NodeFn:
 
     Binds the enclosing phase onto the context emitter for the node's duration, so tool and
     lane events emitted inside inherit ``phase``. A no-op when no console run is streaming.
+
+    Also the graph's single cancel checkpoint (M5). Firing here covers every node *and*
+    every routing decision — a route runs between two phased nodes, so a cancel requested
+    during routing is caught on the next node's entry. That is why the routing functions
+    carry no check of their own.
     """
 
     @functools.wraps(fn)
     async def _wrapped(state: SprintState) -> dict[str, Any]:
+        check_cancelled()
         emitter = current_emitter()
         if emitter is None:
             return await fn(state)

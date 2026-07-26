@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import BackgroundTasks
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 
-from sprint_crew.api.app import FromPromptRequest, app, sprint_from_prompt
+from sprint_crew.api.app import app
 from sprint_crew.orchestrator.backlog import BacklogRunStore
+from sprint_crew.orchestrator.prompt_run import run_from_prompt
 from sprint_crew.orchestrator.session import SessionStore
 from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.console import (
@@ -139,24 +139,33 @@ async def test_approve_session_not_found(api_client: AsyncClient, api_db) -> Non
 
 
 @pytest.mark.asyncio
-async def test_sprint_from_prompt_stops_work_lane_when_scrum_master_fails(tmp_path) -> None:
+async def test_from_prompt_planning_stops_work_lane_when_scrum_master_fails(tmp_path) -> None:
     """Regression: ensure_lane/stop_lane must bracket run_scrum_master with try/finally —
     otherwise an exception mid-call leaves the Work lane loaded (GX10 unified-memory risk,
-    see AGENTS.md 4.1: never keep 2+ vLLM lanes loaded at once)."""
+    see AGENTS.md 4.1: never keep 2+ vLLM lanes loaded at once).
+
+    Planning moved out of the request handler into the registry-owned run body (M5), so the
+    invariant is asserted there; the handler no longer awaits any of this.
+    """
     stop_mock = AsyncMock()
     with (
-        patch("sprint_crew.api.app.prepare_workspace", return_value=tmp_path),
-        patch("sprint_crew.api.app.maybe_index_workspace"),
-        patch("sprint_crew.api.app.enrich_repo_context", return_value=""),
-        patch("sprint_crew.api.app.ensure_lane", new=AsyncMock()),
-        patch("sprint_crew.api.app.stop_lane", new=stop_mock),
+        patch("sprint_crew.orchestrator.prompt_run.prepare_workspace", return_value=tmp_path),
+        patch("sprint_crew.orchestrator.prompt_run.maybe_index_workspace"),
+        patch("sprint_crew.orchestrator.prompt_run.enrich_repo_context", return_value=""),
+        patch("sprint_crew.orchestrator.prompt_run.ensure_lane", new=AsyncMock()),
+        patch("sprint_crew.orchestrator.prompt_run.stop_lane", new=stop_mock),
         patch(
-            "sprint_crew.api.app.run_scrum_master",
+            "sprint_crew.orchestrator.prompt_run.run_scrum_master",
             new=AsyncMock(side_effect=RuntimeError("boom")),
         ),
     ):
         with pytest.raises(RuntimeError):
-            await sprint_from_prompt(FromPromptRequest(prompt="add a feature"), BackgroundTasks())
+            await run_from_prompt(
+                run_id="run-lane",
+                prompt="add a feature",
+                repo_url=None,
+                use_real_ship=False,
+            )
 
     stop_mock.assert_awaited_once()
 

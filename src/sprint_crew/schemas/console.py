@@ -31,6 +31,9 @@ class ConsoleSessionStatus(str, Enum):
     COLLECTING = "collecting"
     CLARIFYING = "clarifying"
     READY = "ready"
+    # Started, waiting for the single run slot (roadmap M5). One run at a time is a GPU
+    # constraint, not a policy — see orchestrator/run_registry.py.
+    QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -169,6 +172,13 @@ class ConsoleSession(BaseModel):
     sprint_ref: SprintRunRef | None = None
     plan_result: ConsolePlanResult | None = None
     error: str | None = None
+    # How many runs must finish before this one starts (M5). Non-null only while ``queued``,
+    # where it is 1 or more; null the moment the run is admitted or the session ends.
+    queue_position: int | None = Field(default=None, ge=1)
+    # Set when Stop was accepted but the run has not stopped yet. A field rather than a
+    # ``cancelling`` status: the pending state is additive this way, so it does not break
+    # a client's state machine, and it works for polling as well as for the event stream.
+    cancel_requested_at: str | None = None
     created_at: str = Field(default_factory=_utc_now_iso)
     updated_at: str = Field(default_factory=_utc_now_iso)
 

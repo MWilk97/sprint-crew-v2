@@ -137,11 +137,14 @@ def console_client(auth_headers: dict[str, str], tmp_path, monkeypatch):
     from sprint_crew.api import console as console_module
     from sprint_crew.api.app import app
     from sprint_crew.config import get_settings
+    from sprint_crew.orchestrator.run_registry import reset_run_registry
 
     monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
     monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
     get_settings.cache_clear()
     console_module.reset_console_store()
+    reset_run_registry()
     yield TestClient(app, headers=auth_headers)
+    reset_run_registry()
     console_module.reset_console_store()
     get_settings.cache_clear()

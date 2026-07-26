@@ -6,20 +6,21 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from sprint_crew.agents.scrum_master import run_scrum_master
 from sprint_crew.api.auth import require_token
 from sprint_crew.api.console import router as console_router
 from sprint_crew.api.console import run_console_reaper
-from sprint_crew.config import Role, get_settings
-from sprint_crew.graph.lanes import ensure_lane, lane_health, stop_lane
+from sprint_crew.config import get_settings
+from sprint_crew.graph.lanes import lane_health, stop_all_lanes
 from sprint_crew.integrations.jira_client import get_jira_client
 from sprint_crew.orchestrator.backlog import BacklogRunStore, get_backlog_run
-from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
-from sprint_crew.orchestrator.repo_context import enrich_repo_context, maybe_index_workspace
+from sprint_crew.orchestrator.event_log import event_log
+from sprint_crew.orchestrator.prompt_run import run_from_prompt
+from sprint_crew.orchestrator.run_recovery import sweep_interrupted_runs
+from sprint_crew.orchestrator.run_registry import run_registry
 from sprint_crew.orchestrator.session import (
     SessionStore,
     approve_session,
@@ -27,13 +28,25 @@ from sprint_crew.orchestrator.session import (
     get_session,
     prepare_workspace,
 )
-from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus, SprintSession
+from sprint_crew.schemas.session import (
+    BacklogRun,
+    BacklogRunStatus,
+    SessionStatus,
+    SprintSession,
+    agent_event,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Runs live in asyncio tasks, so a restart kills them without touching their rows.
+    # Reconcile before serving: a `running` row that no task backs is a lie the UI polls.
+    try:
+        sweep_interrupted_runs()
+    except Exception:
+        logger.exception("startup interrupted-run sweep failed")
     # Sweep stale terminal console sessions (and their workspaces) once at startup;
     # the per-completion sweep in console.py keeps it current afterward.
     try:
@@ -100,36 +113,19 @@ async def health() -> dict[str, object]:
 async def start_from_prompt_run(
     prompt: str,
     repo_url: str | None,
-    background_tasks: BackgroundTasks,
     console_session_id: str | None = None,
 ) -> str:
-    """From-prompt orchestration shared by /sprint/from-prompt and console code-mode start."""
+    """Queue a from-prompt run and return its id. Returns in milliseconds.
+
+    Shared by ``POST /sprint/from-prompt`` and console code-mode start. Everything that
+    actually costs time — clone, index, enrichment, lane load, ScrumMaster, then the batch —
+    happens in the registry-owned task (``orchestrator/prompt_run.py``) and reports progress
+    on the event stream.
+    """
     settings = get_settings()
     run_id = str(uuid4())
-    workspace_id = f"backlog-{run_id}"
-    # to_thread: clone, indexing, and context enrichment are blocking I/O; keep them off
-    # the event loop so /health and any live SSE stream stay responsive during start (M3).
-    workspace = await asyncio.to_thread(prepare_workspace, workspace_id, repo_url=repo_url)
-    await asyncio.to_thread(
-        maybe_index_workspace,
-        workspace,
-        workspace_id,
-        prompt=prompt,
-    )
-    repo_context = await asyncio.to_thread(enrich_repo_context, workspace, workspace_id, prompt)
-
-    work_lane = Role.WORK
-    await ensure_lane(work_lane)
-    try:
-        plan = await run_scrum_master(
-            user_prompt=prompt,
-            repo_context=repo_context,
-            role=work_lane,
-        )
-    finally:
-        await stop_lane(work_lane)
-
-    BacklogRunStore(get_settings().session_db).save(
+    store = BacklogRunStore(settings.session_db)
+    store.save(
         BacklogRun(
             run_id=run_id,
             status=BacklogRunStatus.PENDING,
@@ -137,37 +133,70 @@ async def start_from_prompt_run(
             repo_url=repo_url,
         )
     )
+    use_real_ship = not settings.use_mock_integrations
 
-    background_tasks.add_task(
-        run_backlog_batched,
-        run_id=run_id,
-        plan=plan,
-        user_prompt=prompt,
-        repo_url=repo_url,
-        use_real_ship=not settings.use_mock_integrations,
+    async def _body() -> None:
+        await run_from_prompt(
+            run_id=run_id,
+            prompt=prompt,
+            repo_url=repo_url,
+            use_real_ship=use_real_ship,
+            console_session_id=console_session_id,
+        )
+
+    async def _on_admit() -> None:
+        run = await asyncio.to_thread(store.load, run_id)
+        if run is not None:
+            await asyncio.to_thread(
+                store.save, run.model_copy(update={"status": BacklogRunStatus.RUNNING})
+            )
+
+    registry = run_registry()
+    registry.submit(
+        run_id,
+        _body,
         console_session_id=console_session_id,
+        on_admit=_on_admit,
+        # Repeated from the run's own finally block, which a hard cancel can interrupt
+        # mid-await. Idempotent, and a lane left loaded wedges the GPU for everything else.
+        teardown=stop_all_lanes,
     )
+    _emit_run_queued(run_id, console_session_id, registry.position(run_id))
     return run_id
 
 
-@sprint_router.post("/from-prompt", response_model=BacklogRunCreatedResponse)
-async def sprint_from_prompt(
-    body: FromPromptRequest, background_tasks: BackgroundTasks
-) -> BacklogRunCreatedResponse:
-    run_id = await start_from_prompt_run(body.prompt, body.repo_url, background_tasks)
+def _emit_run_queued(run_id: str, console_session_id: str | None, position: int | None) -> None:
+    if not console_session_id:
+        return
+    event_log().append_many(
+        console_session_id,
+        None,
+        [
+            agent_event(
+                "orchestrator",
+                "run_queued",
+                f"Run queued behind {position} run(s)" if position else "Run starting",
+                run_id=run_id,
+                queue_position=position or None,
+            )
+        ],
+    )
+
+
+@sprint_router.post("/from-prompt", response_model=BacklogRunCreatedResponse, status_code=202)
+async def sprint_from_prompt(body: FromPromptRequest) -> BacklogRunCreatedResponse:
+    run_id = await start_from_prompt_run(body.prompt, body.repo_url)
     return BacklogRunCreatedResponse(run_id=run_id)
 
 
-@sprint_router.post("/from-ticket", response_model=SessionCreatedResponse)
-async def sprint_from_ticket(
-    body: FromTicketRequest, background_tasks: BackgroundTasks
-) -> SessionCreatedResponse:
+@sprint_router.post("/from-ticket", response_model=SessionCreatedResponse, status_code=202)
+async def sprint_from_ticket(body: FromTicketRequest) -> SessionCreatedResponse:
     settings = get_settings()
     jira = get_jira_client()
     ticket = jira.get_ticket(body.ticket_key)
 
     session_id = str(uuid4())
-    workspace = prepare_workspace(session_id, repo_url=body.repo_url)
+    workspace = await asyncio.to_thread(prepare_workspace, session_id, repo_url=body.repo_url)
     pending = SprintSession(
         session_id=session_id,
         status=SessionStatus.PENDING,
@@ -176,14 +205,17 @@ async def sprint_from_ticket(
         selected_ticket=ticket,
     )
     SessionStore(settings.session_db).save(pending)
+    use_real_ship = not settings.use_mock_integrations
 
-    background_tasks.add_task(
-        create_and_run_cycle,
-        ticket=ticket,
-        workspace=workspace,
-        session_id=session_id,
-        use_real_ship=not settings.use_mock_integrations,
-    )
+    async def _body() -> None:
+        await create_and_run_cycle(
+            ticket=ticket,
+            workspace=workspace,
+            session_id=session_id,
+            use_real_ship=use_real_ship,
+        )
+
+    run_registry().submit(session_id, _body, teardown=stop_all_lanes)
     return SessionCreatedResponse(session_id=session_id)
 
 

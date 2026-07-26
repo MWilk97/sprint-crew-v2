@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     acceptance_test_timeout_s: float = Field(default=900.0, alias="ACCEPTANCE_TEST_TIMEOUT_S")
     git_timeout_s: float = Field(default=120.0, alias="GIT_TIMEOUT_S")
 
+    # How long a cancelled run may keep going cooperatively before the RunRegistry
+    # hard-cancels its task (M5). A body blocked inside subprocess.run cannot see the
+    # token until the child returns, so the honest worst case is this plus the two
+    # timeouts above — not this alone.
+    cancel_grace_s: float = Field(default=30.0, alias="CANCEL_GRACE_S")
+
     workspace_base: Path = Field(
         default=Path.home() / "sprint-workspaces",
         alias="SPRINT_WORKSPACE_BASE",
