@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 from sprint_crew.config import get_settings
+from sprint_crew.git_exec import git_run
 from sprint_crew.schemas.ticket import JiraTicket
 
 log = logging.getLogger(__name__)
@@ -253,29 +252,3 @@ def get_github_client(*, repo_slug: str | None = None) -> GitHubClient:
     if settings.use_mock_integrations:
         return MockGitHubClient()
     return PyGithubClient(repo_slug=repo_slug)
-
-
-def git_run(
-    argv: list[str], *, cwd: Path, env: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    # timeout guards against a hung git (e.g. a network push) blocking the event loop
-    # forever; TimeoutExpired propagates so the caller fails loudly rather than silently.
-    return subprocess.run(
-        ["git", *argv],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env=env or os.environ.copy(),
-        check=False,
-        timeout=get_settings().git_timeout_s,
-    )
-
-
-def default_git_env() -> dict[str, str]:
-    return {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "sprint-crew",
-        "GIT_AUTHOR_EMAIL": "sprint-crew@local",
-        "GIT_COMMITTER_NAME": "sprint-crew",
-        "GIT_COMMITTER_EMAIL": "sprint-crew@local",
-    }

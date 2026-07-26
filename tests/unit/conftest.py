@@ -90,13 +90,26 @@ def graph_run_mocks(satisfied_coder_result: tuple):
                 "reviewer": stack.enter_context(
                     patch("sprint_crew.graph.pipeline.run_reviewer", new=reviewer)
                 ),
-                "subprocess": stack.enter_context(
-                    patch("sprint_crew.orchestrator.plan_coverage.subprocess.run")
+                # Patch the git wrapper, not subprocess itself: plan_coverage delegates to
+                # git_exec.git_output, so reaching through to subprocess would pin an
+                # implementation detail one layer too deep.
+                "git_output": stack.enter_context(
+                    patch("sprint_crew.orchestrator.plan_coverage.git_output", return_value="")
+                ),
+                # These three were silenced by accident until now: patching
+                # plan_coverage.subprocess.run resolved to the *global* subprocess module,
+                # so it stubbed every subprocess in the process — real git invocations and
+                # real pytest runs included. Stub the seams the graph actually depends on.
+                "workspace_diff": stack.enter_context(
+                    patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="")
+                ),
+                "acceptance_tests": stack.enter_context(
+                    patch(
+                        "sprint_crew.graph.pipeline.run_acceptance_tests",
+                        return_value=("collected 0 items", True),
+                    )
                 ),
             }
-            mocks["subprocess"].return_value.returncode = 0
-            mocks["subprocess"].return_value.stdout = ""
-            mocks["subprocess"].return_value.stderr = ""
             if tech_lead_result is not None:
                 mocks["tech_lead"] = stack.enter_context(
                     patch(

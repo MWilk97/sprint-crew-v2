@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sprint_crew.orchestrator.plan_coverage import _run_git
+from sprint_crew.git_exec import git_output
 from sprint_crew.paths import DIFF_PATH_RE, normalize_path
 from sprint_crew.tools import READONLY_TOOLS, build_registry
 
@@ -51,7 +51,7 @@ def gather_workspace_diff(
     diff = result.output
 
     if priority_paths:
-        stat = _run_git(["diff", "--stat"], root).strip()
+        stat = git_output(["diff", "--stat"], root).strip()
         priority_hunks = _extract_file_hunks(diff, set(priority_paths))
         parts: list[str] = []
         if stat:

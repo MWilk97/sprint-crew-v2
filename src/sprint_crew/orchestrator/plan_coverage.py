@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sprint_crew.git_exec import git_output
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
 from sprint_crew.paths import is_test_path, normalize_path
 from sprint_crew.schemas.ticket import TaskPlan
@@ -114,17 +114,6 @@ def _paths_from_porcelain(status_text: str) -> set[str]:
     return paths
 
 
-def _run_git(args: list[str], workspace_root: Path) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=workspace_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return (proc.stdout or "") + (proc.stderr or "")
-
-
 def collect_changed_paths(workspace_root: Path) -> set[str]:
     """Return paths changed in the workspace (modified, staged, and untracked).
 
@@ -132,7 +121,7 @@ def collect_changed_paths(workspace_root: Path) -> set[str]:
     on every coverage check in the cycle hot path, so keep it to one subprocess.
     """
     root = workspace_root.resolve()
-    status_out = _run_git(["status", "--porcelain"], root)
+    status_out = git_output(["status", "--porcelain"], root)
     paths = _paths_from_porcelain(status_out)
     return {path for path in paths if path and not is_noise_path(path)}
 

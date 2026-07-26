@@ -11,9 +11,9 @@ from typing import Any
 from uuid import uuid4
 
 from sprint_crew.config import get_settings
+from sprint_crew.git_exec import default_git_env
 from sprint_crew.graph.pipeline import run_sprint_cycle
 from sprint_crew.graph.state import SprintState
-from sprint_crew.integrations.jira_client import default_git_env
 from sprint_crew.orchestrator.emitter import Emitter, emit_live, reset_emitter, set_emitter
 from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.orchestrator.run_registry import RunCancelled
