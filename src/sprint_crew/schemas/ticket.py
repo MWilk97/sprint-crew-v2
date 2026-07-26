@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-_STRICT = ConfigDict(extra="forbid")
+from sprint_crew.schemas._base import STRICT
 
 
 class JiraTicket(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     key: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)
@@ -19,14 +19,14 @@ class JiraTicket(BaseModel):
 
 
 class PlanStep(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     description: str = Field(..., min_length=1)
     files: list[str] = Field(default_factory=list)
 
 
 class TaskPlan(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     ticket_key: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)

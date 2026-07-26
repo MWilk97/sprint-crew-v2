@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-_STRICT = ConfigDict(extra="forbid")
+from sprint_crew.schemas._base import STRICT
 
 FileAction = Literal["created", "modified", "deleted"]
 ReviewSeverity = Literal["blocker", "warning", "nit"]
 
 
 class FileChange(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     path: str = Field(..., min_length=1)
     action: FileAction
@@ -19,7 +19,7 @@ class FileChange(BaseModel):
 
 
 class CodeChange(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     ticket_key: str = Field(..., min_length=1)
     branch: str = Field(..., min_length=1)
@@ -32,7 +32,7 @@ class CodeChange(BaseModel):
 
 class TestAdditions(BaseModel):
     __test__ = False
-    model_config = _STRICT
+    model_config = STRICT
 
     ticket_key: str = Field(..., min_length=1)
     tests_added: list[str] = Field(default_factory=list)
@@ -42,7 +42,7 @@ class TestAdditions(BaseModel):
 
 
 class ReviewFinding(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     severity: ReviewSeverity
     file: str = Field(default="")
@@ -61,7 +61,7 @@ RetryScope = Literal["code", "plan"]
 
 
 class ReviewOutcome(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     ticket_key: str = Field(..., min_length=1)
     passed: bool

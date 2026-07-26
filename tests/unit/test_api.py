@@ -26,6 +26,7 @@ from sprint_crew.schemas.console import (
     SprintRunRef,
 )
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus, SprintSession
+from sprint_crew.schemas.sprint import FromPromptRequest, FromTicketRequest
 from sprint_crew.schemas.ticket import JiraTicket
 
 
@@ -218,6 +219,17 @@ def test_unknown_fields_rejected() -> None:
             answers=[ClarifyAnswer(question_id="q", custom_text="x")],
             extra_field="nope",
         )
+
+
+def test_sprint_request_models_reject_unknown_fields() -> None:
+    """These four lived inline in api/app.py as bare BaseModel — the only API models in the
+    codebase without extra="forbid", so /sprint/* silently accepted typos that
+    /v1/console/* rejected.
+    """
+    with pytest.raises(ValidationError):
+        FromPromptRequest(prompt="build it", repo_urls="typo")
+    with pytest.raises(ValidationError):
+        FromTicketRequest(ticket_key="DEMO-1", branch="nope")
 
 
 def test_console_routes_registered() -> None:

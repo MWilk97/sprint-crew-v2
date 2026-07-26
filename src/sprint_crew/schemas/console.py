@@ -11,11 +11,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
+from sprint_crew.schemas._base import STRICT
 from sprint_crew.schemas.session import AgentEvent
-
-_STRICT = ConfigDict(extra="forbid")
 
 
 def _utc_now_iso() -> str:
@@ -46,7 +45,7 @@ class ConsoleMessageRole(str, Enum):
 
 
 class ConsoleMessage(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     role: ConsoleMessageRole
     content: str = Field(..., min_length=1)
@@ -54,7 +53,7 @@ class ConsoleMessage(BaseModel):
 
 
 class ClarifySuggestion(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     suggestion_id: str = Field(..., min_length=1)
     label: str = Field(..., min_length=1)
@@ -64,7 +63,7 @@ class ClarifySuggestion(BaseModel):
 
 
 class ClarifyQuestion(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     question_id: str = Field(..., min_length=1)
     text: str = Field(..., min_length=1)
@@ -85,7 +84,7 @@ class ClarifyQuestion(BaseModel):
 
 
 class ClarifyAnswer(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     question_id: str = Field(..., min_length=1)
     selected_suggestion_id: str | None = None
@@ -101,7 +100,7 @@ class ClarifyAnswer(BaseModel):
 class IntentSummary(BaseModel):
     """What the Interpreter understood, echoed back so the user can correct it."""
 
-    model_config = _STRICT
+    model_config = STRICT
 
     restated_goal: str = Field(..., min_length=1)
     assumptions: list[str] = Field(default_factory=list)
@@ -112,14 +111,14 @@ class IntentSummary(BaseModel):
 class SprintRunRef(BaseModel):
     """Maps a started Code-mode console session to today's /sprint/* resources."""
 
-    model_config = _STRICT
+    model_config = STRICT
 
     backlog_run_id: str | None = None
     sprint_session_ids: list[str] = Field(default_factory=list)
 
 
 class PlanPreviewStory(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     title: str = Field(..., min_length=1)
     rationale: str | None = None
@@ -128,14 +127,14 @@ class PlanPreviewStory(BaseModel):
 class ConsolePlanResult(BaseModel):
     """Plan-mode outcome: analysis only, never shipped (ADR 0012)."""
 
-    model_config = _STRICT
+    model_config = STRICT
 
     summary: str = Field(..., min_length=1)
     stories: list[PlanPreviewStory] = Field(default_factory=list)
 
 
 class CreateConsoleSessionRequest(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     mode: ConsoleMode
     initial_prompt: str | None = None
@@ -145,19 +144,19 @@ class CreateConsoleSessionRequest(BaseModel):
 
 
 class PostMessageRequest(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     content: str = Field(..., min_length=1)
 
 
 class ClarifyRequest(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     answers: list[ClarifyAnswer] = Field(..., min_length=1)
 
 
 class ConsoleSession(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     session_id: str = Field(..., min_length=1)
     mode: ConsoleMode
@@ -192,7 +191,7 @@ class ConsoleEventsPage(BaseModel):
     reaches a terminal status, so a client knows no more events will arrive.
     """
 
-    model_config = _STRICT
+    model_config = STRICT
 
     events: list[AgentEvent] = Field(default_factory=list)
     next_seq: int = 0
