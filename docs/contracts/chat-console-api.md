@@ -4,13 +4,15 @@
 
 Implementation status / MVP limitations:
 
-- Sessions are held in a **process-local in-memory store**: they do not survive an API restart and are not shared across workers (single-worker assumption).
+- Sessions are **durable in SQLite** (M1): a session id stays valid across an API restart, and terminal sessions are reaped after `CONSOLE_SESSION_TTL_DAYS`. Per-session locking is process-local, so the single-worker assumption still holds.
 - **Clarify questions are model-generated** by the Interpreter on the Work lane ([ADR 0013](../adr/0013-interpreter-clarify.md)). Question count and wording vary by request; `clarify_questions` may legitimately be **empty**, in which case the session opens directly in `ready`. Clients must not assume a fixed set of `question_id`s.
 - **Fallback:** when the Work lane is cold or the Interpreter call fails, the backend serves the older deterministic questions instead (`q-scope`, `q-tests`, and `q-compat` when the prompt mentions an API/endpoint/route). These have `recommended_suggestion_id: null` and `why_asked: null`, which is how a client can tell the two apart. Clarify never fails the request.
 - **Attachments (files/images) are not implemented yet.** The Interpreter model is multimodal and the endpoints are designed in ADR 0013, but no attachment routes exist in this contract version.
 - `POST /start` with `mode=code` reuses the same orchestration as `POST /sprint/from-prompt` (which remains unchanged for direct callers); the clarify answers are appended to the prompt.
-- `POST /cancel` on a `running` code-mode session marks the console session `cancelled` but does **not** stop the already-dispatched backlog run (no kill support today).
-- Progress mirroring: `GET /sessions/{id}` refreshes a running code-mode session from the backlog run (`sprint_ref.sprint_session_ids`, completed/failed status); clients may also poll `GET /sprint/backlog/{run_id}` directly.
+- **Start is non-blocking (M5).** `POST /start` returns `202` as soon as the run is queued. Workspace clone, vector indexing, context enrichment, the Work-lane load and the ScrumMaster call all happen after the response and report on the event stream. Previously the request blocked for the whole planning phase.
+- **One run at a time (M5).** The GPU serialises runs, so a second start lands in `queued` with a `queue_position`. See [Run queue and cancel](#run-queue-and-cancel-m5).
+- **`POST /cancel` really cancels (M5).** A queued run is dropped; a running run is asked to stop at its next checkpoint. See [Cancel](#post-v1consolesessionsidcancel).
+- Progress mirroring: `GET /sessions/{id}` refreshes a queued or running code-mode session from the run registry and the backlog run (`sprint_ref.sprint_session_ids`, `queue_position`, completed/failed/cancelled status); clients may also poll `GET /sprint/backlog/{run_id}` directly.
 
 Notes:
 
@@ -34,7 +36,7 @@ CORS: browser origins come from `CONSOLE_CORS_ORIGINS` (comma-separated; default
 
 **SSE auth exception (M3):** browser `EventSource` cannot set an `Authorization` header, so `GET .../stream` also accepts the token as a `?token=<CONSOLE_API_TOKEN>` query parameter. The header is still accepted and preferred everywhere; use the query form only for the stream. A query-string token can appear in access logs — acceptable for the single-user LAN deployment this contract targets.
 
-Related sprint/backlog status strings the UI may see when polling (additive `cancelled` reserved for a later hard-cancel; not set by console cancel today):
+Related sprint/backlog status strings the UI may see when polling. `cancelled` is set on both since M5:
 
 - Sprint session: `pending | running | awaiting_human | failed | approved | cancelled`
 - Backlog run: `pending | running | completed | failed | cancelled`
@@ -47,16 +49,31 @@ stateDiagram-v2
   collecting --> clarifying: Interpreter emits clarify questions
   collecting --> ready: Interpreter has no questions
   clarifying --> ready: all questions answered
-  ready --> running: POST /start (after confirm)
+  ready --> queued: POST /start (after confirm)
+  ready --> running: POST /start when the run slot is free
+  queued --> running: run admitted
+  queued --> cancelled: POST /cancel
   running --> completed
   running --> failed
+  running --> cancelled: POST /cancel, once the run unwinds
   collecting --> cancelled: POST /cancel
   clarifying --> cancelled: POST /cancel
   ready --> cancelled: POST /cancel
-  running --> cancelled: POST /cancel
 ```
 
-Statuses: `collecting | clarifying | ready | running | completed | failed | cancelled`. A session can reach `ready` without ever passing through `clarifying` — clients must drive off `status`, not off having seen questions. Confirmation is a separate boolean (`confirmed`) set by `POST /confirm` while `ready`; `POST /start` is rejected until `status == "ready"` and `confirmed == true`. Per [ADR 0012](../adr/0012-plan-code-modes-and-clarify.md), no sprint run ever starts from a raw prompt alone.
+Statuses: `collecting | clarifying | ready | queued | running | completed | failed | cancelled`. A session can reach `ready` without ever passing through `clarifying` — clients must drive off `status`, not off having seen questions. Confirmation is a separate boolean (`confirmed`) set by `POST /confirm` while `ready`; `POST /start` is rejected until `status == "ready"` and `confirmed == true`. Per [ADR 0012](../adr/0012-plan-code-modes-and-clarify.md), no sprint run ever starts from a raw prompt alone.
+
+`queued` and `running` are both "started" for the purposes of `POST /messages`, which returns `409` in either — mid-run steering is out of scope, and accepting a message that changes nothing would be worse than a rejection. A session may also go straight from `ready` to `running` when nothing is ahead of it; clients must handle both.
+
+## Run queue and cancel (M5)
+
+One run executes at a time. This is a hardware constraint, not a policy: loading a lane stops every other lane, so two concurrent runs would only thrash lane swaps. The queue makes the constraint visible.
+
+- `queue_position` — how many runs must finish before this one starts. Non-null only while `queued`, where it is `1` or more; `null` once admitted or once the session ends. A `run_queued` event carries the same number.
+- **Cancel is asynchronous for a running run.** `POST /cancel` sets `cancel_requested_at`, emits a `cancel_requested` event, and returns `200` with `status` still `running`. The Stop button needs a pending state. The status becomes `cancelled` once the run actually unwinds.
+- **Cancel is immediate otherwise.** A session that never started, or whose run is still queued, goes straight to `cancelled`.
+- **How long "stopping" takes.** The run stops at its next checkpoint: between backlog stories, at a graph node boundary, or between Coder turns. A checkpoint is invisible while a subprocess is mid-call, so the honest worst case is bounded by `ACCEPTANCE_TEST_TIMEOUT_S` (900 s) and `run_command`'s own timeout (300 s). After `CANCEL_GRACE_S` (default 30 s) the run's task is hard-cancelled; lane teardown still completes, because it runs outside the cancelled task.
+- **Restart.** Runs live in `asyncio` tasks, so a restart kills them. On startup every `pending`/`running` backlog run, `running` sprint session, and `queued`/`running` console session is marked `failed` with `interrupted by restart`. Nothing resumes.
 
 Modes: `plan` (analysis/backlog preview only — never ships, no branch/PR) and `code` (after start, maps to today's ship-to-PR pipeline ending at `awaiting_human` per ADR 0010).
 
@@ -201,12 +218,18 @@ Explicit user confirmation of the clarified request. Empty body. Response `200`:
 
 ### POST /v1/console/sessions/{id}/start
 
-Start the run. Empty body. Allowed only when `status == "ready"` and `confirmed == true`; response `200` with `status: "running"`.
+Queue the run. Empty body. Allowed only when `status == "ready"` and `confirmed == true`; response **`202`** with `status: "queued"` or `"running"`.
 
-- **mode = code**: the backend drives today's from-prompt pipeline. The session gains a `sprint_ref` for progress polling (see mapping below):
+`202`, not `200`: the run has been accepted, not performed. It returns in milliseconds and everything expensive — clone, index, enrichment, lane load, ScrumMaster, then the batch — happens afterward and reports on the event stream.
+
+- **mode = code**: the backend drives today's from-prompt pipeline. The session gains a `sprint_ref` for progress polling (see mapping below), plus `queue_position` when something is ahead of it:
 
 ```json
-{"sprint_ref": {"backlog_run_id": "run-91c2", "sprint_session_ids": []}}
+{
+  "status": "queued",
+  "queue_position": 1,
+  "sprint_ref": {"backlog_run_id": "run-91c2", "sprint_session_ids": []}
+}
 ```
 
 - **mode = plan**: analysis only; on completion `status: "completed"` and `plan_result` is set — nothing is shipped:
@@ -227,7 +250,20 @@ Errors: `404`; `409` not ready or not confirmed (e.g. `{"detail": "session must 
 
 ### POST /v1/console/sessions/{id}/cancel
 
-Cancel from any non-terminal state. Empty body. Response `200` with `status: "cancelled"`. Errors: `404`; `409` if already `completed`, `failed`, or `cancelled`.
+Cancel from any non-terminal state. Empty body. Response `200`. Errors: `404`; `409` if already `completed`, `failed`, or `cancelled`.
+
+Two outcomes, distinguished by the response body rather than the status code — one code per route keeps generated clients simple:
+
+| Situation | Response |
+|---|---|
+| Nothing started, or the run is still `queued` | `status: "cancelled"` — terminal immediately |
+| The run is executing | `status: "running"` with `cancel_requested_at` set — Stop accepted, not yet done |
+
+In the second case a `cancel_requested` event goes out immediately and the status flips to `cancelled` when the run unwinds. See [Run queue and cancel](#run-queue-and-cancel-m5) for how long that takes and why it cannot be instant.
+
+```json
+{"status": "running", "cancel_requested_at": "2026-07-26T09:15:22.481000+00:00"}
+```
 
 ### GET /v1/console/sessions/{id}/events
 
@@ -287,6 +323,6 @@ The events table is the source of truth; the stream is a live view over it. A sl
 | `POST /v1/console/sessions/{id}/start` (mode=plan) | — | Analysis only, never ships |
 | Progress after Code start | `GET /sprint/backlog/{run_id}`, `GET /sprint/session/{session_id}` | Via `sprint_ref` id mapping below |
 | Human merge approval | `POST /sprint/session/{session_id}/approve` | Unchanged; ADR 0010 gate stays |
-| `POST /v1/console/sessions/{id}/cancel` | — | No current equivalent |
+| `POST /v1/console/sessions/{id}/cancel` | — | Cancels the underlying run too (M5); no `/sprint/*` equivalent |
 
 **Id mapping for progress polling (Code mode):** after start, `ConsoleSession.sprint_ref.backlog_run_id` is a `run_id` for the existing `GET /sprint/backlog/{run_id}`. That `BacklogRun.session_ids` lists per-ticket sprint session ids, each usable with the existing `GET /sprint/session/{session_id}` (event timeline, PR URL, `awaiting_human`). `sprint_ref.sprint_session_ids` mirrors the backlog run's `session_ids` as they are created. Console session ids (`cs-*` here) and sprint session ids are distinct id spaces.

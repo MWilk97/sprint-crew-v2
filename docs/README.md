@@ -21,11 +21,12 @@ Everything else links to the owner instead of restating it.
 |----------|----------|----------|
 | [agent-orchestration.md](agent-orchestration.md) | Engineers | Pipeline flow, planning modes, coverage gates, vector index |
 | [model-evaluation.md](model-evaluation.md) | ML ops | Live model matrix, probe legend, rollback notes |
-| [roadmap-backend-interactive-console.md](roadmap-backend-interactive-console.md) | Engineers, UI repo devs | Proposed: phased backend plan for streaming, diff review, and codebase chat (nothing implemented yet) |
+| [roadmap-backend-interactive-console.md](roadmap-backend-interactive-console.md) | Engineers, UI repo devs | Phased backend plan for streaming, diff review, and codebase chat (M0–M5 landed; M6+ proposed) |
 | [portfolio-blurb.md](portfolio-blurb.md) | Recruiters | Copy-paste project description |
 | [adr/0010-manual-merge-gate.md](adr/0010-manual-merge-gate.md) | Architects | Why agents never auto-merge |
 | [adr/0012-plan-code-modes-and-clarify.md](adr/0012-plan-code-modes-and-clarify.md) | Architects | Plan/Code user modes, clarify-before-run (backend MVP live; UI proposed) |
 | [adr/0013-interpreter-clarify.md](adr/0013-interpreter-clarify.md) | Architects | LLM clarify with recommendations, Interpreter as the only multimodal role (Phase 1 live; attachments not built) |
+| [adr/0014-run-queue-and-cancel.md](adr/0014-run-queue-and-cancel.md) | Architects | One run at a time, non-blocking start, cooperative cancel with hard escalation |
 | [contracts/README.md](contracts/README.md) | UI repo devs | How to consume the console contracts |
 | [contracts/chat-console-api.md](contracts/chat-console-api.md) | UI repo devs | Console API contract: state machine, endpoints, examples (Implemented — MVP) |
 | [contracts/chat-console.openapi.yaml](contracts/chat-console.openapi.yaml) | UI repo devs | OpenAPI 3.1 spec for the console API (Implemented — MVP) |

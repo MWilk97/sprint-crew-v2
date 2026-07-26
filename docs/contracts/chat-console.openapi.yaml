@@ -172,17 +172,22 @@ paths:
   /v1/console/sessions/{id}/start:
     post:
       operationId: startConsoleRun
-      summary: Start the run (requires status=ready and confirmed=true)
+      summary: Queue the run (requires status=ready and confirmed=true)
       description: |
+        Returns 202 in milliseconds: the run is accepted, not performed. Workspace
+        clone, vector indexing, context enrichment, the Work-lane load and the
+        ScrumMaster call all happen afterward and report on the event stream.
+
         mode=code: drives today's from-prompt pipeline; session gains sprint_ref
         (backlog_run_id for GET /sprint/backlog/{run_id}; its session_ids feed
-        GET /sprint/session/{session_id}). mode=plan: analysis only; completes
-        with plan_result and never ships.
+        GET /sprint/session/{session_id}). Status is "queued" with queue_position
+        when another run holds the single run slot, otherwise "running".
+        mode=plan: analysis only; completes with plan_result and never ships.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       responses:
-        "200":
-          description: Session now running (code) or completed with plan_result (plan)
+        "202":
+          description: Run queued or running (code); completed with plan_result (plan)
           content:
             application/json:
               schema:
@@ -209,8 +214,32 @@ paths:
                       sprint_session_ids: []
                     plan_result: null
                     error: null
+                    queue_position: null
+                    cancel_requested_at: null
                     created_at: "2026-07-16T09:00:00+00:00"
                     updated_at: "2026-07-16T09:05:00+00:00"
+                codeModeQueued:
+                  summary: mode=code — another run holds the single run slot
+                  value:
+                    session_id: cs-9b12
+                    mode: code
+                    status: queued
+                    confirmed: true
+                    repo_url: https://github.com/example/service
+                    target_language: null
+                    messages: []
+                    intent: null
+                    clarify_questions: []
+                    clarify_answers: []
+                    sprint_ref:
+                      backlog_run_id: run-4de7
+                      sprint_session_ids: []
+                    plan_result: null
+                    error: null
+                    queue_position: 1
+                    cancel_requested_at: null
+                    created_at: "2026-07-16T09:06:00+00:00"
+                    updated_at: "2026-07-16T09:06:00+00:00"
                 planModeCompleted:
                   summary: mode=plan — analysis only, never ships
                   value:
@@ -236,6 +265,8 @@ paths:
                         - title: Count backlog endpoint hits
                           rationale: null
                     error: null
+                    queue_position: null
+                    cancel_requested_at: null
                     created_at: "2026-07-16T09:00:00+00:00"
                     updated_at: "2026-07-16T09:05:00+00:00"
         "404":
@@ -252,15 +283,40 @@ paths:
     post:
       operationId: cancelConsoleSession
       summary: Cancel from any non-terminal state
+      description: |
+        Two outcomes, distinguished by the body rather than the status code.
+
+        Nothing started, or the run is still queued: status becomes "cancelled"
+        immediately. The run is executing: Stop is accepted — cancel_requested_at
+        is set, a cancel_requested event goes out, and status stays "running"
+        until the run unwinds at its next checkpoint. The Stop button therefore
+        needs a pending state.
+
+        A running cancel cannot be instant: a checkpoint is invisible while a
+        subprocess is mid-call, so the worst case is bounded by
+        ACCEPTANCE_TEST_TIMEOUT_S and run_command's own timeout.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       responses:
         "200":
-          description: Session cancelled
+          description: Cancelled, or cancel accepted and pending
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConsoleSession"
+              examples:
+                cancelledImmediately:
+                  summary: Nothing running — terminal at once
+                  value:
+                    status: cancelled
+                    cancel_requested_at: null
+                    queue_position: null
+                cancelPending:
+                  summary: Run executing — stopping at the next checkpoint
+                  value:
+                    status: running
+                    cancel_requested_at: "2026-07-16T09:10:00+00:00"
+                    queue_position: null
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -411,7 +467,12 @@ components:
       enum: [plan, code]
     ConsoleSessionStatus:
       type: string
-      enum: [collecting, clarifying, ready, running, completed, failed, cancelled]
+      description: |
+        "queued" (M5) means started but waiting for the single run slot; see
+        queue_position. A session may also go straight from ready to running when
+        nothing is ahead of it, so clients must handle both.
+      enum:
+        [collecting, clarifying, ready, queued, running, completed, failed, cancelled]
     ConsoleMessage:
       type: object
       additionalProperties: false
@@ -628,6 +689,18 @@ components:
             - type: "null"
         error:
           type: [string, "null"]
+        queue_position:
+          type: [integer, "null"]
+          minimum: 1
+          description: |
+            How many runs must finish before this one starts (M5). Non-null only
+            while status is "queued", where it is 1 or more; null once the run is
+            admitted or the session ends.
+        cancel_requested_at:
+          type: [string, "null"]
+          description: |
+            Set when Stop was accepted but the run has not stopped yet (M5). While
+            this is non-null and status is still "running", render a pending state.
         created_at:
           type: string
         updated_at:
@@ -659,6 +732,17 @@ components:
         - shipped
         - shipped_stub
         - approved
+        - lane_loading
+        - lane_ready
+        - lane_stopped
+        - phase_started
+        - phase_completed
+        - run_queued
+        - run_started
+        - workspace_ready
+        - backlog_planned
+        - cancel_requested
+        - cancelled
     AgentEvent:
       type: object
       additionalProperties: false
