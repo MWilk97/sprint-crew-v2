@@ -205,7 +205,7 @@ def test_route_after_retry_downgrades_excess_plan_retries(passing_review: Review
         "review_outcome": passing_review.model_dump(),
         "plan_retries": 2,
     }
-    with patch("sprint_crew.graph.pipeline.get_settings") as settings_mock:
+    with patch("sprint_crew.graph.nodes.routing.get_settings") as settings_mock:
         settings_mock.return_value.max_plan_retries = 1
         assert route_after_retry(state) == "code"  # type: ignore[arg-type]
 
@@ -309,7 +309,7 @@ async def test_deadline_epoch_survives_graph_input_roundtrip() -> None:
     """
     from langgraph.graph import END, START, StateGraph
 
-    from sprint_crew.graph.pipeline import _deadline_exceeded
+    from sprint_crew.graph.pipeline_helpers import _deadline_exceeded
     from sprint_crew.graph.state import SprintState
 
     seen: dict = {}

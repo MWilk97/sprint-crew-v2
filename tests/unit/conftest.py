@@ -123,7 +123,7 @@ def graph_run_mocks(satisfied_coder_result: tuple):
                 )
             if settings_overrides is not None:
                 settings_mock = stack.enter_context(
-                    patch("sprint_crew.graph.pipeline.get_settings")
+                    patch("sprint_crew.graph.nodes.routing.get_settings")
                 )
                 for key, value in settings_overrides.items():
                     setattr(settings_mock.return_value, key, value)
