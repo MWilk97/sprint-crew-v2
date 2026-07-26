@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -82,4 +83,39 @@ async def test_reviewer_acceptance_tests_do_not_freeze_event_loop(
         ticker.cancel()
 
     assert outcome.tests_passed is True
+    assert ticks > 10
+
+
+@pytest.mark.asyncio
+async def test_tool_dispatch_does_not_freeze_event_loop(tmp_path: Path) -> None:
+    """Tool bodies are blocking — run_command shells out with a 300 s cap, the git tools
+    and grep spawn subprocesses. The closures are async, so dispatching on the loop froze
+    it for the whole tool call on *every* coder and tester turn, not once per cycle.
+    """
+    from sprint_crew.tools.pydantic_ai import build_coder_toolset, workspace_deps
+
+    deps = workspace_deps(tmp_path, mutate=True, event_agent="coder")
+
+    def _slow_dispatch(*args: object, **kwargs: object) -> object:
+        time.sleep(0.4)  # stand-in for a subprocess-backed tool
+        return type("R", (), {"ok": True, "output": "done"})()
+
+    ticks = 0
+
+    async def _tick() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    toolset = build_coder_toolset()
+    grep_tool = toolset.tools["grep"]
+
+    with patch.object(deps.registry, "dispatch", _slow_dispatch):
+        ticker = asyncio.create_task(_tick())
+        ctx = SimpleNamespace(deps=deps)
+        out = await grep_tool.function(ctx, pattern="x", path=".")
+        ticker.cancel()
+
+    assert out == "done"
     assert ticks > 10

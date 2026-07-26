@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -132,14 +133,31 @@ _SOFT_FAIL_READONLY_TOOLS = frozenset(
 )
 
 
-def _dispatch(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel) -> str:
-    payload = args.model_dump(exclude_none=True)
-    t0 = time.monotonic()
-    result = ctx.deps.registry.dispatch(
+async def _dispatch_off_loop(ctx: RunContext[WorkspaceDeps], name: str, payload: dict[str, Any]):
+    """Run the tool body in a worker thread.
+
+    Every tool here is blocking — run_command shells out with a 300 s cap, the git tools
+    and grep spawn subprocesses, read/write hit the filesystem. The closures are async, so
+    calling the registry directly held the event loop for the whole tool call on *every*
+    coder and tester turn: no SSE frame flushed, /health could not answer, and POST /cancel
+    could not even be accepted.
+
+    Only the dispatch moves off the loop. _record_tool_call stays on it because it publishes
+    to the event log, and the seq it assigns has to stay ordered against the node-end batch
+    (orchestrator/emitter.py).
+    """
+    return await asyncio.to_thread(
+        ctx.deps.registry.dispatch,
         name,
         payload,
         workspace_root=ctx.deps.root,
     )
+
+
+async def _dispatch(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel) -> str:
+    payload = args.model_dump(exclude_none=True)
+    t0 = time.monotonic()
+    result = await _dispatch_off_loop(ctx, name, payload)
     duration_ms = (time.monotonic() - t0) * 1000
     output = result.output
     if not result.ok and name in _SOFT_FAIL_READONLY_TOOLS:
@@ -148,14 +166,10 @@ def _dispatch(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel) -> str
     return output
 
 
-def _dispatch_result(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel):
+async def _dispatch_result(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel):
     payload = args.model_dump(exclude_none=True)
     t0 = time.monotonic()
-    result = ctx.deps.registry.dispatch(
-        name,
-        payload,
-        workspace_root=ctx.deps.root,
-    )
+    result = await _dispatch_off_loop(ctx, name, payload)
     duration_ms = (time.monotonic() - t0) * 1000
     _record_tool_call(ctx.deps, name, payload, result.output, ok=result.ok, duration_ms=duration_ms)
     return result
@@ -249,7 +263,7 @@ def _build_toolset(
         start_line: int | None = None,
         end_line: int | None = None,
     ) -> str:
-        return _dispatch(
+        return await _dispatch(
             ctx, "read_file", ReadFileArgs(path=path, start_line=start_line, end_line=end_line)
         )
 
@@ -263,7 +277,7 @@ def _build_toolset(
             return err
         if variant == "coder":
             _invalidate_workspace_cache(ctx.deps)
-        return _dispatch(ctx, "write_file", WriteFileArgs(path=path, content=content))
+        return await _dispatch(ctx, "write_file", WriteFileArgs(path=path, content=content))
 
     async def apply_patch(ctx: RunContext[WorkspaceDeps], patch: str) -> str:
         if variant == "tester":
@@ -275,32 +289,32 @@ def _build_toolset(
             return err
         if variant == "coder":
             _invalidate_workspace_cache(ctx.deps)
-        return _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
+        return await _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
 
     async def grep(ctx: RunContext[WorkspaceDeps], pattern: str, path: str = ".") -> str:
-        return _dispatch(ctx, "grep", GrepArgs(pattern=pattern, path=path))
+        return await _dispatch(ctx, "grep", GrepArgs(pattern=pattern, path=path))
 
     async def list_directory(ctx: RunContext[WorkspaceDeps], path: str = ".") -> str:
-        return _dispatch(ctx, "list_directory", ListDirectoryArgs(path=path))
+        return await _dispatch(ctx, "list_directory", ListDirectoryArgs(path=path))
 
     async def run_command(ctx: RunContext[WorkspaceDeps], command: str) -> str:
-        result = _dispatch_result(ctx, "run_command", RunCommandArgs(command=command))
+        result = await _dispatch_result(ctx, "run_command", RunCommandArgs(command=command))
         if variant == "coder":
-            _maybe_trigger_early_exit(ctx, command, ok=result.ok)
+            await asyncio.to_thread(_maybe_trigger_early_exit, ctx, command, ok=result.ok)
         return result.output
 
     async def git_status(ctx: RunContext[WorkspaceDeps]) -> str:
         from sprint_crew.tools.git_tools import GitStatusArgs
 
-        return _dispatch(ctx, "git_status", GitStatusArgs())
+        return await _dispatch(ctx, "git_status", GitStatusArgs())
 
     async def git_diff(ctx: RunContext[WorkspaceDeps]) -> str:
         from sprint_crew.tools.git_tools import GitDiffArgs
 
-        return _dispatch(ctx, "git_diff", GitDiffArgs())
+        return await _dispatch(ctx, "git_diff", GitDiffArgs())
 
     async def git_log(ctx: RunContext[WorkspaceDeps], n: int = 10) -> str:
-        return _dispatch(ctx, "git_log", GitLogArgs(n=n))
+        return await _dispatch(ctx, "git_log", GitLogArgs(n=n))
 
     async def semantic_search(
         ctx: RunContext[WorkspaceDeps],
@@ -310,7 +324,7 @@ def _build_toolset(
         chunk_kind: str | None = None,
     ) -> str:
         """Semantic search over indexed workspace code (concept-level discovery)."""
-        return _dispatch(
+        return await _dispatch(
             ctx,
             "semantic_search",
             SemanticSearchArgs(
