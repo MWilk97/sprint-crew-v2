@@ -12,8 +12,8 @@ from sprint_crew.agents.interpreter import to_clarify_questions
 from sprint_crew.config import get_settings
 from sprint_crew.schemas.intent import IntentAnalysis, InterpreterOption, InterpreterQuestion
 
-INTERPRETER_PATCH = "sprint_crew.api.console.run_interpreter"
-LANE_PATCH = "sprint_crew.api.console._work_lane_available"
+INTERPRETER_PATCH = "sprint_crew.api.console.clarify.run_interpreter"
+LANE_PATCH = "sprint_crew.api.console.clarify._work_lane_available"
 
 
 @pytest.fixture(autouse=True)
