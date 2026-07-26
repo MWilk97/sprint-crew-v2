@@ -13,6 +13,7 @@ from sprint_crew.config import get_settings
 from sprint_crew.graph.pipeline import run_sprint_cycle
 from sprint_crew.graph.state import SprintState
 from sprint_crew.integrations.jira_client import default_git_env
+from sprint_crew.orchestrator.emitter import Emitter, reset_emitter, set_emitter
 from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.orchestrator.store import SqliteJsonStore
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
@@ -232,6 +233,14 @@ async def create_and_run_cycle(
     if log is not None and initial_events_snapshot:
         log.append_many(console_session_id, sid, initial_events_snapshot)
     logged_event_count = len(initial_events_snapshot)
+    # M4: a live emitter lets tool/lane/phase events reach the table and SSE bus mid-node.
+    # When set, it is the sole writer of ``tool_call`` events, so ``_persist_progress`` drops
+    # them from the node-end delta below to avoid a double append.
+    emitter = (
+        Emitter(log=log, console_session_id=console_session_id, sprint_session_id=sid)
+        if log is not None
+        else None
+    )
 
     deadline_epoch = (
         time.time() + max_wall_seconds
@@ -250,10 +259,16 @@ async def create_and_run_cycle(
         store.save(session)
         if log is not None:
             new_events = session.events[logged_event_count:]
+            logged_event_count += len(new_events)
+            # An event that already carries a seq was published live by the emitter and is
+            # already in the timeline table; keep it in ``session.events`` (store durability
+            # / legacy /sprint endpoint) but do not append it twice. Identity, not event
+            # type — a new kind of live event needs no change here.
+            new_events = [e for e in new_events if e.seq is None]
             if new_events:
                 log.append_many(console_session_id, sid, new_events)
-                logged_event_count += len(new_events)
 
+    token = set_emitter(emitter)
     try:
         final_state = await run_sprint_cycle(state, on_node_complete=_persist_progress)
         session = _session_from_state(final_state, session, initial_events=initial_events_snapshot)
@@ -267,6 +282,8 @@ async def create_and_run_cycle(
                 "updated_at": _utc_now_iso(),
             }
         )
+    finally:
+        reset_emitter(token)
     store.save(session)
     return session
 

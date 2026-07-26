@@ -57,6 +57,7 @@ async def run_tech_lead_loop(
         root,
         mutate=False,
         session_id=sid,
+        event_agent="tech_lead",
         include_semantic_search=True,
         tool_call_log=log,
     )

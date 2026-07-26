@@ -36,7 +36,7 @@ async def run_tester_loop(
     acceptance_output: str = "",
 ) -> tuple[str, list[dict]]:
     tool_log: list[dict] = []
-    deps = workspace_deps(workspace_root, mutate=True, tool_call_log=tool_log)
+    deps = workspace_deps(workspace_root, mutate=True, event_agent="tester", tool_call_log=tool_log)
     agent: Agent[WorkspaceDeps, str] = Agent(
         pydantic_ai_model(Role.CODING),
         deps_type=WorkspaceDeps,

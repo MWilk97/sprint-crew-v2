@@ -12,7 +12,7 @@ from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
 _STRICT = ConfigDict(extra="forbid")
 
 
-def _utc_now_iso() -> str:
+def utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
@@ -54,6 +54,12 @@ class EventType(StrEnum):
     SHIPPED = "shipped"
     SHIPPED_STUB = "shipped_stub"
     APPROVED = "approved"
+    # M4 fine-grained progress
+    LANE_LOADING = "lane_loading"
+    LANE_READY = "lane_ready"
+    LANE_STOPPED = "lane_stopped"
+    PHASE_STARTED = "phase_started"
+    PHASE_COMPLETED = "phase_completed"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]
@@ -62,7 +68,7 @@ EventLevel = Literal["debug", "info", "warning", "error"]
 class AgentEvent(BaseModel):
     model_config = _STRICT
 
-    timestamp: str = Field(default_factory=_utc_now_iso)
+    timestamp: str = Field(default_factory=utc_now_iso)
     agent: str = Field(..., min_length=1)
     event_type: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)
@@ -75,8 +81,22 @@ class AgentEvent(BaseModel):
     level: EventLevel = "info"
 
 
-def agent_event(agent: str, event_type: str, summary: str, **detail: Any) -> AgentEvent:
-    return AgentEvent(agent=agent, event_type=event_type, summary=summary, detail=detail or None)
+def agent_event(
+    agent: str,
+    event_type: str,
+    summary: str,
+    *,
+    level: EventLevel = "info",
+    **detail: Any,
+) -> AgentEvent:
+    """``level`` is keyword-only so it stays out of ``detail``, which absorbs everything else."""
+    return AgentEvent(
+        agent=agent,
+        event_type=event_type,
+        summary=summary,
+        detail=detail or None,
+        level=level,
+    )
 
 
 class SprintSession(BaseModel):
@@ -102,8 +122,8 @@ class SprintSession(BaseModel):
     events: list[AgentEvent] = Field(default_factory=list)
     error: str | None = None
     attempt: int = Field(default=0, ge=0)
-    created_at: str = Field(default_factory=_utc_now_iso)
-    updated_at: str = Field(default_factory=_utc_now_iso)
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
 
 
 class BacklogRunStatus(str, Enum):
@@ -126,4 +146,4 @@ class BacklogRun(BaseModel):
     failed_ticket_key: str | None = None
     repo_url: str | None = None
     error: str | None = None
-    created_at: str = Field(default_factory=_utc_now_iso)
+    created_at: str = Field(default_factory=utc_now_iso)

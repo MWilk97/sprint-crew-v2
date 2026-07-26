@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -8,8 +9,9 @@ from pydantic import BaseModel
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets.function import FunctionToolset
 
-from sprint_crew.agents.tool_events import ToolCallLog
+from sprint_crew.agents.tool_events import ToolCallLog, tool_call_event
 from sprint_crew.config import get_settings
+from sprint_crew.orchestrator.emitter import emit_live
 from sprint_crew.orchestrator.plan_coverage import (
     check_mutation_allowed,
     check_patch_mutations_allowed,
@@ -17,6 +19,7 @@ from sprint_crew.orchestrator.plan_coverage import (
 )
 from sprint_crew.orchestrator.pytest_cmd import normalize_test_command
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
+from sprint_crew.schemas.session import utc_now_iso
 from sprint_crew.schemas.ticket import TaskPlan
 from sprint_crew.tools import ALL_TOOLS, READONLY_TOOLS, ToolRegistry, build_registry
 from sprint_crew.tools.apply_patch import ApplyPatchArgs
@@ -34,6 +37,7 @@ class WorkspaceDeps:
     root: Path
     registry: ToolRegistry
     session_id: str | None = None
+    event_agent: str = "agent"
     acceptance_tests: tuple[str, ...] = field(default_factory=tuple)
     early_exit_handoff: str | None = None
     tool_call_log: ToolCallLog | None = None
@@ -75,6 +79,22 @@ def _cached_plan_coverage(deps: WorkspaceDeps):
     return coverage
 
 
+_MAX_ARG_CHARS = 1000
+
+
+def _cap_args(args: dict[str, Any]) -> dict[str, Any]:
+    """Truncate oversized string args (a successful apply_patch/write_file carries the
+    entire file/patch text). ``output_preview`` is already capped; this caps the input side.
+    """
+    capped: dict[str, Any] = {}
+    for key, value in args.items():
+        if isinstance(value, str) and len(value) > _MAX_ARG_CHARS:
+            capped[key] = value[:_MAX_ARG_CHARS] + "…"
+        else:
+            capped[key] = value
+    return capped
+
+
 def _record_tool_call(
     deps: WorkspaceDeps,
     name: str,
@@ -82,18 +102,29 @@ def _record_tool_call(
     output: str,
     *,
     ok: bool,
+    duration_ms: float | None = None,
 ) -> None:
     if deps.tool_call_log is None:
         return
     preview = output if len(output) <= 500 else output[:500] + "…"
-    deps.tool_call_log.append(
-        {
-            "tool": name,
-            "args": args,
-            "ok": ok,
-            "output_preview": preview,
-        }
-    )
+    entry: dict[str, Any] = {
+        "tool": name,
+        "args": _cap_args(args),
+        "ok": ok,
+        "output_preview": preview,
+        "timestamp": utc_now_iso(),
+    }
+    if duration_ms is not None:
+        entry["duration_ms"] = round(duration_ms, 1)
+    deps.tool_call_log.append(entry)
+    # M4: publish live so the tool event streams the instant it returns, and keep the seq
+    # it was assigned on the entry — the node-end batch conversion rebuilds this same event
+    # and uses that seq to know it is already in the timeline. When no emitter is set (plain
+    # sprint runs, most unit tests) seq stays absent and the batch path is the only writer.
+    # See orchestrator/emitter.py for the reconciliation contract.
+    published = emit_live(tool_call_event(deps.event_agent, entry, len(deps.tool_call_log)))
+    if published is not None:
+        entry["seq"] = published.seq
 
 
 _SOFT_FAIL_READONLY_TOOLS = frozenset(
@@ -103,26 +134,30 @@ _SOFT_FAIL_READONLY_TOOLS = frozenset(
 
 def _dispatch(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel) -> str:
     payload = args.model_dump(exclude_none=True)
+    t0 = time.monotonic()
     result = ctx.deps.registry.dispatch(
         name,
         payload,
         workspace_root=ctx.deps.root,
     )
+    duration_ms = (time.monotonic() - t0) * 1000
     output = result.output
     if not result.ok and name in _SOFT_FAIL_READONLY_TOOLS:
         output = f"[tool error] {output}"
-    _record_tool_call(ctx.deps, name, payload, output, ok=result.ok)
+    _record_tool_call(ctx.deps, name, payload, output, ok=result.ok, duration_ms=duration_ms)
     return output
 
 
 def _dispatch_result(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel):
     payload = args.model_dump(exclude_none=True)
+    t0 = time.monotonic()
     result = ctx.deps.registry.dispatch(
         name,
         payload,
         workspace_root=ctx.deps.root,
     )
-    _record_tool_call(ctx.deps, name, payload, result.output, ok=result.ok)
+    duration_ms = (time.monotonic() - t0) * 1000
+    _record_tool_call(ctx.deps, name, payload, result.output, ok=result.ok, duration_ms=duration_ms)
     return result
 
 
@@ -321,6 +356,7 @@ def workspace_deps(
     *,
     mutate: bool = True,
     session_id: str | None = None,
+    event_agent: str = "agent",
     include_semantic_search: bool = False,
     acceptance_tests: tuple[str, ...] | None = None,
     tool_call_log: ToolCallLog | None = None,
@@ -338,6 +374,7 @@ def workspace_deps(
         root=root.resolve(),
         registry=build_registry(tools),
         session_id=session_id or root.name,
+        event_agent=event_agent,
         acceptance_tests=acceptance_tests or (),
         tool_call_log=tool_call_log,
         task_plan=task_plan,

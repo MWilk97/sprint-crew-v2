@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -30,6 +32,7 @@ from sprint_crew.orchestrator.acceptance_failure import (
     analyze_acceptance_output,
 )
 from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
+from sprint_crew.orchestrator.emitter import current_emitter, reset_emitter, set_emitter
 from sprint_crew.orchestrator.merge_gate import review_accepted
 from sprint_crew.orchestrator.plan_coverage import (
     PlanCoverageResult,
@@ -223,6 +226,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
                 "orchestrator",
                 "plan_aborted",
                 f"TechLead planning failed for {ticket.key}",
+                level="error",
                 error=str(exc),
             ),
         )
@@ -315,6 +319,7 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
                 "orchestrator",
                 "plan_coverage_incomplete",
                 "Plan coverage incomplete after continuation rounds",
+                level="warning",
                 missing=coverage.missing,
                 unexpected=coverage.unexpected,
                 out_of_scope_hits=coverage.out_of_scope_hits,
@@ -636,6 +641,8 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
                 "orchestrator",
                 "retry_prepared",
                 f"Retry attempt {state.get('attempt', 0) + 1} scope={scope}",
+                level="warning",
+                attempt=state.get("attempt", 0) + 1,
                 feedback_preview=feedback[:500],
                 retry_scope=scope,
                 skip_tester=skip_tester,
@@ -693,6 +700,7 @@ async def failed(state: SprintState) -> dict[str, Any]:
                 "orchestrator",
                 "failed",
                 summary,
+                level="error",
                 coverage_stall_count=state.get("coverage_stall_count", 0),
                 deadline_exceeded=_deadline_exceeded(state),
             )
@@ -700,16 +708,66 @@ async def failed(state: SprintState) -> dict[str, Any]:
     }
 
 
+_NodeFn = Callable[[SprintState], Awaitable[dict[str, Any]]]
+
+
+def _phased(phase: str, fn: _NodeFn) -> _NodeFn:
+    """Bracket a graph node with live ``phase_started`` / ``phase_completed`` events (M4).
+
+    Binds the enclosing phase onto the context emitter for the node's duration, so tool and
+    lane events emitted inside inherit ``phase``. A no-op when no console run is streaming.
+    """
+
+    @functools.wraps(fn)
+    async def _wrapped(state: SprintState) -> dict[str, Any]:
+        emitter = current_emitter()
+        if emitter is None:
+            return await fn(state)
+        phased = emitter.with_phase(phase)
+        token = set_emitter(phased)
+        phased.emit(_event("orchestrator", "phase_started", f"{phase} started", level="debug"))
+        started = time.monotonic()
+        ok = True
+        try:
+            return await fn(state)
+        except BaseException:
+            # Report the phase as failed rather than completed: a timeline that says
+            # "completed" for a node that raised is misleading exactly when it is being
+            # read to debug that failure. Re-raised untouched.
+            ok = False
+            raise
+        finally:
+            phased.emit(
+                _event(
+                    "orchestrator",
+                    "phase_completed",
+                    f"{phase} {'completed' if ok else 'failed'}",
+                    duration_ms=round((time.monotonic() - started) * 1000, 1),
+                    ok=ok,
+                    level="debug" if ok else "error",
+                )
+            )
+            reset_emitter(token)
+
+    return _wrapped
+
+
 def build_sprint_graph(*, checkpointer: Any | None = None) -> CompiledStateGraph:
     graph: StateGraph = StateGraph(SprintState)
-    graph.add_node("initSession", init_session)
-    graph.add_node("techLeadPlan", tech_lead_plan)
-    graph.add_node("codeImplement", code_implement)
-    graph.add_node("testImplement", test_implement)
-    graph.add_node("review", review)
-    graph.add_node("mergeGate", merge_gate)
-    graph.add_node("prepareRetry", prepare_retry)
-    graph.add_node("orchestratorShip", orchestrator_ship)
+    # Phase-bracketed nodes: the ones that do real work and can run for minutes.
+    # ``awaitingHuman`` and ``failed`` are terminal bookkeeping that already emit their own
+    # event, so a phase pair around them would only add noise.
+    for name, node in (
+        ("initSession", init_session),
+        ("techLeadPlan", tech_lead_plan),
+        ("codeImplement", code_implement),
+        ("testImplement", test_implement),
+        ("review", review),
+        ("mergeGate", merge_gate),
+        ("prepareRetry", prepare_retry),
+        ("orchestratorShip", orchestrator_ship),
+    ):
+        graph.add_node(name, _phased(name, node))
     graph.add_node("awaitingHuman", awaiting_human)
     graph.add_node("failed", failed)
 

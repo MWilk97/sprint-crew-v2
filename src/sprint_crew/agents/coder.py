@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -84,6 +85,7 @@ def _build_coder_agent(
     deps = workspace_deps(
         workspace_root,
         mutate=True,
+        event_agent="coder",
         acceptance_tests=tuple(task_plan.acceptance_tests),
         tool_call_log=tool_call_log,
         task_plan=task_plan,
@@ -115,9 +117,16 @@ async def run_coder_loop(
     baseline_paths: frozenset[str] | None = None,
     deadline_epoch: float = 0.0,
     attempt: int = 0,
+    tool_call_log: list[dict] | None = None,
 ) -> tuple[str, list[dict]]:
-    """Run the Coder tool loop only; returns raw handoff text and tool-call log."""
-    tool_log: list[dict] = []
+    """Run the Coder tool loop only; returns raw handoff text and tool-call log.
+
+    Callers that run several loops for one graph node (step mode, continuation rounds)
+    pass a shared ``tool_call_log`` so the per-call ``index`` keeps counting across loops.
+    Without it each loop would restart at 1 and the live tool events (M4) would carry a
+    different numbering than the node-end batch conversion over the merged log.
+    """
+    tool_log: list[dict] = tool_call_log if tool_call_log is not None else []
     model_settings = coder_model_settings(attempt=attempt)
     agent, deps = _build_coder_agent(
         workspace_root,
@@ -183,6 +192,7 @@ async def run_coder_plan(
     baseline_paths: frozenset[str] | None = None,
     deadline_epoch: float = 0.0,
     attempt: int = 0,
+    tool_call_log: list[dict] | None = None,
 ) -> tuple[str, list[dict]]:
     """Run Coder across TaskPlan steps (fresh session per step when step mode enabled)."""
     settings = get_settings()
@@ -197,9 +207,10 @@ async def run_coder_plan(
             baseline_paths=baseline_paths,
             deadline_epoch=deadline_epoch,
             attempt=attempt,
+            tool_call_log=tool_call_log,
         )
 
-    all_logs: list[dict] = []
+    all_logs: list[dict] = tool_call_log if tool_call_log is not None else []
     raw_output = ""
     turn_budget = _turn_budget_per_step(task_plan)
     total_steps = len(task_plan.steps)
@@ -217,7 +228,7 @@ async def run_coder_plan(
             workspace_diff=gather_workspace_diff(workspace_root, max_chars=8000),
             prior_review_feedback=prior_review_feedback,
         )
-        raw_output, step_log = await run_coder_loop(
+        raw_output, _ = await run_coder_loop(
             task_plan,
             workspace_root,
             role_specialization=role_specialization,
@@ -226,8 +237,8 @@ async def run_coder_plan(
             baseline_paths=baseline_paths,
             deadline_epoch=deadline_epoch,
             attempt=attempt,
+            tool_call_log=all_logs,
         )
-        all_logs.extend(step_log)
         remaining_turns = max(0, remaining_turns - step_turns)
 
     return raw_output, all_logs
@@ -245,7 +256,11 @@ async def run_coder_with_coverage(
 ) -> tuple[str, list[dict], PlanCoverageResult, str, bool]:
     """Run step-aware Coder, then continuation rounds until coverage satisfied or cap hit."""
     settings = get_settings()
-    raw_output, tool_log = await run_coder_plan(
+    # One shared log for every loop this node runs, so tool-call ``index`` is continuous
+    # across steps and continuation rounds (see run_coder_loop). The callees append into
+    # it and return it, so the returned value is discarded rather than merged.
+    tool_log: list[dict] = []
+    raw_output, _ = await run_coder_plan(
         task_plan,
         workspace_root,
         role_specialization=role_specialization,
@@ -253,6 +268,7 @@ async def run_coder_with_coverage(
         baseline_paths=baseline_paths,
         deadline_epoch=deadline_epoch,
         attempt=attempt,
+        tool_call_log=tool_log,
     )
 
     coverage = validate_plan_coverage(
@@ -270,7 +286,7 @@ async def run_coder_with_coverage(
         if not continuation_makes_sense(coverage, workspace_root, task_plan):
             break
         continuation_prompt = build_coder_continuation_prompt(coverage)
-        continuation_output, continuation_log = await run_coder_loop(
+        continuation_output, _ = await run_coder_loop(
             task_plan,
             workspace_root,
             role_specialization=role_specialization,
@@ -279,9 +295,9 @@ async def run_coder_with_coverage(
             baseline_paths=baseline_paths,
             deadline_epoch=deadline_epoch,
             attempt=attempt,
+            tool_call_log=tool_log,
         )
         raw_output = continuation_output
-        tool_log.extend(continuation_log)
         new_coverage = validate_plan_coverage(
             task_plan,
             workspace_root,
@@ -296,7 +312,11 @@ async def run_coder_with_coverage(
     acceptance_output = ""
     acceptance_verified = False
     if coverage.satisfied and not _deadline_reached(deadline_epoch):
-        acceptance_output, acceptance_green = run_acceptance_tests(
+        # to_thread: a synchronous subprocess run here would hold the event loop for up to
+        # ACCEPTANCE_TEST_TIMEOUT_S (900 s), during which no SSE frame flushes and /health
+        # cannot answer — the same unblocking the pipeline already does at its two call sites.
+        acceptance_output, acceptance_green = await asyncio.to_thread(
+            run_acceptance_tests,
             workspace_root,
             task_plan.acceptance_tests,
         )
@@ -305,7 +325,7 @@ async def run_coder_with_coverage(
             analysis = analyze_acceptance_output(acceptance_output)
             if analysis.kind != "none" and not analysis.tester_can_help:
                 build_fix_prompt = build_coder_build_fix_prompt(analysis)
-                continuation_output, continuation_log = await run_coder_loop(
+                continuation_output, _ = await run_coder_loop(
                     task_plan,
                     workspace_root,
                     role_specialization=role_specialization,
@@ -314,8 +334,8 @@ async def run_coder_with_coverage(
                     baseline_paths=baseline_paths,
                     deadline_epoch=deadline_epoch,
                     attempt=attempt,
+                    tool_call_log=tool_log,
                 )
                 raw_output = continuation_output
-                tool_log.extend(continuation_log)
 
     return raw_output, tool_log, coverage, acceptance_output, acceptance_verified
