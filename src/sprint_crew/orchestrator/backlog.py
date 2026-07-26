@@ -149,6 +149,9 @@ class BacklogRunStore(SqliteJsonStore):
             return None
         return BacklogRun.model_validate(json.loads(payload))
 
+    def list_all(self) -> list[BacklogRun]:
+        return [BacklogRun.model_validate(json.loads(p)) for p in self._list_payloads()]
+
 
 def backlog_store() -> BacklogRunStore:
     return BacklogRunStore(get_settings().session_db)

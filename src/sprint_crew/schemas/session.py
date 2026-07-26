@@ -60,6 +60,13 @@ class EventType(StrEnum):
     LANE_STOPPED = "lane_stopped"
     PHASE_STARTED = "phase_started"
     PHASE_COMPLETED = "phase_completed"
+    # M5 run lifecycle
+    RUN_QUEUED = "run_queued"
+    RUN_STARTED = "run_started"
+    WORKSPACE_READY = "workspace_ready"
+    BACKLOG_PLANNED = "backlog_planned"
+    CANCEL_REQUESTED = "cancel_requested"
+    CANCELLED = "cancelled"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]

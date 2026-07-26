@@ -52,6 +52,9 @@ class SessionStore(SqliteJsonStore):
             return None
         return SprintSession.model_validate(json.loads(payload))
 
+    def list_all(self) -> list[SprintSession]:
+        return [SprintSession.model_validate(json.loads(p)) for p in self._list_payloads()]
+
 
 def session_store() -> SessionStore:
     return SessionStore(get_settings().session_db)
