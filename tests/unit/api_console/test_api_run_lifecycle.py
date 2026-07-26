@@ -11,10 +11,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
-from sprint_crew.api import console as console_module
-from sprint_crew.api.app import app
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.backlog import BacklogRunStore, backlog_store
 from sprint_crew.orchestrator.console_store import console_store
@@ -37,24 +35,12 @@ from sprint_crew.schemas.session import (
 
 
 @pytest.fixture(autouse=True)
-def isolated_stores(tmp_path, monkeypatch):
-    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "runs.db"))
-    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
-    get_settings.cache_clear()
-    console_module.reset_console_store()
+def isolated_registry():
+    """Layered on the shared fresh_stores fixture: the run registry is process-wide, so a
+    leaked entry from one test changes admission for the next."""
     reset_run_registry()
     yield
     reset_run_registry()
-    console_module.reset_console_store()
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-async def api_client(auth_headers: dict[str, str]):
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test", headers=auth_headers
-    ) as client:
-        yield client
 
 
 async def _ready_confirmed(client: AsyncClient) -> str:

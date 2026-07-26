@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from tests.helpers.agent_live_tickets import greeter_task_plan
+from tests.helpers.ticket_fixtures import greeter_task_plan
 
 from sprint_crew.orchestrator.acceptance_tests import (
     AcceptanceTestsValidationError,

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from pydantic import ValidationError
 
 from sprint_crew.api.app import app
@@ -28,16 +28,6 @@ from sprint_crew.schemas.console import (
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus, SprintSession
 from sprint_crew.schemas.sprint import FromPromptRequest, FromTicketRequest
 from sprint_crew.schemas.ticket import JiraTicket
-
-
-@pytest.fixture
-async def api_client(auth_headers: dict[str, str]):
-    """Authenticated httpx client against the ASGI app (asyncio_mode=auto)."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="http://test", headers=auth_headers
-    ) as client:
-        yield client
 
 
 @pytest.mark.asyncio

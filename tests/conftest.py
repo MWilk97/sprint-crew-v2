@@ -8,7 +8,7 @@ import pytest
 from sprint_crew.config import get_settings
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome
 from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
-from tests.helpers.agent_live_tickets import greeter_code_change, greeter_task_plan, greeter_ticket
+from tests.helpers.ticket_fixtures import greeter_code_change, greeter_task_plan, greeter_ticket
 from tests.helpers.vector_ab import copy_fixture_workspace
 
 # A dummy bearer used across the suite so tests exercise the real auth gate without

@@ -14,7 +14,9 @@ from sprint_crew.orchestrator.session import create_and_run_cycle
 from sprint_crew.schemas.session import AgentEvent, EventType, SessionStatus
 from sprint_crew.schemas.ticket import JiraTicket
 
-SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "sprint_crew"
+# From config, not __file__ depth: this module has moved between directories and a
+# hardcoded parents[N] silently scans nothing rather than failing loudly.
+SRC_ROOT = get_settings().project_root / "src" / "sprint_crew"
 
 
 @pytest.fixture(autouse=True)

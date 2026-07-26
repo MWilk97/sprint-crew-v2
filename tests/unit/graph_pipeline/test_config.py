@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 from pydantic import AliasChoices
 
-from sprint_crew.config import Role, Settings, lane_for_role
+from sprint_crew.config import Role, Settings, get_settings, lane_for_role
 
 
 def test_lane_for_role_coding() -> None:
@@ -43,7 +42,7 @@ def test_every_setting_is_documented_in_env_example() -> None:
     invisible. Five (CANCEL_GRACE_S, CONSOLE_SESSION_TTL_DAYS, MAX_BACKLOG_STORIES,
     MAX_CODER_TURNS, MAX_TESTER_TURNS) had drifted out before this test existed.
     """
-    env_text = Path(__file__).resolve().parents[2].joinpath(".env.example").read_text()
+    env_text = (get_settings().project_root / ".env.example").read_text()
     documented = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", env_text, flags=re.M))
 
     undocumented = set()

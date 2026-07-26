@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from tests.helpers.acceptance_output import SCRUM3_COLLECTION
-from tests.helpers.agent_live_tickets import greeter_ticket
+from tests.helpers.ticket_fixtures import greeter_ticket
 
 from sprint_crew.config import Role
 from sprint_crew.graph.pipeline import (

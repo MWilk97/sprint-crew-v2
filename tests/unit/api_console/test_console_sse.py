@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tests.conftest import TEST_API_TOKEN
 
-from sprint_crew.api import console as console_module
 from sprint_crew.api.app import app
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.console_store import console_store
@@ -30,22 +28,13 @@ from sprint_crew.schemas.session import AgentEvent
 
 
 @pytest.fixture(autouse=True)
-def fresh_stores(tmp_path, monkeypatch):
-    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
-    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
+def fast_heartbeat(monkeypatch):
+    """Layered on the shared fresh_stores fixture: these tests assert on ping frames, so
+    the 15 s production interval would make them useless."""
     monkeypatch.setenv("SSE_HEARTBEAT_S", "0.05")
     get_settings.cache_clear()
-    console_module.reset_console_store()
     yield
-    console_module.reset_console_store()
     get_settings.cache_clear()
-
-
-@pytest.fixture
-async def client(auth_headers: dict[str, str]) -> AsyncIterator[AsyncClient]:
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", headers=auth_headers) as ac:
-        yield ac
 
 
 def _ev(name: str) -> AgentEvent:
@@ -100,11 +89,11 @@ def _data_frames(frames: list[dict]) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_stream_replays_then_signals_done(client: AsyncClient) -> None:
+async def test_stream_replays_then_signals_done(api_client: AsyncClient) -> None:
     _save_session("cs-1", status=ConsoleSessionStatus.COMPLETED)
     event_log().append_many("cs-1", "sp-1", [_ev("a"), _ev("b"), _ev("c")])
 
-    async with client.stream("GET", "/v1/console/sessions/cs-1/stream") as resp:
+    async with api_client.stream("GET", "/v1/console/sessions/cs-1/stream") as resp:
         assert resp.status_code == 200
         frames = await _collect(resp)
 
@@ -115,12 +104,14 @@ async def test_stream_replays_then_signals_done(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_resume_from_last_event_id_no_gap_no_dup(client: AsyncClient) -> None:
+async def test_stream_resume_from_last_event_id_no_gap_no_dup(api_client: AsyncClient) -> None:
     _save_session("cs-1", status=ConsoleSessionStatus.COMPLETED)
     event_log().append_many("cs-1", "sp-1", [_ev(f"e{i}") for i in range(5)])
 
     headers = {"Last-Event-ID": "3"}
-    async with client.stream("GET", "/v1/console/sessions/cs-1/stream", headers=headers) as resp:
+    async with api_client.stream(
+        "GET", "/v1/console/sessions/cs-1/stream", headers=headers
+    ) as resp:
         frames = await _collect(resp)
 
     data = _data_frames(frames)
@@ -129,18 +120,18 @@ async def test_stream_resume_from_last_event_id_no_gap_no_dup(client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_stream_since_query_param_resumes(client: AsyncClient) -> None:
+async def test_stream_since_query_param_resumes(api_client: AsyncClient) -> None:
     _save_session("cs-1", status=ConsoleSessionStatus.COMPLETED)
     event_log().append_many("cs-1", "sp-1", [_ev(f"e{i}") for i in range(4)])
 
-    async with client.stream("GET", "/v1/console/sessions/cs-1/stream?since=2") as resp:
+    async with api_client.stream("GET", "/v1/console/sessions/cs-1/stream?since=2") as resp:
         frames = await _collect(resp)
 
     assert [f["id"] for f in _data_frames(frames)] == ["3", "4"]
 
 
 @pytest.mark.asyncio
-async def test_stream_pushes_live_events(client: AsyncClient) -> None:
+async def test_stream_pushes_live_events(api_client: AsyncClient) -> None:
     """Events appended after connect arrive over the bus (not just replay); flipping the
     session terminal then drains the stream with event: done.
 
@@ -158,7 +149,7 @@ async def test_stream_pushes_live_events(client: AsyncClient) -> None:
 
     task = asyncio.create_task(_mutate())
     try:
-        async with client.stream("GET", "/v1/console/sessions/cs-1/stream") as resp:
+        async with api_client.stream("GET", "/v1/console/sessions/cs-1/stream") as resp:
             frames = await _collect(resp)
     finally:
         await task
@@ -169,8 +160,8 @@ async def test_stream_pushes_live_events(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_unknown_session_is_404(client: AsyncClient) -> None:
-    resp = await client.get("/v1/console/sessions/cs-missing/stream")
+async def test_stream_unknown_session_is_404(api_client: AsyncClient) -> None:
+    resp = await api_client.get("/v1/console/sessions/cs-missing/stream")
     assert resp.status_code == 404
 
 

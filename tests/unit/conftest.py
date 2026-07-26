@@ -5,7 +5,7 @@ from contextlib import ExitStack, contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from tests.helpers.agent_live_tickets import greeter_ticket
+from tests.helpers.ticket_fixtures import greeter_ticket
 
 
 @pytest.fixture

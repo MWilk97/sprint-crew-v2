@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.helpers.agent_live_tickets import greeter_ticket
+from tests.helpers.ticket_fixtures import greeter_ticket
 
 from sprint_crew.orchestrator.template_plan import (
     build_template_task_plan,

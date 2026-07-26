@@ -15,8 +15,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from tests.helpers.agent_live_tickets import greeter_ticket
 from tests.helpers.batch_cycle_fakes import awaiting_session, trivial_plan, trivial_ticket
+from tests.helpers.ticket_fixtures import greeter_ticket
 
 from sprint_crew.agents.coder import run_coder_plan
 from sprint_crew.config import get_settings

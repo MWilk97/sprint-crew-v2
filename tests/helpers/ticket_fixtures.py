@@ -1,3 +1,10 @@
+"""Ticket / plan / change factories shared across the unit suite.
+
+Previously named ``agent_live_tickets``, which was actively misleading: nothing here is
+live-tier-specific and it is imported by both conftests plus seven unit test modules. The
+old name made it look like retired GPU-tier scaffolding during dead-code sweeps.
+"""
+
 from __future__ import annotations
 
 from contextlib import contextmanager

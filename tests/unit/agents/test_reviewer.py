@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from tests.helpers.agent_live_tickets import greeter_code_change, greeter_task_plan
+from tests.helpers.ticket_fixtures import greeter_code_change, greeter_task_plan
 
 from sprint_crew.agents.reviewer import run_reviewer
 from sprint_crew.schemas.change import ReviewOutcome

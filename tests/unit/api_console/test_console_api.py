@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sprint_crew.api import console as console_module
-from sprint_crew.api.app import app
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.backlog import BacklogRunStore
 from sprint_crew.schemas.console import (
@@ -22,24 +21,6 @@ from sprint_crew.schemas.console import (
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus
 
 START_RUN_PATCH = "sprint_crew.api.app.start_from_prompt_run"
-
-
-@pytest.fixture(autouse=True)
-def fresh_console_store(tmp_path, monkeypatch):
-    # Console sessions are now SQLite-backed; keep them off the real home DB and
-    # workspace tree so the suite stays hermetic.
-    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
-    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
-    get_settings.cache_clear()
-    console_module.reset_console_store()
-    yield
-    console_module.reset_console_store()
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-def client(auth_headers: dict[str, str]) -> TestClient:
-    return TestClient(app, headers=auth_headers)
 
 
 def _create(client: TestClient, mode: str = "plan", prompt: str | None = "Add a hello() helper"):

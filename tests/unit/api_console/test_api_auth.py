@@ -5,8 +5,6 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from sprint_crew.api import console as console_module
-from sprint_crew.api.app import app
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.session import SessionStore
 from sprint_crew.schemas.session import (
@@ -14,23 +12,6 @@ from sprint_crew.schemas.session import (
     SessionStatus,
     SprintSession,
 )
-
-
-@pytest.fixture(autouse=True)
-def fresh_console_store(tmp_path, monkeypatch):
-    # Console sessions are SQLite-backed; redirect to tmp so the suite stays hermetic.
-    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
-    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
-    get_settings.cache_clear()
-    console_module.reset_console_store()
-    yield
-    console_module.reset_console_store()
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
 
 
 @pytest.fixture

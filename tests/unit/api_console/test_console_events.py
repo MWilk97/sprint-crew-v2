@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
-from sprint_crew.api import console as console_module
-from sprint_crew.api.app import app
-from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.console_store import console_store
 from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.orchestrator.session import session_store
@@ -18,22 +14,6 @@ from sprint_crew.schemas.console import (
     SprintRunRef,
 )
 from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession
-
-
-@pytest.fixture(autouse=True)
-def fresh_stores(tmp_path, monkeypatch):
-    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
-    monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
-    get_settings.cache_clear()
-    console_module.reset_console_store()
-    yield
-    console_module.reset_console_store()
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-def client(auth_headers: dict[str, str]) -> TestClient:
-    return TestClient(app, headers=auth_headers)
 
 
 def _save_console_session(
