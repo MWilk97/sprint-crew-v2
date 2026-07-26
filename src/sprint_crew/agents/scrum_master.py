@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from sprint_crew.agents.prompts_scrum_master import (
     build_scrum_master_system_prompt,
     build_scrum_master_user_prompt,
@@ -17,7 +19,9 @@ async def run_scrum_master(
     role: Role | None = None,
 ) -> BacklogPlan:
     lane = role or Role.WORK
-    plan = structured_completion(
+    # to_thread: keep the blocking model call off the event loop so streaming stays live (M3).
+    plan = await asyncio.to_thread(
+        structured_completion,
         lane,
         system_prompt=build_scrum_master_system_prompt(),
         user_prompt=build_scrum_master_user_prompt(

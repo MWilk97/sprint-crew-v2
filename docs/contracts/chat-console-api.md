@@ -15,7 +15,7 @@ Implementation status / MVP limitations:
 Notes:
 
 - **Auth:** when `CONSOLE_API_TOKEN` is set, every `/v1/console/*` and `/sprint/*` request requires `Authorization: Bearer <token>`. Empty or unset token disables auth (keeps unit tests and `smoke_cycle` working). `GET /health` is always open for probes.
-- **Timeline (M2):** `GET /v1/console/sessions/{id}/events?since=&limit=` serves one merged event stream per console session with a monotonic `seq` cursor — see [Events](#get-v1consolesessionsidevents). Transport is **polling** here; SSE (`WebSocket` is not planned) arrives in M3 with the *same* payload, so a timeline built against polling now carries over unchanged.
+- **Timeline (M2/M3):** `GET /v1/console/sessions/{id}/events?since=&limit=` serves one merged event stream per console session with a monotonic `seq` cursor by **polling** — see [Events](#get-v1consolesessionsidevents). `GET /v1/console/sessions/{id}/stream` serves the **same payload over SSE** (M3) — see [Stream](#get-v1consolesessionsidstream). A timeline built against polling carries over to SSE unchanged; the only difference is transport. `WebSocket` is not planned.
 - `target_language` is a nullable placeholder for Phase 3 language-specialized lanes; senders should pass `null`.
 
 ## Auth (M0)
@@ -31,6 +31,8 @@ Authorization: Bearer <CONSOLE_API_TOKEN>
 | `GET /health` | always open (probes / lane status) |
 
 CORS: browser origins come from `CONSOLE_CORS_ORIGINS` (comma-separated; default `*` for local dev). Credentials are not used — send the token in `Authorization`, not cookies.
+
+**SSE auth exception (M3):** browser `EventSource` cannot set an `Authorization` header, so `GET .../stream` also accepts the token as a `?token=<CONSOLE_API_TOKEN>` query parameter. The header is still accepted and preferred everywhere; use the query form only for the stream. A query-string token can appear in access logs — acceptable for the single-user LAN deployment this contract targets.
 
 Related sprint/backlog status strings the UI may see when polling (additive `cancelled` reserved for a later hard-cancel; not set by console cancel today):
 
@@ -247,6 +249,32 @@ Query params: `since` (default `0`, returns events with `seq` strictly greater),
 Poll again with `since=next_seq` to drain the next page; every `seq` is delivered exactly once and never re-sent. `complete` reports whether the **session** reached a terminal status — not whether this page is the last. Keep polling until you receive an empty `events` array while `complete` is `true`. Errors: `404` unknown session.
 
 Legacy sessions that ran before the events table existed are projected from their sprint sessions on first read, so old sessions stay renderable.
+
+### GET /v1/console/sessions/{id}/stream
+
+The same timeline as `GET .../events`, pushed over **Server-Sent Events** (M3) instead of polled. Each event frame carries the full `AgentEvent` JSON as `data`, with the SSE `id:` set to the event's `seq` so the browser resumes automatically after a dropped connection. Frames arrive on the default `message` channel — a plain `onmessage` handler receives every event and reads `event_type` from the body.
+
+```
+id: 1
+data: {"seq":1,"timestamp":"2026-07-25T09:00:01+00:00","agent":"orchestrator","event_type":"session_started","phase":null,"level":"info","summary":"Session started","detail":null}
+
+id: 2
+data: {"seq":2,"timestamp":"2026-07-25T09:04:12+00:00","agent":"coder","event_type":"tool_call","phase":null,"level":"info","summary":"apply_patch (ok)","detail":{"tool":"apply_patch","ok":true}}
+
+: ping
+
+event: done
+data:
+```
+
+- **Resume:** on reconnect the browser sends `Last-Event-ID: <seq>` automatically; the server replays every event with `seq` greater than it from the events table, then continues live — no gap, no duplicate. `?since=<seq>` is accepted as an explicit alternative (`Last-Event-ID` wins when both are present).
+- **Heartbeat:** a `: ping` comment frame every `SSE_HEARTBEAT_S` seconds (default 15) keeps the connection alive through proxy idle-reap and long GPU silences. Ignore comment frames.
+- **Termination:** when the run reaches a terminal state and all events are delivered, the server sends a named `event: done` frame and closes. The client should treat `done` as final and stop reconnecting.
+- **Auth:** header or `?token=` (see [SSE auth exception](#auth-m0)).
+
+Errors: `404` unknown session (returned before the stream opens, as an ordinary JSON response).
+
+The events table is the source of truth; the stream is a live view over it. A slow client whose buffer overflows is dropped and is expected to reconnect and replay from its last `seq` — so a client must always be prepared to resume, and the polling endpoint remains a valid fallback.
 
 **Closed event vocabulary.** `event_type` is drawn from a documented closed set (`EventType` in the OpenAPI spec): `session_started`, `vector_indexed`, `vector_index_skipped`, `pre_search`, `plan_created`, `plan_aborted`, `tool_call`, `code_change`, `plan_coverage_incomplete`, `skipped`, `tests_added`, `review_complete`, `gate_result`, `retry_prepared`, `awaiting_human`, `failed`, `shipped`, `shipped_stub`, `approved`. The wire type stays a plain string on purpose: **a client must render an unknown `event_type` generically, never reject the event** — later milestones (M4) add new types (`lane_loading`, `phase_started`, …) and an older client must not break on them. `phase` and `level` (`debug | info | warning | error`) are present for filtering; `phase` is lightly populated in M2 and fleshed out in M4.
 

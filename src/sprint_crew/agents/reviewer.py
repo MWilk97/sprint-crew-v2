@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from sprint_crew.agents.prompts_reviewer import (
@@ -44,7 +45,10 @@ async def run_reviewer(
         priority_paths=files_to_touch or task_plan.files_to_touch,
     )
 
-    review = structured_completion(
+    # to_thread: structured_completion is a blocking OpenAI SDK call; run off the event
+    # loop so SSE frames and /health can flush during a long Reviewer turn (M3).
+    review = await asyncio.to_thread(
+        structured_completion,
         Role.WORK,
         system_prompt=build_reviewer_system_prompt(),
         user_prompt=build_reviewer_user_prompt(

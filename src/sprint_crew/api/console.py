@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from sprint_crew.agents.interpreter import run_interpreter, to_clarify_questions
 from sprint_crew.api.auth import require_token
@@ -30,6 +32,7 @@ from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_status
 from sprint_crew.orchestrator.backlog import get_backlog_run
 from sprint_crew.orchestrator.console_store import console_store, reap_console_sessions
+from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.orchestrator.event_log import EventLog, event_log
 from sprint_crew.orchestrator.session import get_session
 from sprint_crew.schemas.console import (
@@ -51,7 +54,7 @@ from sprint_crew.schemas.console import (
     SprintRunRef,
 )
 from sprint_crew.schemas.intent import IntentAnalysis
-from sprint_crew.schemas.session import BacklogRunStatus
+from sprint_crew.schemas.session import AgentEvent, BacklogRunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +92,7 @@ def _lock_for(session_id: str) -> asyncio.Lock:
 def reset_console_store() -> None:
     console_store().clear()
     event_log().clear()
+    event_bus().clear()
     _locks.clear()
 
 
@@ -305,13 +309,14 @@ def build_plan_result(session: ConsoleSession) -> ConsolePlanResult:
     )
 
 
-def _sync_sprint_progress(session: ConsoleSession) -> None:
+async def _sync_sprint_progress(session: ConsoleSession) -> None:
     """Mirror backlog run progress into a running code-mode session."""
     if session.status is not ConsoleSessionStatus.RUNNING:
         return
     if session.sprint_ref is None or session.sprint_ref.backlog_run_id is None:
         return
-    run = get_backlog_run(session.sprint_ref.backlog_run_id)
+    # to_thread: get_backlog_run is a blocking SQLite read called from an async GET (M3).
+    run = await asyncio.to_thread(get_backlog_run, session.sprint_ref.backlog_run_id)
     if run is None:
         return
     session.sprint_ref.sprint_session_ids = list(run.session_ids)
@@ -346,7 +351,7 @@ async def create_console_session(body: CreateConsoleSessionRequest) -> ConsoleSe
 async def get_console_session(id: str) -> ConsoleSession:
     async with _lock_for(id):
         session = _get_session_or_404(id)
-        _sync_sprint_progress(session)
+        await _sync_sprint_progress(session)
         if session.status in _TERMINAL_STATUSES:
             run_console_reaper()
         return session
@@ -477,6 +482,107 @@ async def get_console_events(id: str, since: int = 0, limit: int = 500) -> Conso
         next_seq = events[-1].seq if events and events[-1].seq is not None else since
         complete = session.status in _TERMINAL_STATUSES
         return ConsoleEventsPage(events=events, next_seq=next_seq, complete=complete)
+
+
+def _sse_event(event: AgentEvent) -> ServerSentEvent:
+    """One timeline event as an SSE frame. ``id`` = ``seq`` so native EventSource resume
+    works; the payload is the full AgentEvent JSON (same shape the polling endpoint serves),
+    left on the default ``message`` channel so a plain ``onmessage`` handler receives every
+    event and reads ``event_type`` from the body."""
+    return ServerSentEvent(
+        id=str(event.seq) if event.seq is not None else None,
+        data=event.model_dump_json(),
+    )
+
+
+async def _stream_is_complete(session_id: str) -> bool:
+    """Read-only terminal check for the SSE loop: true once no more events can be produced.
+
+    The console session's stored status only flips terminal when someone GETs it
+    (``_sync_sprint_progress``), so consult the backlog run directly rather than trusting the
+    stored status alone. A reaped/missing session also counts as complete so the stream ends.
+    """
+    session = await asyncio.to_thread(console_store().load, session_id)
+    if session is None or session.status in _TERMINAL_STATUSES:
+        return True
+    ref = session.sprint_ref
+    if ref is not None and ref.backlog_run_id is not None:
+        run = await asyncio.to_thread(get_backlog_run, ref.backlog_run_id)
+        if run is not None and run.status in (
+            BacklogRunStatus.COMPLETED,
+            BacklogRunStatus.FAILED,
+        ):
+            return True
+    return False
+
+
+@router.get("/sessions/{id}/stream")
+async def stream_console_events(id: str, request: Request, since: int = 0) -> EventSourceResponse:
+    """Live SSE timeline (M3) — same payload as the polling events endpoint, pushed.
+
+    Resume: the browser sends ``Last-Event-ID`` automatically on reconnect (or pass
+    ``?since=``); we replay from the events table up to the current tail, then stream new
+    events off the in-process bus. Subscribing *before* the replay closes the handoff gap —
+    events appended mid-replay land in the queue and are de-duplicated by ``seq``. A heartbeat
+    comment every ``SSE_HEARTBEAT_S`` survives proxy idle-reap and long GPU silences; a
+    terminal run ends with an explicit ``event: done`` so the client stops reconnecting.
+
+    Auth: browser ``EventSource`` cannot set headers, so ``require_token`` also accepts
+    ``?token=`` (see api/auth.py).
+    """
+    session = await asyncio.to_thread(console_store().load, id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Console session not found")
+
+    last_event_id = request.headers.get("last-event-id")
+    if last_event_id is not None:
+        try:
+            since = int(last_event_id)
+        except ValueError:
+            pass
+    cursor = max(since, 0)
+
+    log = event_log()
+    if cursor <= 0 and not await asyncio.to_thread(log.has_events, id):
+        async with _lock_for(id):
+            fresh = _get_session_or_404(id)
+            if not log.has_events(id):
+                await asyncio.to_thread(_backfill_events, fresh, log)
+
+    heartbeat = get_settings().sse_heartbeat_s
+    bus = event_bus()
+    queue = bus.subscribe(id)
+
+    async def _events() -> AsyncIterator[ServerSentEvent]:
+        nonlocal cursor
+        try:
+            while True:
+                batch = await asyncio.to_thread(log.read, id, since=cursor, limit=500)
+                if not batch:
+                    break
+                for event in batch:
+                    yield _sse_event(event)
+                    cursor = event.seq or cursor
+            while True:
+                # The timeout is the terminal-check cadence, not the heartbeat: keepalive
+                # pings are emitted by EventSourceResponse(ping=...) on its own task, so a
+                # quiet run is kept alive without this generator having to yield anything.
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=heartbeat)
+                except TimeoutError:
+                    tail = await asyncio.to_thread(log.max_seq, id)
+                    if cursor >= tail and await _stream_is_complete(id):
+                        yield ServerSentEvent(event="done", data="")
+                        return
+                    continue
+                if event.seq is None or event.seq <= cursor:
+                    continue
+                yield _sse_event(event)
+                cursor = event.seq
+        finally:
+            bus.unsubscribe(id, queue)
+
+    return EventSourceResponse(_events(), ping=max(1, int(heartbeat)))
 
 
 @router.post("/sessions/{id}/cancel", response_model=ConsoleSession)

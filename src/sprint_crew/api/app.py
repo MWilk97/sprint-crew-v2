@@ -107,14 +107,16 @@ async def start_from_prompt_run(
     settings = get_settings()
     run_id = str(uuid4())
     workspace_id = f"backlog-{run_id}"
-    workspace = prepare_workspace(workspace_id, repo_url=repo_url)
+    # to_thread: clone, indexing, and context enrichment are blocking I/O; keep them off
+    # the event loop so /health and any live SSE stream stay responsive during start (M3).
+    workspace = await asyncio.to_thread(prepare_workspace, workspace_id, repo_url=repo_url)
     await asyncio.to_thread(
         maybe_index_workspace,
         workspace,
         workspace_id,
         prompt=prompt,
     )
-    repo_context = enrich_repo_context(workspace, workspace_id, prompt)
+    repo_context = await asyncio.to_thread(enrich_repo_context, workspace, workspace_id, prompt)
 
     work_lane = Role.WORK
     await ensure_lane(work_lane)

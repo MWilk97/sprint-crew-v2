@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from pydantic_ai import Agent
@@ -83,7 +84,7 @@ async def run_tech_lead_loop(
     return result.output.strip()
 
 
-def _structured_plan_from_context(
+async def _structured_plan_from_context(
     ticket: JiraTicket,
     *,
     repo_context: str,
@@ -103,7 +104,9 @@ def _structured_plan_from_context(
             repo_context=repo_context,
             prior_review_feedback=prior_review_feedback,
         )
-    return structured_completion(
+    # to_thread: keep the blocking model call off the event loop so streaming stays live (M3).
+    return await asyncio.to_thread(
+        structured_completion,
         Role.WORK,
         system_prompt=build_tech_lead_system_prompt(),
         user_prompt=user_prompt,
@@ -227,21 +230,21 @@ async def run_tech_lead(
                 tool_log=log,
             )
         if handoff:
-            plan = _structured_plan_from_context(
+            plan = await _structured_plan_from_context(
                 ticket,
                 repo_context=context,
                 planning_handoff=handoff,
                 prior_review_feedback=prior_review_feedback,
             )
             return plan, "tool_loop"
-        plan = _structured_plan_from_context(
+        plan = await _structured_plan_from_context(
             ticket,
             repo_context=context,
             prior_review_feedback=prior_review_feedback,
         )
         return plan, "static"
 
-    plan = _structured_plan_from_context(
+    plan = await _structured_plan_from_context(
         ticket,
         repo_context=context,
         prior_review_feedback=prior_review_feedback,

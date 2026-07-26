@@ -272,10 +272,10 @@ paths:
       description: |
         Merged event timeline across every sprint session this console run spawned.
         Poll with since=<last next_seq> to drain new events; each seq is delivered
-        exactly once. Transport is polling here; M3 adds an SSE stream with the same
-        payload. complete reports whether the session reached a terminal status, not
-        whether this page is the last — keep polling until an empty page arrives while
-        complete is true.
+        exactly once. GET .../stream serves the same payload over SSE (M3); this
+        polling endpoint remains a valid fallback. complete reports whether the session
+        reached a terminal status, not whether this page is the last — keep polling
+        until an empty page arrives while complete is true.
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - name: since
@@ -303,6 +303,61 @@ paths:
                 $ref: "#/components/schemas/ConsoleEventsPage"
         "404":
           $ref: "#/components/responses/NotFound"
+  /v1/console/sessions/{id}/stream:
+    get:
+      operationId: streamConsoleEvents
+      summary: Console timeline over Server-Sent Events (SSE)
+      description: |
+        The same payload as GET .../events, pushed over SSE instead of polled. Each
+        event frame carries the full AgentEvent JSON as data, with the SSE id: set to
+        the event's seq so the browser resumes automatically. Frames arrive on the
+        default message channel — an onmessage handler reads event_type from the body.
+
+        Resume: on reconnect the browser sends Last-Event-ID: <seq> and the server
+        replays events with a greater seq from the events table, then continues live —
+        no gap, no duplicate. ?since=<seq> is an explicit alternative; Last-Event-ID
+        wins when both are present.
+
+        Heartbeat: a ": ping" comment frame every SSE_HEARTBEAT_S seconds (default 15)
+        keeps the connection alive through proxies and long GPU silences.
+
+        Termination: when the run is terminal and drained, the server sends a named
+        "event: done" frame and closes; the client stops reconnecting.
+
+        Auth: browser EventSource cannot set headers, so this route also accepts the
+        token as ?token=<CONSOLE_API_TOKEN> (see tokenQueryAuth).
+      security:
+        - bearerAuth: []
+        - tokenQueryAuth: []
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: since
+          in: query
+          required: false
+          description: Replay events with seq strictly greater than this. Last-Event-ID wins.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: token
+          in: query
+          required: false
+          description: CONSOLE_API_TOKEN, for browser EventSource which cannot set headers.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: An SSE stream of timeline events (text/event-stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  A sequence of SSE frames. Data frames carry an AgentEvent JSON body
+                  and an id: equal to seq; a ": ping" comment is the heartbeat; a final
+                  "event: done" frame signals the terminal run.
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
     bearerAuth:
@@ -312,6 +367,15 @@ components:
       description: |
         Shared CONSOLE_API_TOKEN. Omit the Authorization header when the env is
         empty (auth disabled). GET /health never requires this scheme.
+    tokenQueryAuth:
+      type: apiKey
+      in: query
+      name: token
+      description: |
+        The same shared CONSOLE_API_TOKEN as bearerAuth, passed as a ?token= query
+        parameter. Accepted on every route but intended only for GET .../stream, where
+        browser EventSource cannot set an Authorization header. A query-string token
+        may appear in access logs — acceptable for this single-user LAN deployment.
   parameters:
     SessionId:
       name: id
