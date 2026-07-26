@@ -7,6 +7,8 @@ import urllib.request
 from typing import Final
 
 from sprint_crew.config import Role, get_settings, lane_for_role
+from sprint_crew.orchestrator.emitter import emit_live
+from sprint_crew.schemas.session import agent_event
 
 _HEALTH_TIMEOUT_SECONDS: Final = 1200
 _STOP_TIMEOUT_SECONDS: Final = 180
@@ -97,30 +99,66 @@ async def wait_lane_stopped(role: Role, *, timeout: float = _STOP_TIMEOUT_SECOND
 async def ensure_lane(role: Role) -> None:
     if await asyncio.to_thread(_lane_healthy, role):
         return
-    # Dedupe by lane, not by Role: _ROLE_TO_LANE is many-to-one, so two roles sharing a
-    # lane would otherwise make this stop the container it is about to start.
-    for other in Role:
-        if _lane_name(other) != _lane_name(role):
-            await stop_lane(other)
     lane_name = _lane_name(role)
-    proc = await asyncio.create_subprocess_exec(
-        _lane_script(),
-        "start",
-        lane_name,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    # Emit before the (minutes-long) stop/start/health-poll block, so the UI shows a
+    # "loading" state up front rather than a silent gap. The matching lane_ready is
+    # emitted on every exit path, including failures — a UI keying a spinner on
+    # loading→ready would otherwise spin forever when a lane fails to come up.
+    emit_live(
+        agent_event(
+            "orchestrator",
+            "lane_loading",
+            f"Loading lane {lane_name}",
+            lane=lane_name,
+            budget_s=_HEALTH_TIMEOUT_SECONDS,
+        )
     )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        msg = stderr.decode() or stdout.decode() or f"lane-ctl start {lane_name} failed"
-        raise RuntimeError(msg)
+    started = asyncio.get_event_loop().time()
 
-    deadline = asyncio.get_event_loop().time() + _HEALTH_TIMEOUT_SECONDS
-    while asyncio.get_event_loop().time() < deadline:
-        if await asyncio.to_thread(_lane_healthy, role):
-            return
-        await asyncio.sleep(_HEALTH_POLL_INTERVAL)
-    raise TimeoutError(f"Lane {lane_name} did not become healthy within {_HEALTH_TIMEOUT_SECONDS}s")
+    def _ready_event(*, ok: bool, error: str | None = None) -> None:
+        emit_live(
+            agent_event(
+                "orchestrator",
+                "lane_ready",
+                f"Lane {lane_name} ready" if ok else f"Lane {lane_name} failed to load",
+                level="info" if ok else "error",
+                lane=lane_name,
+                ok=ok,
+                error=error,
+                duration_ms=round((asyncio.get_event_loop().time() - started) * 1000, 1),
+            )
+        )
+
+    try:
+        # Dedupe by lane, not by Role: _ROLE_TO_LANE is many-to-one, so two roles sharing a
+        # lane would otherwise make this stop the container it is about to start.
+        for other in Role:
+            if _lane_name(other) != _lane_name(role):
+                await stop_lane(other)
+        proc = await asyncio.create_subprocess_exec(
+            _lane_script(),
+            "start",
+            lane_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            msg = stderr.decode() or stdout.decode() or f"lane-ctl start {lane_name} failed"
+            raise RuntimeError(msg)
+
+        deadline = asyncio.get_event_loop().time() + _HEALTH_TIMEOUT_SECONDS
+        while asyncio.get_event_loop().time() < deadline:
+            if await asyncio.to_thread(_lane_healthy, role):
+                _ready_event(ok=True)
+                return
+            await asyncio.sleep(_HEALTH_POLL_INTERVAL)
+        raise TimeoutError(
+            f"Lane {lane_name} did not become healthy within {_HEALTH_TIMEOUT_SECONDS}s"
+        )
+    except BaseException as exc:
+        _ready_event(ok=False, error=str(exc)[:200])
+        raise
 
 
 async def stop_lane(role: Role) -> None:
@@ -140,3 +178,6 @@ async def stop_lane(role: Role) -> None:
         msg = stderr.decode() or stdout.decode() or f"lane-ctl stop {lane_name} failed"
         raise RuntimeError(msg)
     await wait_lane_stopped(role)
+    emit_live(
+        agent_event("orchestrator", "lane_stopped", f"Lane {lane_name} stopped", lane=lane_name)
+    )
