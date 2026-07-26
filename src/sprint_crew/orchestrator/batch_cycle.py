@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ from sprint_crew.orchestrator.backlog import (
     create_jira_tickets,
     sort_stories,
 )
+from sprint_crew.orchestrator.run_registry import RunCancelled, check_cancelled
 from sprint_crew.orchestrator.session import (
     create_and_run_cycle,
     prepare_chained_workspace,
@@ -70,6 +72,11 @@ async def run_backlog_batched(
     try:
         tickets = create_jira_tickets(plan)
         for story in sort_stories(plan):
+            # Cheapest honest place to stop: between stories nothing is half-written, and
+            # the previous story's PR is already open and independently reviewable. Checking
+            # here rather than after the cycle keeps the just-shipped story's bookkeeping —
+            # a Stop must not retract a PR that already exists.
+            check_cancelled()
             ticket = tickets[story.key]
             session_id = str(uuid4())
             if parent_workspace is None:
@@ -87,6 +94,12 @@ async def run_backlog_batched(
                 backlog_run_id=run_id,
                 console_session_id=console_session_id,
             )
+
+            # create_and_run_cycle absorbs a cooperative cancel into a CANCELLED session
+            # rather than re-raising, so translate it back — otherwise the failure branch
+            # below would read a cancelled story as a crash and mark the run FAILED.
+            if session.status == SessionStatus.CANCELLED:
+                raise RunCancelled(session.error or "cancelled")
 
             if session.status == SessionStatus.AWAITING_HUMAN:
                 completed_session_ids.append(session_id)
@@ -130,6 +143,22 @@ async def run_backlog_batched(
         )
         store.save(run)
         return run
+    except (RunCancelled, asyncio.CancelledError) as exc:
+        # Ahead of the generic arm below, which would report a cancel as a failure. Stories
+        # that already shipped stay in completed_session_ids — their PRs are open and the
+        # user's Stop does not retract them.
+        run = run.model_copy(
+            update={
+                "status": BacklogRunStatus.CANCELLED,
+                "session_ids": session_ids,
+                "completed_session_ids": completed_session_ids,
+                "error": str(exc) or "cancelled",
+            }
+        )
+        store.save(run)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        return run
     except Exception as exc:
         run = run.model_copy(
             update={
@@ -143,5 +172,7 @@ async def run_backlog_batched(
         store.save(run)
         return run
     finally:
+        # Best-effort: a hard cancel can interrupt these awaits mid-way, which is why the
+        # RunRegistry repeats the lane teardown from its uncancelled wrapper task.
         await _stop_all_lanes()
         _cleanup_vector_indexes(session_ids, run_id)

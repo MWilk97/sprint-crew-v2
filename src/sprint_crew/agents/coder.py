@@ -26,6 +26,7 @@ from sprint_crew.orchestrator.plan_coverage import (
     coverage_improved,
     validate_plan_coverage,
 )
+from sprint_crew.orchestrator.run_registry import cancel_requested
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
 from sprint_crew.schemas.change import CodeChange
 from sprint_crew.schemas.ticket import TaskPlan
@@ -161,6 +162,10 @@ async def run_coder_loop(
                     break
                 if _deadline_reached(deadline_epoch):
                     break
+                # Break rather than raise: edits are already on disk, so hand off the
+                # partial work and let the graph's node-entry checkpoint end the run.
+                if cancel_requested():
+                    break
     except UsageLimitExceeded:
         if deps.early_exit_handoff:
             return deps.early_exit_handoff, tool_log
@@ -217,7 +222,7 @@ async def run_coder_plan(
     remaining_turns = _effective_coder_turn_limit(settings.max_coder_turns)
 
     for idx, step in enumerate(task_plan.steps):
-        if _deadline_reached(deadline_epoch):
+        if _deadline_reached(deadline_epoch) or cancel_requested():
             break
         step_turns = min(turn_budget, remaining_turns)
         step_prompt = build_coder_step_prompt(
@@ -281,7 +286,7 @@ async def run_coder_with_coverage(
     for _ in range(settings.max_coverage_rounds):
         if coverage.satisfied:
             break
-        if _deadline_reached(deadline_epoch):
+        if _deadline_reached(deadline_epoch) or cancel_requested():
             break
         if not continuation_makes_sense(coverage, workspace_root, task_plan):
             break
@@ -311,10 +316,12 @@ async def run_coder_with_coverage(
 
     acceptance_output = ""
     acceptance_verified = False
-    if coverage.satisfied and not _deadline_reached(deadline_epoch):
+    if coverage.satisfied and not _deadline_reached(deadline_epoch) and not cancel_requested():
         # to_thread: a synchronous subprocess run here would hold the event loop for up to
         # ACCEPTANCE_TEST_TIMEOUT_S (900 s), during which no SSE frame flushes and /health
         # cannot answer — the same unblocking the pipeline already does at its two call sites.
+        # Cancel is checked too: starting a 900 s child after Stop is what makes a cancel
+        # feel broken, and the token is invisible to the graph until the child returns.
         acceptance_output, acceptance_green = await asyncio.to_thread(
             run_acceptance_tests,
             workspace_root,
