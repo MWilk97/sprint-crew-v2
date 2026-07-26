@@ -10,15 +10,15 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+# Imported as modules, not names, on purpose: the unit tests mock these collaborators, and
+# an attribute lookup resolves at call time. That keeps `patch("<source module>.<name>")`
+# working no matter which module the calling node ends up living in — a from-import binds
+# at import time, so moving a node silently detaches it from its mock.
+from sprint_crew.agents import coder_coverage, formatter, reviewer, tech_lead_planning, tester
 from sprint_crew.agents.coder import normalize_change
-from sprint_crew.agents.coder_coverage import run_coder_with_coverage
-from sprint_crew.agents.formatter import run_formatter
-from sprint_crew.agents.reviewer import run_reviewer
-from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated
-from sprint_crew.agents.tester import run_tester_loop, run_tester_reporter
 from sprint_crew.agents.tool_events import tool_call_events
 from sprint_crew.config import Role, get_settings
-from sprint_crew.graph.lanes import ensure_lane, stop_lane
+from sprint_crew.graph import lanes
 from sprint_crew.graph.pipeline_helpers import (
     _acceptance_failure_dict,
     _coverage_from_dict,
@@ -37,15 +37,12 @@ from sprint_crew.graph.state import (
     workspace_from_state,
 )
 from sprint_crew.inference.router import coder_thinking_active
+from sprint_crew.orchestrator import acceptance_tests, plan_coverage
+from sprint_crew.orchestrator import workspace_diff as diff_tools
 from sprint_crew.orchestrator.acceptance_failure import (
     analyze_acceptance_output,
 )
-from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
 from sprint_crew.orchestrator.merge_gate import review_accepted
-from sprint_crew.orchestrator.plan_coverage import (
-    coverage_improved,
-    should_invoke_tester,
-)
 from sprint_crew.orchestrator.plan_validation import snapshot_baseline_paths
 from sprint_crew.orchestrator.repo_context import (
     enrich_repo_context_with_hits,
@@ -59,7 +56,6 @@ from sprint_crew.orchestrator.retry import (
 )
 from sprint_crew.orchestrator.ship_cycle import orchestrator_ship
 from sprint_crew.orchestrator.template_plan import work_lane_required_for_ticket
-from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
 from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.session import AgentEvent, SessionStatus
 from sprint_crew.schemas.session import agent_event as _event
@@ -69,20 +65,20 @@ from sprint_crew.schemas.ticket import TaskPlan
 async def _stop_lane_after_cycle(state: SprintState, role: Role) -> None:
     if _in_backlog_batch(state):
         return
-    await stop_lane(role)
+    await lanes.stop_lane(role)
 
 
 async def _swap_lane(stop: Role, start: Role) -> None:
     """Only one lane may be loaded at a time on 128 GB unified memory (AGENTS.md 4.1),
     so every lane change is a stop followed by a start, never a start alone."""
-    await stop_lane(stop)
-    await ensure_lane(start)
+    await lanes.stop_lane(stop)
+    await lanes.ensure_lane(start)
 
 
 def _diff_for(state: SprintState, workspace: Path, plan: TaskPlan) -> str:
     """Reuse the diff already gathered this cycle, or compute it. Recomputing costs a git
     subprocess per node, which is why the state value is preferred when present."""
-    return state.get("workspace_diff") or gather_workspace_diff(
+    return state.get("workspace_diff") or diff_tools.gather_workspace_diff(
         workspace, priority_paths=plan.files_to_touch
     )
 
@@ -159,7 +155,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
     work_lane_required = not state.get("template_fast_path", False)
 
     if work_lane_required:
-        await ensure_lane(Role.WORK)
+        await lanes.ensure_lane(Role.WORK)
 
     events: list[AgentEvent] = []
     plan_query = f"{ticket.summary}\n{ticket.description}"
@@ -172,7 +168,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
     if pre_hits:
         events.append(pre_search_agent_event(plan_query, pre_hits))
     try:
-        plan, planning_mode, tech_lead_tool_log = await run_tech_lead_validated(
+        plan, planning_mode, tech_lead_tool_log = await tech_lead_planning.run_tech_lead_validated(
             ticket,
             workspace,
             session_id=session_id,
@@ -199,7 +195,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
         }
     finally:
         if work_lane_required:
-            await stop_lane(Role.WORK)
+            await lanes.stop_lane(Role.WORK)
 
     detail: dict[str, Any] = {
         "mode": planning_mode,
@@ -234,14 +230,14 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
     baseline = frozenset(state.get("baseline_paths") or ())
     attempt = state.get("attempt", 0)
 
-    await ensure_lane(Role.CODING)
+    await lanes.ensure_lane(Role.CODING)
     (
         raw_output,
         tool_log,
         coverage,
         acceptance_output,
         acceptance_verified,
-    ) = await run_coder_with_coverage(
+    ) = await coder_coverage.run_coder_with_coverage(
         plan,
         workspace,
         prior_review_feedback=state.get("prior_review_feedback", ""),
@@ -249,10 +245,10 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
         deadline_epoch=_deadline_epoch(state),
         attempt=attempt,
     )
-    workspace_diff = gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
+    workspace_diff = diff_tools.gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
 
     await _swap_lane(Role.CODING, Role.WORK)
-    change = await run_formatter(
+    change = await formatter.run_formatter(
         task_plan=plan,
         raw_output=raw_output,
         git_diff=workspace_diff,
@@ -334,14 +330,14 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         acceptance_output = str(state["acceptance_test_output"])
         acceptance_green = True
     else:
-        acceptance_output, acceptance_green = await run_acceptance_tests(
+        acceptance_output, acceptance_green = await acceptance_tests.run_acceptance_tests(
             workspace, plan.acceptance_tests
         )
     failure_analysis = (
         analyze_acceptance_output(acceptance_output) if acceptance_output.strip() else None
     )
 
-    if not should_invoke_tester(
+    if not plan_coverage.should_invoke_tester(
         plan,
         workspace,
         acceptance_green=acceptance_green,
@@ -370,17 +366,17 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         }
 
     await _swap_lane(Role.WORK, Role.CODING)
-    raw_output, tool_log = await run_tester_loop(
+    raw_output, tool_log = await tester.run_tester_loop(
         plan,
         change,
         workspace,
         acceptance_green=acceptance_green,
         acceptance_output=acceptance_output,
     )
-    workspace_diff = gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
+    workspace_diff = diff_tools.gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
 
     await _swap_lane(Role.CODING, Role.WORK)
-    additions = await run_tester_reporter(plan, raw_output)
+    additions = await tester.run_tester_reporter(plan, raw_output)
 
     if additions is None:
         return {
@@ -433,7 +429,7 @@ async def review(state: SprintState) -> dict[str, Any]:
         )
 
     tests_already_run = bool(state.get("tests_run_this_cycle", False) and change.tests_passed)
-    outcome = await run_reviewer(
+    outcome = await reviewer.run_reviewer(
         plan,
         change,
         workspace,
@@ -536,7 +532,7 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
     prev_raw = state.get("plan_coverage_prev")
     if coverage is not None:
         prev = _coverage_from_dict(prev_raw)
-        if prev is not None and not coverage_improved(prev, coverage):
+        if prev is not None and not plan_coverage.coverage_improved(prev, coverage):
             stall_count += 1
         else:
             stall_count = 0
@@ -554,7 +550,7 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
         if state.get("tests_run_this_cycle") and cached:
             test_output = str(cached)
         else:
-            test_output, _ = await run_acceptance_tests(
+            test_output, _ = await acceptance_tests.run_acceptance_tests(
                 workspace_from_state(state), plan.acceptance_tests
             )
 

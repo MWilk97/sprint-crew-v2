@@ -64,31 +64,31 @@ def graph_run_mocks(satisfied_coder_result: tuple):
         with ExitStack() as stack:
             mocks: dict[str, object] = {
                 "ensure_lane": stack.enter_context(
-                    patch("sprint_crew.graph.pipeline.ensure_lane", new=AsyncMock())
+                    patch("sprint_crew.graph.lanes.ensure_lane", new=AsyncMock())
                 ),
                 "stop_lane": stack.enter_context(
-                    patch("sprint_crew.graph.pipeline.stop_lane", new=AsyncMock())
+                    patch("sprint_crew.graph.lanes.stop_lane", new=AsyncMock())
                 ),
                 "coder": stack.enter_context(
                     patch(
-                        "sprint_crew.graph.pipeline.run_coder_with_coverage",
+                        "sprint_crew.agents.coder_coverage.run_coder_with_coverage",
                         new=AsyncMock(return_value=coder_result),
                     )
                 ),
                 "diff": stack.enter_context(
                     patch(
-                        "sprint_crew.graph.pipeline.gather_workspace_diff",
+                        "sprint_crew.orchestrator.workspace_diff.gather_workspace_diff",
                         return_value=workspace_diff,
                     )
                 ),
                 "formatter": stack.enter_context(
                     patch(
-                        "sprint_crew.graph.pipeline.run_formatter",
+                        "sprint_crew.agents.formatter.run_formatter",
                         new=AsyncMock(return_value=formatter_result),
                     )
                 ),
                 "reviewer": stack.enter_context(
-                    patch("sprint_crew.graph.pipeline.run_reviewer", new=reviewer)
+                    patch("sprint_crew.agents.reviewer.run_reviewer", new=reviewer)
                 ),
                 # Patch the git wrapper, not subprocess itself: plan_coverage delegates to
                 # git_exec.git_output, so reaching through to subprocess would pin an
@@ -96,31 +96,28 @@ def graph_run_mocks(satisfied_coder_result: tuple):
                 "git_output": stack.enter_context(
                     patch("sprint_crew.orchestrator.plan_coverage.git_output", return_value="")
                 ),
-                # These three were silenced by accident until now: patching
-                # plan_coverage.subprocess.run resolved to the *global* subprocess module,
-                # so it stubbed every subprocess in the process — real git invocations and
-                # real pytest runs included. Stub the seams the graph actually depends on.
-                "workspace_diff": stack.enter_context(
-                    patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="")
-                ),
+                # Silenced by accident until recently: patching plan_coverage.subprocess.run
+                # resolved to the *global* subprocess module, so it stubbed every subprocess
+                # in the process — real git and real pytest runs included. AsyncMock because
+                # run_acceptance_tests is natively async now (sprint_crew.proc).
                 "acceptance_tests": stack.enter_context(
                     patch(
-                        "sprint_crew.graph.pipeline.run_acceptance_tests",
-                        return_value=("collected 0 items", True),
+                        "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests",
+                        new=AsyncMock(return_value=("collected 0 items", True)),
                     )
                 ),
             }
             if tech_lead_result is not None:
                 mocks["tech_lead"] = stack.enter_context(
                     patch(
-                        "sprint_crew.graph.pipeline.run_tech_lead_validated",
+                        "sprint_crew.agents.tech_lead_planning.run_tech_lead_validated",
                         new=AsyncMock(return_value=tech_lead_result),
                     )
                 )
             if should_invoke_tester is not None:
                 mocks["should_invoke_tester"] = stack.enter_context(
                     patch(
-                        "sprint_crew.graph.pipeline.should_invoke_tester",
+                        "sprint_crew.orchestrator.plan_coverage.should_invoke_tester",
                         return_value=should_invoke_tester,
                     )
                 )

@@ -144,7 +144,7 @@ async def test_test_implement_skips_acceptance_when_coder_verified(
     base_state["acceptance_test_output"] = "pytest ok"
 
     with patch(
-        "sprint_crew.graph.pipeline.run_acceptance_tests",
+        "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests",
     ) as run_ac:
         await run_test_implement(base_state)  # type: ignore[arg-type]
 
@@ -165,16 +165,19 @@ async def test_test_implement_keeps_work_lane_warm_after_reporter(
         lane_events.append(f"stop:{role.value}")
 
     with (
-        patch("sprint_crew.graph.pipeline.stop_lane", side_effect=track_stop),
-        patch("sprint_crew.graph.pipeline.ensure_lane", new=AsyncMock()),
+        patch("sprint_crew.graph.lanes.stop_lane", side_effect=track_stop),
+        patch("sprint_crew.graph.lanes.ensure_lane", new=AsyncMock()),
         patch(
-            "sprint_crew.graph.pipeline.run_tester_loop",
+            "sprint_crew.agents.tester.run_tester_loop",
             new=AsyncMock(return_value=("handoff", [])),
         ),
-        patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="diff"),
-        patch("sprint_crew.graph.pipeline.run_tester_reporter", new=AsyncMock(return_value=None)),
-        patch("sprint_crew.graph.pipeline.run_acceptance_tests", return_value=("", False)),
-        patch("sprint_crew.graph.pipeline.should_invoke_tester", return_value=True),
+        patch("sprint_crew.orchestrator.workspace_diff.gather_workspace_diff", return_value="diff"),
+        patch("sprint_crew.agents.tester.run_tester_reporter", new=AsyncMock(return_value=None)),
+        patch(
+            "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests",
+            return_value=("", False),
+        ),
+        patch("sprint_crew.orchestrator.plan_coverage.should_invoke_tester", return_value=True),
     ):
         await run_test_implement(base_state)  # type: ignore[arg-type]
 
@@ -366,14 +369,16 @@ async def test_code_implement_stops_coder_before_work_lane(
         lane_events.append(f"stop:{role.value}")
 
     with (
-        patch("sprint_crew.graph.pipeline.ensure_lane", side_effect=track_ensure),
-        patch("sprint_crew.graph.pipeline.stop_lane", side_effect=track_stop),
+        patch("sprint_crew.graph.lanes.ensure_lane", side_effect=track_ensure),
+        patch("sprint_crew.graph.lanes.stop_lane", side_effect=track_stop),
         patch(
-            "sprint_crew.graph.pipeline.run_coder_with_coverage",
+            "sprint_crew.agents.coder_coverage.run_coder_with_coverage",
             new=AsyncMock(return_value=satisfied_coder_result),
         ),
-        patch("sprint_crew.graph.pipeline.gather_workspace_diff", return_value="diff"),
-        patch("sprint_crew.graph.pipeline.run_formatter", new=AsyncMock(return_value=code_change)),
+        patch("sprint_crew.orchestrator.workspace_diff.gather_workspace_diff", return_value="diff"),
+        patch(
+            "sprint_crew.agents.formatter.run_formatter", new=AsyncMock(return_value=code_change)
+        ),
     ):
         await code_implement(base_state)  # type: ignore[arg-type]
 
@@ -497,10 +502,10 @@ async def test_test_implement_records_acceptance_failure_when_collection_fails(
 
     with (
         patch(
-            "sprint_crew.graph.pipeline.run_acceptance_tests",
+            "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests",
             return_value=(SCRUM3_COLLECTION, False),
         ),
-        patch("sprint_crew.graph.pipeline.should_invoke_tester", return_value=False),
+        patch("sprint_crew.orchestrator.plan_coverage.should_invoke_tester", return_value=False),
     ):
         result = await run_test_implement(base_state)  # type: ignore[arg-type]
 
@@ -530,10 +535,10 @@ async def test_test_implement_clears_stale_acceptance_failure_once_tests_are_gre
 
     with (
         patch(
-            "sprint_crew.graph.pipeline.run_acceptance_tests",
+            "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests",
             return_value=("exit_code=0", True),
         ),
-        patch("sprint_crew.graph.pipeline.should_invoke_tester", return_value=False),
+        patch("sprint_crew.orchestrator.plan_coverage.should_invoke_tester", return_value=False),
     ):
         result = await run_test_implement(base_state)  # type: ignore[arg-type]
 
@@ -550,7 +555,10 @@ async def test_prepare_retry_increments_attempt(base_retry_state: dict) -> None:
         retry_scope="code",
     ).model_dump()
 
-    with patch("sprint_crew.graph.pipeline.run_acceptance_tests", return_value=("stderr", False)):
+    with patch(
+        "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests",
+        return_value=("stderr", False),
+    ):
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
 
     assert result["attempt"] == 1
@@ -576,7 +584,7 @@ async def test_prepare_retry_code_scope_skips_tester_when_tests_green(
         tests_passed=True,
     ).model_dump()
 
-    with patch("sprint_crew.graph.pipeline.run_acceptance_tests") as run_tests:
+    with patch("sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests") as run_tests:
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
 
     run_tests.assert_not_called()
@@ -593,7 +601,9 @@ async def test_prepare_retry_plan_scope_increments_plan_retries(base_retry_state
         retry_scope="plan",
     ).model_dump()
 
-    with patch("sprint_crew.graph.pipeline.run_acceptance_tests", return_value=("", False)):
+    with patch(
+        "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests", return_value=("", False)
+    ):
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
 
     assert result["plan_retries"] == 1
@@ -613,7 +623,7 @@ async def test_prepare_retry_wires_test_output_into_feedback(base_retry_state: d
     ).model_dump()
 
     with patch(
-        "sprint_crew.graph.pipeline.run_acceptance_tests",
+        "sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests",
         return_value=("AssertionError: boom", False),
     ):
         result = await prepare_retry(base_retry_state)  # type: ignore[arg-type]
