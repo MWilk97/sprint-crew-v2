@@ -63,9 +63,9 @@ async def test_only_one_run_executes_at_a_time() -> None:
     registry.submit("b", body("b"))
     await _settle()
 
-    # b is parked on the semaphore: it has not started, and reports its place in line.
+    # b is parked on the semaphore: it has not started, and reports one run ahead of it.
     assert order == ["a:start"]
-    assert registry.position("b") == 0
+    assert registry.position("b") == 1
     assert registry.position("a") is None
     assert registry.active_run_id() == "a"
 
@@ -76,6 +76,26 @@ async def test_only_one_run_executes_at_a_time() -> None:
 
     assert order == ["a:start", "a:end", "b:start", "b:end"]
     assert registry.queue_depth() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_lone_run_reports_position_zero_not_one() -> None:
+    """0 means "starting now". Counting raw queue index would make a single run report as
+    waiting on nothing and flicker queued→running in the API for one poll."""
+    registry = RunRegistry()
+    gate = asyncio.Event()
+
+    async def _body() -> None:
+        await gate.wait()
+
+    registry.submit("solo", _body)
+    # Before its task has even run: still in _waiting, but nothing is ahead.
+    assert registry.position("solo") == 0
+
+    await _settle()
+    assert registry.position("solo") is None
+    gate.set()
+    await _settle()
 
 
 @pytest.mark.asyncio

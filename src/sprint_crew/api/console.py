@@ -11,8 +11,9 @@ MVP implementation notes:
 - mode=code start reuses the same orchestration as POST /sprint/from-prompt
   (``start_from_prompt_run`` in app.py); mode=plan never touches
   from-prompt/ship/Jira/git.
-- Cancel of a running code-mode session marks the console session cancelled
-  but does not stop the underlying backlog run (no kill support today).
+- Start queues the run and returns 202 (M5); planning happens in the
+  registry-owned task and reports on the event stream. Cancel is real: it stops
+  a queued run outright and asks a running one to unwind at its next checkpoint.
 """
 
 from __future__ import annotations
@@ -23,17 +24,18 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from sprint_crew.agents.interpreter import run_interpreter, to_clarify_questions
 from sprint_crew.api.auth import require_token
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_status
-from sprint_crew.orchestrator.backlog import get_backlog_run
+from sprint_crew.orchestrator.backlog import backlog_store, get_backlog_run
 from sprint_crew.orchestrator.console_store import console_store, reap_console_sessions
 from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.orchestrator.event_log import EventLog, event_log
+from sprint_crew.orchestrator.run_registry import run_registry
 from sprint_crew.orchestrator.session import get_session
 from sprint_crew.schemas.console import (
     ClarifyAnswer,
@@ -54,7 +56,7 @@ from sprint_crew.schemas.console import (
     SprintRunRef,
 )
 from sprint_crew.schemas.intent import IntentAnalysis
-from sprint_crew.schemas.session import AgentEvent, BacklogRunStatus
+from sprint_crew.schemas.session import AgentEvent, BacklogRunStatus, agent_event
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,11 @@ _TERMINAL_STATUSES = frozenset(
         ConsoleSessionStatus.CANCELLED,
     }
 )
+
+# A run has been handed to the registry — the prompt is fixed and further messages are
+# meaningless until it ends. ``queued`` counts: mid-run steering is out of scope, and
+# accepting a message that silently changes nothing is worse than a 409.
+_STARTED_STATUSES = frozenset({ConsoleSessionStatus.QUEUED, ConsoleSessionStatus.RUNNING})
 
 # One asyncio.Lock per session id, held across each handler's read-modify-write.
 # threading.Lock did not protect across await points inside one event loop, so
@@ -119,6 +126,27 @@ def _get_session_or_404(session_id: str) -> ConsoleSession:
     if session is None:
         raise HTTPException(status_code=404, detail="Console session not found")
     return session
+
+
+def _emit(session: ConsoleSession, event: AgentEvent) -> None:
+    """Append a console-level event to the timeline so both SSE and polling see it.
+
+    Used for events the API layer owns — cancel, in particular. Run-level events come from
+    the context emitter inside the run instead (orchestrator/emitter.py).
+    """
+    event_log().append_many(session.session_id, None, [event])
+
+
+def _cancel_backlog_run(run_id: str) -> None:
+    store = backlog_store()
+    run = store.load(run_id)
+    if run is None or run.status in (BacklogRunStatus.COMPLETED, BacklogRunStatus.FAILED):
+        return
+    store.save(
+        run.model_copy(
+            update={"status": BacklogRunStatus.CANCELLED, "error": run.error or "cancelled by user"}
+        )
+    )
 
 
 def build_clarify_questions(prompt: str | None) -> list[ClarifyQuestion]:
@@ -310,13 +338,20 @@ def build_plan_result(session: ConsoleSession) -> ConsolePlanResult:
 
 
 async def _sync_sprint_progress(session: ConsoleSession) -> None:
-    """Mirror backlog run progress into a running code-mode session."""
-    if session.status is not ConsoleSessionStatus.RUNNING:
+    """Mirror run progress into a queued or running code-mode session."""
+    if session.status not in (ConsoleSessionStatus.RUNNING, ConsoleSessionStatus.QUEUED):
         return
     if session.sprint_ref is None or session.sprint_ref.backlog_run_id is None:
         return
+    run_id = session.sprint_ref.backlog_run_id
+    # The registry is the authority on queue position: it holds the live task handles, while
+    # the backlog row only says pending/running. Position becomes None on admission.
+    position = run_registry().position(run_id)
+    session.queue_position = position or None
+    if not position and session.status is ConsoleSessionStatus.QUEUED:
+        session.status = ConsoleSessionStatus.RUNNING
     # to_thread: get_backlog_run is a blocking SQLite read called from an async GET (M3).
-    run = await asyncio.to_thread(get_backlog_run, session.sprint_ref.backlog_run_id)
+    run = await asyncio.to_thread(get_backlog_run, run_id)
     if run is None:
         return
     session.sprint_ref.sprint_session_ids = list(run.session_ids)
@@ -325,6 +360,10 @@ async def _sync_sprint_progress(session: ConsoleSession) -> None:
     elif run.status is BacklogRunStatus.FAILED:
         session.status = ConsoleSessionStatus.FAILED
         session.error = run.error or "backlog run failed"
+    elif run.status is BacklogRunStatus.CANCELLED:
+        session.status = ConsoleSessionStatus.CANCELLED
+    if session.status in _TERMINAL_STATUSES:
+        session.queue_position = None
     _touch(session)
 
 
@@ -361,7 +400,7 @@ async def get_console_session(id: str) -> ConsoleSession:
 async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSession:
     async with _lock_for(id):
         session = _get_session_or_404(id)
-        if session.status is ConsoleSessionStatus.RUNNING or session.status in _TERMINAL_STATUSES:
+        if session.status in _STARTED_STATUSES or session.status in _TERMINAL_STATUSES:
             raise HTTPException(
                 status_code=409,
                 detail=f"session is {session.status.value}; no further messages accepted",
@@ -404,8 +443,13 @@ async def confirm_console_session(id: str) -> ConsoleSession:
         return session
 
 
-@router.post("/sessions/{id}/start", response_model=ConsoleSession)
-async def start_console_run(id: str, background_tasks: BackgroundTasks) -> ConsoleSession:
+@router.post("/sessions/{id}/start", response_model=ConsoleSession, status_code=202)
+async def start_console_run(id: str) -> ConsoleSession:
+    """Queue the run and return (M5). Planning progress arrives on the event stream.
+
+    202, not 200: the run has been accepted, not performed. It lands in ``queued`` and
+    becomes ``running`` when it wins the single run slot.
+    """
     async with _lock_for(id):
         session = _get_session_or_404(id)
         if session.status is not ConsoleSessionStatus.READY:
@@ -431,7 +475,6 @@ async def start_console_run(id: str, background_tasks: BackgroundTasks) -> Conso
             run_id = await start_from_prompt_run(
                 prompt=build_run_prompt(session),
                 repo_url=session.repo_url,
-                background_tasks=background_tasks,
                 console_session_id=session.session_id,
             )
         except Exception as exc:
@@ -440,7 +483,12 @@ async def start_console_run(id: str, background_tasks: BackgroundTasks) -> Conso
             _touch(session)
             raise
         session.sprint_ref = SprintRunRef(backlog_run_id=run_id)
-        session.status = ConsoleSessionStatus.RUNNING
+        # position 0 (or None) means nothing is ahead, so report running rather than making a
+        # single run flicker queued→running for one poll. queue_position is only meaningful
+        # while queued, so a falsy position is reported as null rather than 0.
+        position = run_registry().position(run_id)
+        session.status = ConsoleSessionStatus.QUEUED if position else ConsoleSessionStatus.RUNNING
+        session.queue_position = position or None
         _touch(session)
         return session
 
@@ -511,6 +559,7 @@ async def _stream_is_complete(session_id: str) -> bool:
         if run is not None and run.status in (
             BacklogRunStatus.COMPLETED,
             BacklogRunStatus.FAILED,
+            BacklogRunStatus.CANCELLED,
         ):
             return True
     return False
@@ -587,13 +636,57 @@ async def stream_console_events(id: str, request: Request, since: int = 0) -> Ev
 
 @router.post("/sessions/{id}/cancel", response_model=ConsoleSession)
 async def cancel_console_session(id: str) -> ConsoleSession:
+    """Stop the session, and the run behind it if one is live (M5).
+
+    Three shapes, all answered 200 — ``status`` plus ``cancel_requested_at`` say which:
+
+    - nothing started, or the run is still queued: terminal ``cancelled`` immediately;
+    - the run is executing: Stop is *accepted*. ``cancel_requested_at`` is set, the status
+      stays ``running``, and a ``cancel_requested`` event goes out so the UI can show
+      "stopping…". It flips to ``cancelled`` once the run actually unwinds.
+
+    A running cancel cannot be instant: the run stops at its next checkpoint, and a
+    checkpoint is invisible while a subprocess is mid-call. Worst case is bounded by
+    ``ACCEPTANCE_TEST_TIMEOUT_S`` / ``run_command``'s own timeout, not by ``CANCEL_GRACE_S``
+    alone — the grace window only governs when the task is hard-cancelled.
+    """
     async with _lock_for(id):
         session = _get_session_or_404(id)
         if session.status in _TERMINAL_STATUSES:
             raise HTTPException(status_code=409, detail=f"session already {session.status.value}")
-        # Best effort: a running backlog run is not killed, only the console session
-        # is marked cancelled (documented limitation).
+
+        run_id = session.sprint_ref.backlog_run_id if session.sprint_ref else None
+        registry = run_registry()
+        live = run_id is not None and registry.get(run_id) is not None
+        was_queued = live and registry.position(run_id) is not None
+        if live:
+            registry.cancel(run_id, reason="cancelled by user")
+
+        if live and not was_queued:
+            session.cancel_requested_at = _utc_now_iso()
+            _emit(
+                session,
+                agent_event(
+                    "orchestrator",
+                    "cancel_requested",
+                    "Stopping run at the next checkpoint",
+                    level="warning",
+                    run_id=run_id,
+                ),
+            )
+            _touch(session)
+            return session
+
         session.status = ConsoleSessionStatus.CANCELLED
+        session.queue_position = None
+        if live:
+            # A queued run's body never executes, so nothing else will update its row.
+            session.cancel_requested_at = _utc_now_iso()
+            await asyncio.to_thread(_cancel_backlog_run, run_id)
+        _emit(
+            session,
+            agent_event("orchestrator", "cancelled", "Session cancelled", level="warning"),
+        )
         _touch(session)
         run_console_reaper()
         return session

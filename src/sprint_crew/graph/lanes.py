@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 import urllib.error
 import urllib.request
@@ -9,6 +10,8 @@ from typing import Final
 from sprint_crew.config import Role, get_settings, lane_for_role
 from sprint_crew.orchestrator.emitter import emit_live
 from sprint_crew.schemas.session import agent_event
+
+logger = logging.getLogger(__name__)
 
 _HEALTH_TIMEOUT_SECONDS: Final = 1200
 _STOP_TIMEOUT_SECONDS: Final = 180
@@ -159,6 +162,19 @@ async def ensure_lane(role: Role) -> None:
     except BaseException as exc:
         _ready_event(ok=False, error=str(exc)[:200])
         raise
+
+
+async def stop_all_lanes() -> None:
+    """Best-effort teardown of every lane. Never raises — callers are cleanup paths.
+
+    Idempotent (``stop_lane`` early-returns on an already-stopped lane), which is what lets
+    the RunRegistry repeat it after a run's own ``finally`` may have been interrupted.
+    """
+    for role in Role:
+        try:
+            await stop_lane(role)
+        except Exception:
+            logger.warning("Failed to stop lane %s during cleanup", role, exc_info=True)
 
 
 async def stop_lane(role: Role) -> None:

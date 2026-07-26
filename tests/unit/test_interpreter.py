@@ -161,7 +161,7 @@ def test_assumptions_reach_the_run_prompt(console_client: TestClient) -> None:
     sid = session["session_id"]
     assert console_client.post(f"/v1/console/sessions/{sid}/confirm").status_code == 200
     with patch("sprint_crew.api.app.start_from_prompt_run", new=run_mock):
-        assert console_client.post(f"/v1/console/sessions/{sid}/start").status_code == 200
+        assert console_client.post(f"/v1/console/sessions/{sid}/start").status_code == 202
     prompt = run_mock.await_args.kwargs["prompt"]
     assert "Add a /metrics endpoint" in prompt
     assert "Prometheus text format" in prompt

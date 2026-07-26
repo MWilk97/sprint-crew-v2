@@ -255,11 +255,17 @@ class RunRegistry:
         return self._entries.get(run_id)
 
     def position(self, run_id: str) -> int | None:
-        """0-based place in the admission queue; None once admitted or unknown."""
+        """How many runs must finish before this one starts. None once admitted or unknown.
+
+        0 means "starting now" — nothing is ahead and the slot is free. A freshly submitted
+        lone run sits in ``_waiting`` until its task first runs, so counting raw queue index
+        would report it as waiting on nothing and make a single run flicker queued→running.
+        """
         try:
-            return self._waiting.index(run_id)
+            index = self._waiting.index(run_id)
         except ValueError:
             return None
+        return index + (1 if self.active_run_id() is not None else 0)
 
     def active_run_id(self) -> str | None:
         return next(

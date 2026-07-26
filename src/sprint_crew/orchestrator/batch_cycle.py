@@ -5,8 +5,7 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 
-from sprint_crew.config import Role
-from sprint_crew.graph.lanes import stop_lane
+from sprint_crew.graph.lanes import stop_all_lanes
 from sprint_crew.orchestrator.backlog import (
     backlog_store,
     create_jira_tickets,
@@ -23,14 +22,6 @@ from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionSta
 from sprint_crew.vector.indexer import delete_workspace_index
 
 logger = logging.getLogger(__name__)
-
-
-async def _stop_all_lanes() -> None:
-    for role in Role:
-        try:
-            await stop_lane(role)
-        except Exception:
-            logger.warning("Failed to stop lane %s during backlog cleanup", role, exc_info=True)
 
 
 def _cleanup_vector_indexes(session_ids: list[str], run_id: str) -> None:
@@ -174,5 +165,5 @@ async def run_backlog_batched(
     finally:
         # Best-effort: a hard cancel can interrupt these awaits mid-way, which is why the
         # RunRegistry repeats the lane teardown from its uncancelled wrapper task.
-        await _stop_all_lanes()
+        await stop_all_lanes()
         _cleanup_vector_indexes(session_ids, run_id)
