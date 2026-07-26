@@ -9,6 +9,7 @@ from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.usage import UsageLimits
 
+from sprint_crew.agents._factory import build_tool_agent
 from sprint_crew.agents.prompts_coder import (
     build_coder_build_fix_prompt,
     build_coder_continuation_prompt,
@@ -17,7 +18,7 @@ from sprint_crew.agents.prompts_coder import (
     build_coder_user_prompt,
 )
 from sprint_crew.config import Role, get_settings, lane_for_role
-from sprint_crew.inference.router import coder_model_settings, pydantic_ai_model
+from sprint_crew.inference.router import coder_model_settings
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
 from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
 from sprint_crew.orchestrator.plan_coverage import (
@@ -92,11 +93,10 @@ def _build_coder_agent(
         task_plan=task_plan,
         baseline_paths=baseline_paths,
     )
-    agent: Agent[WorkspaceDeps, str] = Agent(
-        pydantic_ai_model(Role.CODING),
-        deps_type=WorkspaceDeps,
+    agent = build_tool_agent(
+        Role.CODING,
         system_prompt=build_coder_system_prompt(role_specialization=role_specialization),
-        toolsets=[build_coder_toolset()],
+        toolset=build_coder_toolset(),
         retries=3,
         model_settings=model_settings,
     )

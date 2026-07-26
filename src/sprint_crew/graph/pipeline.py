@@ -5,6 +5,7 @@ import functools
 import json
 import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -57,6 +58,7 @@ from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
 from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.session import AgentEvent, SessionStatus
 from sprint_crew.schemas.session import agent_event as _event
+from sprint_crew.schemas.ticket import TaskPlan
 
 
 def _timed_detail(started: float, **extra: Any) -> dict[str, Any]:
@@ -125,6 +127,21 @@ async def _stop_lane_after_cycle(state: SprintState, role: Role) -> None:
     if _in_backlog_batch(state):
         return
     await stop_lane(role)
+
+
+async def _swap_lane(stop: Role, start: Role) -> None:
+    """Only one lane may be loaded at a time on 128 GB unified memory (AGENTS.md 4.1),
+    so every lane change is a stop followed by a start, never a start alone."""
+    await stop_lane(stop)
+    await ensure_lane(start)
+
+
+def _diff_for(state: SprintState, workspace: Path, plan: TaskPlan) -> str:
+    """Reuse the diff already gathered this cycle, or compute it. Recomputing costs a git
+    subprocess per node, which is why the state value is preferred when present."""
+    return state.get("workspace_diff") or gather_workspace_diff(
+        workspace, priority_paths=plan.files_to_touch
+    )
 
 
 async def init_session(state: SprintState) -> dict[str, Any]:
@@ -291,8 +308,7 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
     )
     workspace_diff = gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
 
-    await stop_lane(Role.CODING)
-    await ensure_lane(Role.WORK)
+    await _swap_lane(Role.CODING, Role.WORK)
     change = await run_formatter(
         task_plan=plan,
         raw_output=raw_output,
@@ -356,9 +372,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
     workspace = workspace_from_state(state)
 
     if state.get("skip_tester_this_attempt"):
-        workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
-            workspace, priority_paths=plan.files_to_touch
-        )
+        workspace_diff = _diff_for(state, workspace, plan)
         return {
             "workspace_diff": workspace_diff,
             "skip_tester_this_attempt": False,
@@ -392,9 +406,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
         acceptance_green=acceptance_green,
         acceptance_output=acceptance_output,
     ):
-        workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
-            workspace, priority_paths=plan.files_to_touch
-        )
+        workspace_diff = _diff_for(state, workspace, plan)
         if acceptance_green:
             skip_reason = "Acceptance tests green — tester skipped"
         elif failure_analysis is not None and not failure_analysis.tester_can_help:
@@ -416,8 +428,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
             ],
         }
 
-    await stop_lane(Role.WORK)
-    await ensure_lane(Role.CODING)
+    await _swap_lane(Role.WORK, Role.CODING)
     raw_output, tool_log = await run_tester_loop(
         plan,
         change,
@@ -427,8 +438,7 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
     )
     workspace_diff = gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
 
-    await stop_lane(Role.CODING)
-    await ensure_lane(Role.WORK)
+    await _swap_lane(Role.CODING, Role.WORK)
     additions = await run_tester_reporter(plan, raw_output)
 
     if additions is None:
@@ -465,14 +475,11 @@ async def test_implement(state: SprintState) -> dict[str, Any]:
 
 async def review(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
-    await stop_lane(Role.CODING)
-    await ensure_lane(Role.WORK)
+    await _swap_lane(Role.CODING, Role.WORK)
     plan = task_plan_from_state(state)
     change = code_change_from_state(state)
     workspace = workspace_from_state(state)
-    workspace_diff = state.get("workspace_diff") or gather_workspace_diff(
-        workspace, priority_paths=plan.files_to_touch
-    )
+    workspace_diff = _diff_for(state, workspace, plan)
     test_additions_json = ""
     if raw_additions := state.get("test_additions"):
         test_additions_json = json.dumps(raw_additions, indent=2)

@@ -72,7 +72,7 @@ async def test_run_tester_loop_records_tool_log(tmp_path: Path) -> None:
     mock_agent = MagicMock()
     mock_agent.run = AsyncMock(side_effect=fake_run)
 
-    with patch.object(tester_module, "Agent", return_value=mock_agent):
+    with patch.object(tester_module, "build_tool_agent", return_value=mock_agent):
         _handoff, tool_log = await run_tester_loop(
             plan,
             change,
