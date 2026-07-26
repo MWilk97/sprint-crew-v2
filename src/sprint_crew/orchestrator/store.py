@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
+
+from pydantic import BaseModel
 
 
 class SqliteJsonStore:
@@ -74,3 +77,35 @@ class SqliteJsonStore:
     def _clear_all(self) -> None:
         with self._connect() as conn:
             conn.execute(f"DELETE FROM {self.table}")
+
+
+class TypedJsonStore[T: BaseModel](SqliteJsonStore):
+    """A ``SqliteJsonStore`` whose payload is one Pydantic model.
+
+    The session, backlog-run and console-session stores each hand-rolled the identical
+    save/load/list_all trio — nine lines apiece differing only in the model class. The
+    key column is named after the model's own id field in all three, so the base can
+    derive the key rather than have each subclass restate it.
+    """
+
+    model: ClassVar[type[BaseModel]]
+    #: Whether the table carries an ``updated_at`` column mirrored from the model.
+    tracks_updated_at: ClassVar[bool] = False
+
+    def save(self, item: T) -> None:
+        columns = {
+            self.key_column: str(getattr(item, self.key_column)),
+            "payload": json.dumps(item.model_dump(mode="json")),
+        }
+        if self.tracks_updated_at:
+            columns["updated_at"] = str(getattr(item, "updated_at"))
+        self._save_row(columns)
+
+    def load(self, key: str) -> T | None:
+        payload = self._load_payload(key)
+        if payload is None:
+            return None
+        return cast(T, self.model.model_validate(json.loads(payload)))
+
+    def list_all(self) -> list[T]:
+        return [cast(T, self.model.model_validate(json.loads(p))) for p in self._list_payloads()]

@@ -9,13 +9,12 @@ session ids whose clones live under ``settings.workspace_base``.
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 from datetime import UTC, datetime
 
 from sprint_crew.config import get_settings
-from sprint_crew.orchestrator.store import SqliteJsonStore
+from sprint_crew.orchestrator.store import TypedJsonStore
 from sprint_crew.schemas.console import ConsoleSession, ConsoleSessionStatus
 
 logger = logging.getLogger(__name__)
@@ -29,7 +28,9 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
-class ConsoleSessionStore(SqliteJsonStore):
+class ConsoleSessionStore(TypedJsonStore[ConsoleSession]):
+    model = ConsoleSession
+    tracks_updated_at = True
     table = "console_sessions"
     key_column = "session_id"
     create_sql = """
@@ -40,26 +41,8 @@ class ConsoleSessionStore(SqliteJsonStore):
         )
     """
 
-    def save(self, session: ConsoleSession) -> None:
-        self._save_row(
-            {
-                "session_id": session.session_id,
-                "payload": json.dumps(session.model_dump(mode="json")),
-                "updated_at": session.updated_at,
-            }
-        )
-
-    def load(self, session_id: str) -> ConsoleSession | None:
-        payload = self._load_payload(session_id)
-        if payload is None:
-            return None
-        return ConsoleSession.model_validate(json.loads(payload))
-
     def delete(self, session_id: str) -> bool:
         return self._delete(session_id)
-
-    def list_all(self) -> list[ConsoleSession]:
-        return [ConsoleSession.model_validate(json.loads(p)) for p in self._list_payloads()]
 
     def clear(self) -> None:
         self._clear_all()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import shutil
 import subprocess
 import time
@@ -17,7 +16,7 @@ from sprint_crew.graph.state import SprintState
 from sprint_crew.orchestrator.emitter import Emitter, emit_live, reset_emitter, set_emitter
 from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.orchestrator.run_registry import RunCancelled
-from sprint_crew.orchestrator.store import SqliteJsonStore
+from sprint_crew.orchestrator.store import TypedJsonStore
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
 from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession, agent_event
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
@@ -27,7 +26,9 @@ def _utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
-class SessionStore(SqliteJsonStore):
+class SessionStore(TypedJsonStore[SprintSession]):
+    model = SprintSession
+    tracks_updated_at = True
     table = "sessions"
     key_column = "session_id"
     create_sql = """
@@ -38,24 +39,11 @@ class SessionStore(SqliteJsonStore):
         )
     """
 
-    def save(self, session: SprintSession) -> None:
-        session.updated_at = _utc_now_iso()
-        self._save_row(
-            {
-                "session_id": session.session_id,
-                "payload": json.dumps(session.model_dump(mode="json")),
-                "updated_at": session.updated_at,
-            }
-        )
-
-    def load(self, session_id: str) -> SprintSession | None:
-        payload = self._load_payload(session_id)
-        if payload is None:
-            return None
-        return SprintSession.model_validate(json.loads(payload))
-
-    def list_all(self) -> list[SprintSession]:
-        return [SprintSession.model_validate(json.loads(p)) for p in self._list_payloads()]
+    def save(self, item: SprintSession) -> None:
+        # Stamped here rather than by callers: every write is a state change worth dating,
+        # and the workspace reaper reads this column.
+        item.updated_at = _utc_now_iso()
+        super().save(item)
 
 
 def session_store() -> SessionStore:
