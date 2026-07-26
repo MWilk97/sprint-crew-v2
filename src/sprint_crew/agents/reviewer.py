@@ -37,7 +37,15 @@ async def run_reviewer(
         )
         tests_passed = True
     else:
-        test_results, tests_passed = run_acceptance_tests(root, task_plan.acceptance_tests)
+        # to_thread: run_acceptance_tests is a blocking subprocess.run bounded by
+        # ACCEPTANCE_TEST_TIMEOUT_S (900 s). Held on the event loop it stalls the whole
+        # process — no SSE frames, no /health, and POST /cancel cannot even be accepted,
+        # which is what the cancel contract in api/console.py assumes stays responsive.
+        test_results, tests_passed = await asyncio.to_thread(
+            run_acceptance_tests,
+            root,
+            task_plan.acceptance_tests,
+        )
 
     diff = workspace_diff.strip() or gather_workspace_diff(
         root,
