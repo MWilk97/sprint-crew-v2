@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import time
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +18,16 @@ from sprint_crew.agents.tester import run_tester_loop, run_tester_reporter
 from sprint_crew.agents.tool_events import tool_call_events
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, stop_lane
+from sprint_crew.graph.pipeline_helpers import (
+    _acceptance_failure_dict,
+    _coverage_from_dict,
+    _coverage_satisfied,
+    _deadline_epoch,
+    _deadline_exceeded,
+    _in_backlog_batch,
+    _timed_detail,
+)
+from sprint_crew.graph.pipeline_phases import _phased
 from sprint_crew.graph.state import (
     SprintState,
     code_change_from_state,
@@ -29,14 +37,11 @@ from sprint_crew.graph.state import (
 )
 from sprint_crew.inference.router import coder_thinking_active
 from sprint_crew.orchestrator.acceptance_failure import (
-    AcceptanceFailureAnalysis,
     analyze_acceptance_output,
 )
 from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
-from sprint_crew.orchestrator.emitter import current_emitter, reset_emitter, set_emitter
 from sprint_crew.orchestrator.merge_gate import review_accepted
 from sprint_crew.orchestrator.plan_coverage import (
-    PlanCoverageResult,
     coverage_improved,
     should_invoke_tester,
 )
@@ -51,7 +56,6 @@ from sprint_crew.orchestrator.retry import (
     resolve_failure_feedback,
     resolve_retry_scope,
 )
-from sprint_crew.orchestrator.run_registry import check_cancelled
 from sprint_crew.orchestrator.ship_cycle import orchestrator_ship
 from sprint_crew.orchestrator.template_plan import work_lane_required_for_ticket
 from sprint_crew.orchestrator.workspace_diff import gather_workspace_diff
@@ -59,68 +63,6 @@ from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.session import AgentEvent, SessionStatus
 from sprint_crew.schemas.session import agent_event as _event
 from sprint_crew.schemas.ticket import TaskPlan
-
-
-def _timed_detail(started: float, **extra: Any) -> dict[str, Any]:
-    return {"duration_ms": int((time.monotonic() - started) * 1000), **extra}
-
-
-def _coverage_from_dict(raw: Any) -> PlanCoverageResult | None:
-    if not isinstance(raw, dict):
-        return None
-    return PlanCoverageResult(
-        missing=list(raw.get("missing", [])),
-        unexpected=list(raw.get("unexpected", [])),
-        out_of_scope_hits=list(raw.get("out_of_scope_hits", [])),
-        blocking_unexpected=list(raw.get("blocking_unexpected", [])),
-        phantom_paths=list(raw.get("phantom_paths", [])),
-        satisfied=bool(raw.get("satisfied", True)),
-    )
-
-
-def _acceptance_failure_dict(analysis: AcceptanceFailureAnalysis | None) -> dict[str, Any]:
-    """Serialize this round's acceptance-failure analysis for graph state.
-
-    Always returns a value (empty dict when there's no failure) so a node's
-    returned update overwrites a stale failure recorded in an earlier round —
-    acceptance_failure has no reducer, so an omitted key would otherwise leave
-    a prior round's failure in state after tests turn green.
-    """
-    if analysis is None or analysis.kind == "none":
-        return {}
-    return {
-        "kind": analysis.kind,
-        "tester_can_help": analysis.tester_can_help,
-        "source_paths": list(analysis.source_paths),
-        "test_paths": list(analysis.test_paths),
-        "summary": analysis.summary,
-        "detail_excerpt": analysis.detail_excerpt,
-    }
-
-
-def _coverage_satisfied(state: SprintState) -> bool:
-    coverage = state.get("plan_coverage")
-    if not isinstance(coverage, dict):
-        return True
-    return bool(coverage.get("satisfied", True))
-
-
-def _deadline_epoch(state: SprintState) -> float:
-    raw = state.get("deadline_epoch", 0.0)
-    try:
-        return float(raw or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _deadline_exceeded(state: SprintState) -> bool:
-    """True when a per-cycle wall-clock budget is set and already elapsed."""
-    deadline = _deadline_epoch(state)
-    return deadline > 0.0 and time.time() >= deadline
-
-
-def _in_backlog_batch(state: SprintState) -> bool:
-    return bool(state.get("backlog_run_id"))
 
 
 async def _stop_lane_after_cycle(state: SprintState, role: Role) -> None:
@@ -714,56 +656,6 @@ async def failed(state: SprintState) -> dict[str, Any]:
             )
         ],
     }
-
-
-_NodeFn = Callable[[SprintState], Awaitable[dict[str, Any]]]
-
-
-def _phased(phase: str, fn: _NodeFn) -> _NodeFn:
-    """Bracket a graph node with live ``phase_started`` / ``phase_completed`` events (M4).
-
-    Binds the enclosing phase onto the context emitter for the node's duration, so tool and
-    lane events emitted inside inherit ``phase``. A no-op when no console run is streaming.
-
-    Also the graph's single cancel checkpoint (M5). Firing here covers every node *and*
-    every routing decision — a route runs between two phased nodes, so a cancel requested
-    during routing is caught on the next node's entry. That is why the routing functions
-    carry no check of their own.
-    """
-
-    @functools.wraps(fn)
-    async def _wrapped(state: SprintState) -> dict[str, Any]:
-        check_cancelled()
-        emitter = current_emitter()
-        if emitter is None:
-            return await fn(state)
-        phased = emitter.with_phase(phase)
-        token = set_emitter(phased)
-        phased.emit(_event("orchestrator", "phase_started", f"{phase} started", level="debug"))
-        started = time.monotonic()
-        ok = True
-        try:
-            return await fn(state)
-        except BaseException:
-            # Report the phase as failed rather than completed: a timeline that says
-            # "completed" for a node that raised is misleading exactly when it is being
-            # read to debug that failure. Re-raised untouched.
-            ok = False
-            raise
-        finally:
-            phased.emit(
-                _event(
-                    "orchestrator",
-                    "phase_completed",
-                    f"{phase} {'completed' if ok else 'failed'}",
-                    duration_ms=round((time.monotonic() - started) * 1000, 1),
-                    ok=ok,
-                    level="debug" if ok else "error",
-                )
-            )
-            reset_emitter(token)
-
-    return _wrapped
 
 
 def build_sprint_graph(*, checkpointer: Any | None = None) -> CompiledStateGraph:
