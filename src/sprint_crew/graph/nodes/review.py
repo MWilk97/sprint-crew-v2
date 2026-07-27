@@ -22,6 +22,7 @@ from sprint_crew.graph.state import (
     ticket_from_state,
     workspace_from_state,
 )
+from sprint_crew.orchestrator.diff_capture import record_diff_snapshot
 from sprint_crew.orchestrator.merge_gate import review_accepted
 from sprint_crew.schemas.change import ReviewOutcome
 from sprint_crew.schemas.session import agent_event as _event
@@ -34,6 +35,16 @@ async def review(state: SprintState) -> dict[str, Any]:
     change = code_change_from_state(state)
     workspace = workspace_from_state(state)
     workspace_diff = _diff_for(state, workspace, plan)
+    # Before the Reviewer call, not after: this is the last point where the working tree
+    # still holds the uncommitted change (ship stages everything), and the Reviewer takes
+    # minutes, so capturing first is what puts the diff in front of the user while the
+    # review is still running.
+    await record_diff_snapshot(
+        workspace,
+        sprint_session_id=state["session_id"],
+        ticket_key=plan.ticket_key,
+        attempt=state.get("attempt", 0),
+    )
     test_additions_json = ""
     if raw_additions := state.get("test_additions"):
         test_additions_json = json.dumps(raw_additions, indent=2)

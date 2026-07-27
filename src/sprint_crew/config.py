@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     sse_heartbeat_s: float = Field(default=15.0, alias="SSE_HEARTBEAT_S")
     sse_queue_maxsize: int = Field(default=1000, alias="SSE_QUEUE_MAXSIZE")
 
+    # Structured diff snapshots for the console review surface (roadmap M6). Captured once
+    # per review pass, so the caps bound one attempt's payload, not a whole run's. A file
+    # over the byte cap is shortened and flagged rather than dropped.
+    diff_snapshot_enabled: bool = Field(default=True, alias="DIFF_SNAPSHOT_ENABLED")
+    diff_max_files: int = Field(default=500, alias="DIFF_MAX_FILES")
+    diff_max_file_bytes: int = Field(default=200_000, alias="DIFF_MAX_FILE_BYTES")
+
     # Interpreter / clarify (ADR 0013). The console generates questions with an LLM; when
     # the Work lane is cold we fall back to the deterministic stub rather than making an
     # interactive caller wait out a lane load. Set autostart when latency does not matter.

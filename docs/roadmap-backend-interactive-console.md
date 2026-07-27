@@ -1,6 +1,6 @@
 # Backend roadmap — interactive console ("Cursor-like") for sprint-crew-v2
 
-**Status:** Phases A and B (M0–M5) are **landed**; Phase C onward (M6–M12) is **proposed**.
+**Status:** M0–M6 are **landed**; M7 onward is **proposed**.
 Each milestone below carries its own status line — the per-milestone marker is authoritative.
 **Scope:** backend (`sprint-crew-v2`) only. Front-end work is *flagged but not planned* here; every
 contract change carries an `FE →` note for the separate front-end roadmap session.
@@ -332,6 +332,16 @@ asynchronous (`cancel_requested` → `cancelled`), so the Stop button needs a pe
 ## Phase C — See the work
 
 ### M6 — Structured diffs (read-only)
+
+**Status (2026-07-27):** Landed. Parser + renderer in `orchestrator/diff_parse.py`, capture in
+`orchestrator/diff_capture.py`, persistence in `orchestrator/diff_store.py`, routes in
+`api/console/diffs.py`. Four deliberate deviations from the plan below: the snapshot is captured
+once per attempt at the **review** node rather than wherever `gather_workspace_diff` is called
+(that node is the last point before ship stages the tree, and it is where the attempt number is
+known); untracked files are diffed with `git diff --no-index` per file rather than `git add -N`,
+so the index is never mutated under a run that later does `git add -A`; snapshots live in two
+tables (header + one row per file) so the file-tree endpoint never deserialises hunks; and
+capture is gated on a console emitter being present, so direct `/sprint/*` runs pay nothing.
 
 **Goal.** The UI can render a real per-file, per-hunk diff of what the agent did.
 
