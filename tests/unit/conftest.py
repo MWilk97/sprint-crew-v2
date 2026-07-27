@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from contextlib import ExitStack, contextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,6 +39,48 @@ def base_state(tmp_path) -> dict:
         "events": [],
         "use_real_ship": False,
     }
+
+
+@contextmanager
+def _patched_settings(overrides: dict):
+    """Override Settings fields everywhere they are read, for the duration of the block.
+
+    Two traps this walks around:
+
+    - Patching one importing module (this used to name `graph.nodes.routing.get_settings`)
+      covers that module only, so an override for a field read elsewhere — max_coverage_rounds,
+      coder_step_mode — silently did nothing and the test passed regardless.
+    - Patching `sprint_crew.config.get_settings` covers *nothing*: every consumer does
+      `from sprint_crew.config import get_settings`, which binds the function object at
+      import time and never looks at the config module again.
+
+    So rebind the name in each module that already imported it. Unknown keys raise: a typo'd
+    field on a stub is indistinguishable from a real one, which is how an override can look
+    applied while changing nothing.
+    """
+    import sys
+
+    from sprint_crew.config import Settings, get_settings
+
+    unknown = set(overrides) - set(Settings.model_fields)
+    if unknown:
+        raise AssertionError(f"settings_overrides names no such Settings field: {sorted(unknown)}")
+
+    real = get_settings()
+    stub = SimpleNamespace(
+        **{field: getattr(real, field) for field in Settings.model_fields} | overrides
+    )
+    settings_mock = MagicMock(return_value=stub)
+
+    targets = [
+        name
+        for name, module in list(sys.modules.items())
+        if name.startswith("sprint_crew.") and getattr(module, "get_settings", None) is get_settings
+    ]
+    with ExitStack() as stack:
+        for name in targets:
+            stack.enter_context(patch(f"{name}.get_settings", settings_mock))
+        yield settings_mock
 
 
 @pytest.fixture
@@ -122,12 +165,7 @@ def graph_run_mocks(satisfied_coder_result: tuple):
                     )
                 )
             if settings_overrides is not None:
-                settings_mock = stack.enter_context(
-                    patch("sprint_crew.graph.nodes.routing.get_settings")
-                )
-                for key, value in settings_overrides.items():
-                    setattr(settings_mock.return_value, key, value)
-                mocks["settings"] = settings_mock
+                mocks["settings"] = stack.enter_context(_patched_settings(settings_overrides))
             yield mocks
 
     return _mocks
