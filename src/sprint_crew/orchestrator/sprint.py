@@ -4,12 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from sprint_crew.config import get_settings
+from sprint_crew.git_exec import default_git_env, git_run
 from sprint_crew.graph.state import SprintState
 from sprint_crew.integrations.jira_client import (
-    default_git_env,
     get_github_client,
     get_jira_client,
-    git_run,
     origin_repo_slug,
     redact_secrets,
 )

@@ -1,6 +1,6 @@
 # Chat console API contract
 
-**Status: Implemented (MVP; in-memory sessions + model-generated clarify).** The `/v1/console/*` routes are live in [console.py](../../src/sprint_crew/api/console.py), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
+**Status: Implemented (durable sessions, SSE timeline, queued + cancellable runs).** The `/v1/console/*` routes are live in [api/console/](../../src/sprint_crew/api/console/), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
 
 Implementation status / MVP limitations:
 
@@ -195,7 +195,7 @@ Append a user chat message; the backend may respond with assistant messages and/
 {"content": "It should also cover the backlog endpoints"}
 ```
 
-Response `200`: updated session. Errors: `404`; `409` if session is `running` or terminal; `422` empty content.
+Response `200`: updated session. Errors: `404`; `409` if the session has already started (`queued` or `running`) or is terminal; `422` empty content.
 
 ### POST /v1/console/sessions/{id}/clarify
 
@@ -312,7 +312,9 @@ Errors: `404` unknown session (returned before the stream opens, as an ordinary 
 
 The events table is the source of truth; the stream is a live view over it. A slow client whose buffer overflows is dropped and is expected to reconnect and replay from its last `seq` — so a client must always be prepared to resume, and the polling endpoint remains a valid fallback.
 
-**Closed event vocabulary.** `event_type` is drawn from a documented closed set (`EventType` in the OpenAPI spec): `session_started`, `vector_indexed`, `vector_index_skipped`, `pre_search`, `plan_created`, `plan_aborted`, `tool_call`, `code_change`, `plan_coverage_incomplete`, `skipped`, `tests_added`, `review_complete`, `gate_result`, `retry_prepared`, `awaiting_human`, `failed`, `shipped`, `shipped_stub`, `approved`. The wire type stays a plain string on purpose: **a client must render an unknown `event_type` generically, never reject the event** — later milestones (M4) add new types (`lane_loading`, `phase_started`, …) and an older client must not break on them. `phase` and `level` (`debug | info | warning | error`) are present for filtering; `phase` is lightly populated in M2 and fleshed out in M4.
+**Closed event vocabulary.** `event_type` is drawn from a documented closed set — the `EventType` enum in [chat-console.openapi.yaml](chat-console.openapi.yaml), which is the single source of truth and is pinned against `schemas/session.py` by `tests/unit/test_docs_examples.py`. It is deliberately not restated here: this paragraph used to carry its own copy of the list and fell four milestones behind.
+
+The wire type stays a plain string on purpose: **a client must render an unknown `event_type` generically, never reject the event** — each milestone adds types (M4 added `lane_loading`/`phase_started`, M5 added `run_queued`, `run_started`, `workspace_ready`, `backlog_planned`, `cancel_requested`, `cancelled`) and an older client must not break on them. `phase` and `level` (`debug | info | warning | error`) are present for filtering.
 
 ## Mapping to the current /sprint/* API
 

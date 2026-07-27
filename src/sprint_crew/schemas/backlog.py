@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-_STRICT = ConfigDict(extra="forbid")
+from sprint_crew.schemas._base import STRICT
 
 
 class ProjectMode(str, Enum):
@@ -20,7 +20,7 @@ class BacklogIssueType(str, Enum):
 
 
 class ProductBrief(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     title: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)
@@ -30,7 +30,7 @@ class ProductBrief(BaseModel):
 
 
 class BacklogStory(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     key: str = Field(..., min_length=1)
     summary: str = Field(..., min_length=1)
@@ -42,7 +42,7 @@ class BacklogStory(BaseModel):
 
 
 class BacklogPlan(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     product_brief: ProductBrief
     stories: list[BacklogStory] = Field(..., min_length=1)

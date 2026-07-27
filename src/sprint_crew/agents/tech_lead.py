@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
+from sprint_crew.agents._factory import build_tool_agent
 from sprint_crew.agents.prompts_tech_lead import (
     build_tech_lead_loop_user_prompt,
     build_tech_lead_structured_prompt,
@@ -15,12 +15,11 @@ from sprint_crew.agents.prompts_tech_lead import (
 )
 from sprint_crew.agents.tool_events import ToolCallLog
 from sprint_crew.config import Role, get_settings
-from sprint_crew.inference.router import pydantic_ai_model
 from sprint_crew.inference.structured import structured_completion
 from sprint_crew.orchestrator.complexity import tech_lead_mode
 from sprint_crew.orchestrator.repo_context import gather_repo_context
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
-from sprint_crew.tools.pydantic_ai import WorkspaceDeps, build_readonly_toolset, workspace_deps
+from sprint_crew.tools.pydantic_ai import build_readonly_toolset, workspace_deps
 
 
 def _repo_context_for_ticket(
@@ -61,12 +60,10 @@ async def run_tech_lead_loop(
         include_semantic_search=True,
         tool_call_log=log,
     )
-    agent: Agent[WorkspaceDeps, str] = Agent(
-        pydantic_ai_model(Role.WORK),
-        deps_type=WorkspaceDeps,
+    agent = build_tool_agent(
+        Role.WORK,
         system_prompt=build_tech_lead_system_prompt(),
-        toolsets=[build_readonly_toolset(include_semantic_search=True)],
-        retries=3,
+        toolset=build_readonly_toolset(include_semantic_search=True),
         model_settings=ModelSettings(temperature=0),
     )
     if repo_context is None:

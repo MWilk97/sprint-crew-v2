@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import shlex
-import subprocess
 from pathlib import Path
 
 from sprint_crew.config import get_settings
+from sprint_crew.exec_policy import (
+    ALLOWED_COMMANDS,
+    CommandPolicyError,
+    check_command_allowed,
+    resolve_argv,
+    sandbox_env,
+)
 from sprint_crew.orchestrator.pytest_cmd import normalize_test_command
-from sprint_crew.tools.run_command import ALLOWED_COMMANDS
+from sprint_crew.proc import run_argv
 
 # Prose tokens that must not appear as bare pytest arguments (not after -k/-m/etc.).
 _PROSE_STOP_WORDS: frozenset[str] = frozenset(
@@ -79,7 +85,7 @@ def _pytest_has_prose_arguments(argv: list[str]) -> bool:
 
 
 def validate_acceptance_tests(commands: list[str]) -> list[str]:
-    """Ensure each command starts with an allowlisted executable and has no prose tokens."""
+    """One allowlisted executable per command, no prose, no shell syntax (AGENTS.md §3.1)."""
     if not commands:
         raise AcceptanceTestsValidationError(["(empty list)"])
 
@@ -88,6 +94,9 @@ def validate_acceptance_tests(commands: list[str]) -> list[str]:
         stripped = cmd.strip()
         if not stripped:
             invalid.append("(empty command)")
+            continue
+        if check_command_allowed(stripped) is not None:
+            invalid.append(stripped)
             continue
         try:
             argv = shlex.split(stripped)
@@ -105,35 +114,48 @@ def validate_acceptance_tests(commands: list[str]) -> list[str]:
     return commands
 
 
-def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[str, bool]:
+async def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[str, bool]:
+    """Run each acceptance command; returns combined output and whether all passed.
+
+    Async so a cancelled run kills the child, exec-not-shell, and sandboxed env — see
+    AGENTS.md §3.1. Revalidated here because this is what spawns the process, so a caller
+    that skipped the plan-time gate fails closed.
+    """
+    validate_acceptance_tests(commands)
     timeout_s = get_settings().acceptance_test_timeout_s
     lines: list[str] = []
     all_passed = True
     for cmd in commands:
+        # Validate the raw string first (above): normalize rewrites argv[0] into an
+        # absolute .venv/bin/pytest path that no longer matches the allowlist.
         normalized = normalize_test_command(cmd, workspace_root)
         lines.append(f"$ {normalized}")
         try:
-            proc = subprocess.run(
-                normalized,
-                shell=True,
+            result = await run_argv(
+                resolve_argv(shlex.split(normalized)),
                 cwd=workspace_root,
-                capture_output=True,
-                text=True,
-                check=False,
+                env=sandbox_env(),
                 timeout=timeout_s,
             )
-        except subprocess.TimeoutExpired:
+        except (CommandPolicyError, FileNotFoundError, NotADirectoryError, PermissionError) as exc:
+            # A shell reported a missing interpreter as exit 127; exec raises instead. Still
+            # a failed acceptance test, not a crashed run.
+            all_passed = False
+            lines.append(f"could not start command: {exc}")
+            lines.append("")
+            continue
+        if result.timed_out:
             # A hung command is a failed acceptance test, not a crashed run.
             all_passed = False
             lines.append(f"timed out after {timeout_s:.0f}s")
             lines.append("")
             continue
-        passed = proc.returncode == 0
+        passed = result.returncode == 0
         all_passed = all_passed and passed
-        lines.append(f"exit_code={proc.returncode}")
-        if proc.stdout.strip():
-            lines.append(proc.stdout.strip()[-2000:])
-        if proc.stderr.strip():
-            lines.append("stderr: " + proc.stderr.strip()[-1000:])
+        lines.append(f"exit_code={result.returncode}")
+        if result.stdout.strip():
+            lines.append(result.stdout.strip()[-2000:])
+        if result.stderr.strip():
+            lines.append("stderr: " + result.stderr.strip()[-1000:])
         lines.append("")
     return "\n".join(lines), all_passed

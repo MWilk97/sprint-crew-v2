@@ -11,7 +11,7 @@ Reference timeline shape (sprint session poll): [../examples/session-timeline.js
 
 ## Current (live today)
 
-The implemented API is `/sprint/*`, `/health`, and `/v1/console/*`, defined in [src/sprint_crew/api/app.py](../../src/sprint_crew/api/app.py) and [src/sprint_crew/api/console.py](../../src/sprint_crew/api/console.py); FastAPI serves its own OpenAPI at `/docs` when the backend runs.
+The implemented API is `/sprint/*`, `/health`, and `/v1/console/*`, defined in [src/sprint_crew/api/app.py](../../src/sprint_crew/api/app.py) and [src/sprint_crew/api/console/](../../src/sprint_crew/api/console/); FastAPI serves its own OpenAPI at `/docs` when the backend runs.
 
 | File | Contents |
 |------|----------|

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sprint_crew.integrations.jira_client import default_git_env, git_run, redact_secrets
+from sprint_crew.git_exec import default_git_env, git_run
+from sprint_crew.integrations.jira_client import redact_secrets
 from sprint_crew.schemas.change import CodeChange
 
 

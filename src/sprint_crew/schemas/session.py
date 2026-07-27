@@ -4,12 +4,11 @@ from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
+from sprint_crew.schemas._base import STRICT
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
-
-_STRICT = ConfigDict(extra="forbid")
 
 
 def utc_now_iso() -> str:
@@ -73,7 +72,7 @@ EventLevel = Literal["debug", "info", "warning", "error"]
 
 
 class AgentEvent(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     timestamp: str = Field(default_factory=utc_now_iso)
     agent: str = Field(..., min_length=1)
@@ -107,7 +106,7 @@ def agent_event(
 
 
 class SprintSession(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     session_id: str = Field(..., min_length=1)
     status: SessionStatus
@@ -143,7 +142,7 @@ class BacklogRunStatus(str, Enum):
 
 
 class BacklogRun(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     run_id: str = Field(..., min_length=1)
     status: BacklogRunStatus

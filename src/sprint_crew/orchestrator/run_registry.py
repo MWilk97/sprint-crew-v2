@@ -113,6 +113,9 @@ class RunEntry:
     # cancel target. See the module docstring for why this split exists.
     wrapper_task: asyncio.Task[None] | None = None
     body_task: asyncio.Task[None] | None = None
+    # Held so the hard-cancel watchdog is not garbage-collected mid-sleep, and so cancel()
+    # can tell an escalation is already armed.
+    escalate_task: asyncio.Task[None] | None = None
     created_at: float = field(default_factory=time.monotonic)
 
 
@@ -236,20 +239,32 @@ class RunRegistry:
             if entry.wrapper_task is not None:
                 entry.wrapper_task.cancel()
             return True
+        if entry.state == "cancelling":
+            # Already escalating. Re-arming would spawn a second untracked watchdog per
+            # repeated Stop (double-click, client retry) — harmless individually, but the
+            # tasks are unreferenced and nothing bounds how many a user can create.
+            return True
         entry.state = "cancelling"
-        asyncio.create_task(self._escalate(entry), name=f"run-cancel:{run_id}")
+        entry.escalate_task = asyncio.create_task(
+            self._escalate(entry), name=f"run-cancel:{run_id}"
+        )
         return True
 
     async def _escalate(self, entry: RunEntry) -> None:
-        await asyncio.sleep(get_settings().cancel_grace_s)
-        body = entry.body_task
-        if body is not None and not body.done():
-            logger.warning(
-                "run %s ignored cooperative cancel for %.0fs; hard-cancelling",
-                entry.run_id,
-                get_settings().cancel_grace_s,
-            )
-            body.cancel()
+        try:
+            await asyncio.sleep(get_settings().cancel_grace_s)
+            body = entry.body_task
+            if body is not None and not body.done():
+                logger.warning(
+                    "run %s ignored cooperative cancel for %.0fs; hard-cancelling",
+                    entry.run_id,
+                    get_settings().cancel_grace_s,
+                )
+                body.cancel()
+        finally:
+            # Cleared so the entry stops holding a finished watchdog, and so a later
+            # cancel() can tell that no escalation is armed any more.
+            entry.escalate_task = None
 
     def get(self, run_id: str) -> RunEntry | None:
         return self._entries.get(run_id)
@@ -279,7 +294,9 @@ class RunRegistry:
     def reset(self) -> None:
         """Test hook: cancel everything outstanding and drop the table."""
         for entry in list(self._entries.values()):
-            for task in (entry.body_task, entry.wrapper_task):
+            # escalate_task included: it sleeps for CANCEL_GRACE_S, so leaving it out left
+            # a watchdog running past the reset that dropped its entry.
+            for task in (entry.body_task, entry.wrapper_task, entry.escalate_task):
                 if task is not None and not task.done():
                     task.cancel()
         self._entries.clear()

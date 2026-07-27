@@ -24,8 +24,9 @@ def _git_root(workspace_root: Path) -> tuple[Path, Path] | None:
     git_dir = find_git_dir(workspace_root)
     if git_dir is None:
         return None
-    work_tree = workspace_root if (workspace_root / ".git").exists() else workspace_root
-    return work_tree.resolve(strict=False), git_dir.resolve(strict=False)
+    # The work tree is the workspace either way; find_git_dir already resolved whether
+    # .git is a directory or a worktree pointer file, which is the only thing that varies.
+    return workspace_root.resolve(strict=False), git_dir.resolve(strict=False)
 
 
 class GitStatusTool:

@@ -37,7 +37,9 @@ async def run_reviewer(
         )
         tests_passed = True
     else:
-        test_results, tests_passed = run_acceptance_tests(root, task_plan.acceptance_tests)
+        # Natively async (sprint_crew.proc): keeps the loop free during a run bounded by
+        # ACCEPTANCE_TEST_TIMEOUT_S (900 s), and lets a cancel actually kill the child.
+        test_results, tests_passed = await run_acceptance_tests(root, task_plan.acceptance_tests)
 
     diff = workspace_diff.strip() or gather_workspace_diff(
         root,

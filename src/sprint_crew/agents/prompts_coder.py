@@ -4,8 +4,6 @@ from sprint_crew.orchestrator.acceptance_failure import AcceptanceFailureAnalysi
 from sprint_crew.orchestrator.plan_coverage import PlanCoverageResult
 from sprint_crew.schemas.ticket import PlanStep
 
-ROLE = "Python Coder"
-
 _SPECIALIZATION_PREFIX = (
     "You operate as a {specialization}. The tech-stack hint above "
     "is AUTHORITATIVE for THIS sprint cycle: write idiomatic code "

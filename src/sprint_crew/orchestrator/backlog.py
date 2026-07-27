@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from collections import deque
 
 from sprint_crew.config import get_settings
 from sprint_crew.integrations.jira_client import get_jira_client
 from sprint_crew.orchestrator.complexity import PromptComplexity, assess_prompt_complexity
-from sprint_crew.orchestrator.store import SqliteJsonStore
+from sprint_crew.orchestrator.store import TypedJsonStore, _cached_store
 from sprint_crew.schemas.backlog import BacklogPlan, BacklogStory
 from sprint_crew.schemas.session import BacklogRun
 from sprint_crew.schemas.ticket import JiraTicket
@@ -125,7 +124,8 @@ def sort_stories(plan: BacklogPlan) -> list[BacklogStory]:
     return ordered
 
 
-class BacklogRunStore(SqliteJsonStore):
+class BacklogRunStore(TypedJsonStore[BacklogRun]):
+    model = BacklogRun
     table = "backlog_runs"
     key_column = "run_id"
     create_sql = """
@@ -135,26 +135,9 @@ class BacklogRunStore(SqliteJsonStore):
         )
     """
 
-    def save(self, run: BacklogRun) -> None:
-        self._save_row(
-            {
-                "run_id": run.run_id,
-                "payload": json.dumps(run.model_dump(mode="json")),
-            }
-        )
-
-    def load(self, run_id: str) -> BacklogRun | None:
-        payload = self._load_payload(run_id)
-        if payload is None:
-            return None
-        return BacklogRun.model_validate(json.loads(payload))
-
-    def list_all(self) -> list[BacklogRun]:
-        return [BacklogRun.model_validate(json.loads(p)) for p in self._list_payloads()]
-
 
 def backlog_store() -> BacklogRunStore:
-    return BacklogRunStore(get_settings().session_db)
+    return _cached_store(BacklogRunStore, get_settings().session_db)
 
 
 def create_jira_tickets(plan: BacklogPlan) -> dict[str, JiraTicket]:

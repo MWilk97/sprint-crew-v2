@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from tests.helpers.agent_live_tickets import complex_api_ticket, greeter_ticket
+from tests.helpers.ticket_fixtures import complex_api_ticket, greeter_ticket
 
 from sprint_crew.agents import tech_lead as tech_lead_module
 from sprint_crew.agents.tech_lead import (

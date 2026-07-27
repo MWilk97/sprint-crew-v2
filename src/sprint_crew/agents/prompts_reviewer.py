@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-ROLE = "Code Reviewer"
-
 GOAL = (
     "Re-run the TaskPlan acceptance tests, inspect the diff, and produce "
     "a ReviewOutcome with honest passed/tests_passed and severity-tagged findings."

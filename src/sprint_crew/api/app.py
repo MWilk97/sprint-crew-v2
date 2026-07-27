@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
 from sprint_crew.api.auth import require_token
 from sprint_crew.api.console import router as console_router
@@ -34,6 +33,12 @@ from sprint_crew.schemas.session import (
     SessionStatus,
     SprintSession,
     agent_event,
+)
+from sprint_crew.schemas.sprint import (
+    BacklogRunCreatedResponse,
+    FromPromptRequest,
+    FromTicketRequest,
+    SessionCreatedResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,24 +79,6 @@ app.add_middleware(
 app.include_router(console_router)
 
 sprint_router = APIRouter(prefix="/sprint", tags=["sprint"], dependencies=[Depends(require_token)])
-
-
-class FromPromptRequest(BaseModel):
-    prompt: str = Field(..., min_length=1)
-    repo_url: str | None = None
-
-
-class FromTicketRequest(BaseModel):
-    ticket_key: str = Field(..., min_length=1)
-    repo_url: str | None = None
-
-
-class SessionCreatedResponse(BaseModel):
-    session_id: str
-
-
-class BacklogRunCreatedResponse(BaseModel):
-    run_id: str
 
 
 @app.get("/")

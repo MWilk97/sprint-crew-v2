@@ -23,6 +23,15 @@ in [`docs/README.md`](docs/README.md).
 - Forbidden segments: `.git`, `.venv`, `node_modules`, caches.
 - Placeholder paths (`<name>`, `<ext>`) are rejected.
 
+### 3.1 Model-authored commands
+
+Two paths execute strings the model wrote — the `run_command` tool and `acceptance_tests`. Both go through [`exec_policy.py`](src/sprint_crew/exec_policy.py) so their rules cannot drift apart, and neither uses a shell.
+
+- **Allowlist is on argv[0] *and* on shell syntax.** Checking argv[0] alone accepted `pytest -q; env` and `pytest -q $(env)` — argv[0] is `pytest` in both. Operators are detected with `shlex` in `punctuation_chars` mode, not a substring scan, so a quoted argument containing one (`python -c "import os; print(x)"`) is still valid.
+- **`sandbox_env()` is the only environment a child may inherit.** This process holds HF, Jira, GitHub and console tokens; a subprocess the model asked for has no business seeing them.
+- **Validate the raw string, then normalize.** `normalize_test_command` rewrites argv[0] into an absolute interpreter path that no longer matches the allowlist.
+- **A long-running tool needs `aexecute`** (`AsyncTool` in [`tools/base.py`](src/sprint_crew/tools/base.py)). `asyncio.to_thread` is not cancellable: the coroutine unwinds while the child runs to completion, so Stop leaves a process holding the single run slot. Everything spawned through [`proc.py`](src/sprint_crew/proc.py) gets its own process group and a SIGTERM→SIGKILL ladder, so the whole tree dies with the run. POSIX only.
+
 ## 4. Architecture (v2)
 
 - **Single pipeline:** LangGraph `build_sprint_graph` / `run_sprint_cycle` is the only sprint-cycle engine (from-ticket and backlog). [`batch_cycle.py`](src/sprint_crew/orchestrator/batch_cycle.py) is a thin Jira/workspace orchestrator that calls `create_and_run_cycle` per ticket (no dual CrewAI flows).
@@ -41,6 +50,16 @@ in [`docs/README.md`](docs/README.md).
 - **Model serving split:** vLLM container flags and HF model IDs live in [`infra/docker-compose.yml`](infra/docker-compose.yml); [`infra/models.yaml`](infra/models.yaml) is the Python client config (ports, `served_name`). Its `tool_call_parser` fields are documentation-only — the parser vLLM actually uses comes from the compose flags.
 - After a failed lane test, always `./scripts/lane-ctl.sh stop all` before retrying.
 - If a lane is slow despite health=OK, check whether another vLLM container is still running (`docker ps`, `nvidia-smi`).
+
+### 4.2 Console package layout
+
+[`api/console/`](src/sprint_crew/api/console/) is layered so the import graph stays acyclic: `state` (router, per-session locks, the persistence seam) ← `clarify` (Interpreter + answer validation) and `run_bridge` (console↔backlog-run translation) ← `routes` (session lifecycle) and `events` (polling + SSE). Importing the package registers every route.
+
+- **Single-worker assumption.** The per-session `asyncio.Lock`s in `state` are process-local; this is not safe across multiple API workers.
+- **All blocking I/O goes through `state`.** Handlers have no other way to reach a store, which keeps SQLite off the event loop by construction rather than by review. The two `to_thread` calls in `events.py` are composites and say so.
+- **Locks are only ever keyed by a session that exists** — `require_session` runs before `_lock_for`, or an unknown id mints an entry nothing reclaims.
+- **Console status is derived, never owned.** The run is the authority; `run_bridge.sync_sprint_progress` is the one place that translation happens.
+- **Start queues and returns 202**; cancel stops a queued run outright and asks a running one to unwind at its next checkpoint ([ADR 0014](docs/adr/0014-run-queue-and-cancel.md)).
 
 ## 5. Orchestration
 
@@ -135,7 +154,7 @@ Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 
 | **Prep** | ScrumMaster | `BacklogPlan` JSON on Work lane (:8002), loaded only for `from-prompt` |
 
 - **Coder:** `laguna-s-2.1-nvfp4` (Poolside Laguna S 2.1 NVFP4, GB10; vLLM ≥0.25.1 `poolside_v1`), Poolside eval-certified sampling **T=0.7 / top_p=0.95 / top_k=20** (raw defaults degrade NVFP4 output — pinned in `config.py` per request *and* via `--override-generation-config`), `MAX_CODER_TURNS=32`, tools ON, `max-model-len=131072`, `gpu-memory-utilization=0.85`. Thinking is OFF for early attempts and escalates per-request from attempt 2 (`--reasoning-parser poolside_v1` loaded so the trace is stripped before tool parsing; longer timeout absorbs the 118B MoE reasoning trace that otherwise overruns the request deadline — see `infra/docker-compose.yml` and §8.2 Reasoning escalation). Early exit when acceptance tests pass, diff is non-empty, and plan coverage is satisfied (`CODER_EARLY_EXIT_REQUIRES_COVERAGE`). Mid-loop model errors (context overflow, request timeout) hand off partial work rather than failing the cycle. Rollback: `gdubicki/Qwen3-Coder-Next-NVFP4-GB10`.
-- **Work:** `qwen3-30b-a3b-thinking` (Qwen3-30B-A3B-Thinking-2507 NVFP4, `qwen3_moe`, text-only, ~3B active), TaskPlan / CodeChange / ReviewOutcome / BacklogPlan JSON; TechLead tool_loop for COMPLEX tickets (`MAX_TECHLEAD_TURNS`, `--tool-call-parser qwen3_coder --reasoning-parser qwen3` on :8002). Also runs ScrumMaster prep decomposition (merged lane). Plain `qwen3_moe` (full attention, `Qwen2Tokenizer`): no tokenizer patch and no `--max-num-batched-tokens` Mamba workaround (both were only needed by the prior Qwen3.6 multimodal ckpt). Setup: the ModelOpt NVFP4 ckpt omits `quant_method` in `config.json`, so after `hf download` run `scripts/patch_work_quant.py` once (adds `quant_method: modelopt` so vLLM 26.04 selects the `modelopt_fp4` NVFP4 Marlin backend; otherwise it loads unquantized and dies on `w2_weight_scale_2`).
+- **Work:** `qwen3.6-35b-a3b-nvfp4` ([RedHatAI/Qwen3.6-35B-A3B-NVFP4](https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4), `qwen3_5_moe`, ~22 GB incl. vision tower, ~3B active, `gpu-memory-utilization=0.65`), TaskPlan / CodeChange / ReviewOutcome / BacklogPlan JSON; TechLead tool_loop for COMPLEX tickets (`MAX_TECHLEAD_TURNS`, `--tool-call-parser qwen3_coder --reasoning-parser qwen3` on :8002). Also runs ScrumMaster prep decomposition (merged lane). Multimodal — only the Interpreter may send images (§3, [ADR 0013](docs/adr/0013-interpreter-clarify.md)). No quant patch needed: this ckpt declares `quant_method: compressed-tensors` itself. Rollback: `qwen3-30b-a3b-thinking` (Qwen3-30B-A3B-Thinking-2507 NVFP4, `qwen3_moe`, text-only, `gpu-memory-utilization=0.50`) — that ckpt omits `quant_method`, so it needs `scripts/patch_work_quant.py` run once after `hf download`, otherwise vLLM loads it unquantized and dies on `w2_weight_scale_2`. See `infra/models.yaml`.
 - **File context:** orchestrator gathers `git diff` after Coder/Tester and injects into Formatter + Reviewer prompts (`workspace_diff` in graph state). Plan coverage also reads `git status --porcelain` for untracked files. TechLead receives `enrich_repo_context` (manifest, pre_search, grep, semantic hits). `validate_plan_paths_exist` rejects phantom paths before Coder; `snapshot_baseline_paths` at session start feeds coverage phantom detection.
 
 ### 8.5 Vector index (Qdrant)
@@ -154,5 +173,5 @@ Runs on the Work lane before any planning, for `/v1/console/*` sessions only ([A
 - **Zero questions is a valid answer.** A clear request must go straight to `ready`; do not add a floor on question count.
 - **Every question carries a recommendation** (`recommended_suggestion_id` + per-option `rationale`). A user who accepts only the recommendations must get sensible work.
 - **Python owns identifiers.** The model returns ordered questions and a `recommended_index`; ids are assigned and the index clamped in `agents/interpreter.py`. Never trust model-generated ids.
-- **Clarify degrades, never blocks.** Cold lane or a failed call falls back to the deterministic questions in `api/console.py`; `CLARIFY_AUTOSTART_LANE=true` opts into waiting for a lane load instead.
+- **Clarify degrades, never blocks.** Cold lane or a failed call falls back to the deterministic questions in `api/console/clarify.py`; `CLARIFY_AUTOSTART_LANE=true` opts into waiting for a lane load instead.
 - Interpreter maps to `Role.WORK`. Adding a dedicated `Role` for it is safe: `ensure_lane` stops other lanes by lane name, not by `Role`, so two roles sharing the work lane will not stop the container they are about to start.

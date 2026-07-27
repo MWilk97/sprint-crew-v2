@@ -4,9 +4,9 @@ import time
 
 import pytest
 
-from tests.helpers.agent_live_tickets import skip_template_fast_path
 from tests.helpers.from_prompt_assertions import evaluate_from_prompt_run
 from tests.helpers.from_prompt_live import VECTOR_TRAP_PROMPT, run_from_prompt_live
+from tests.helpers.ticket_fixtures import skip_template_fast_path
 from tests.helpers.vector_tiers import (
     setup_vector_agent_env,
     skip_unless_vector_agent_live,

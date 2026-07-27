@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
 
-ROLE = "Test Engineer"
-
 GOAL = (
     "Add or extend automated tests for the TaskPlan changes. "
     "Write tests only under tests/ and report honest TestAdditions."

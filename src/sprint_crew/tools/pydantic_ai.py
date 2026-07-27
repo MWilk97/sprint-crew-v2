@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 from pydantic_ai import RunContext
@@ -23,7 +25,7 @@ from sprint_crew.schemas.session import utc_now_iso
 from sprint_crew.schemas.ticket import TaskPlan
 from sprint_crew.tools import ALL_TOOLS, READONLY_TOOLS, ToolRegistry, build_registry
 from sprint_crew.tools.apply_patch import ApplyPatchArgs
-from sprint_crew.tools.git_tools import GitLogArgs
+from sprint_crew.tools.git_tools import GitDiffArgs, GitLogArgs, GitStatusArgs
 from sprint_crew.tools.grep import GrepArgs
 from sprint_crew.tools.list_directory import ListDirectoryArgs
 from sprint_crew.tools.read_file import ReadFileArgs
@@ -132,14 +134,29 @@ _SOFT_FAIL_READONLY_TOOLS = frozenset(
 )
 
 
-def _dispatch(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel) -> str:
+async def _dispatch_off_loop(ctx: RunContext[WorkspaceDeps], name: str, payload: dict[str, Any]):
+    """Run the tool body without holding the event loop.
+
+    Every tool here is blocking — run_command spawns a child with a 300 s cap, the git
+    tools and grep spawn subprocesses, read/write hit the filesystem. The closures are
+    async, so calling the registry directly held the event loop for the whole tool call on
+    *every* coder and tester turn: no SSE frame flushed, /health could not answer, and POST
+    /cancel could not even be accepted.
+
+    ``adispatch`` rather than ``to_thread(dispatch)``: a thread is not cancellable, so the
+    long-running tool would survive Stop and keep the run's child alive. See ToolRegistry.
+
+    Only the dispatch moves off the loop. _record_tool_call stays on it because it publishes
+    to the event log, and the seq it assigns has to stay ordered against the node-end batch
+    (orchestrator/emitter.py).
+    """
+    return await ctx.deps.registry.adispatch(name, payload, workspace_root=ctx.deps.root)
+
+
+async def _dispatch(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel) -> str:
     payload = args.model_dump(exclude_none=True)
     t0 = time.monotonic()
-    result = ctx.deps.registry.dispatch(
-        name,
-        payload,
-        workspace_root=ctx.deps.root,
-    )
+    result = await _dispatch_off_loop(ctx, name, payload)
     duration_ms = (time.monotonic() - t0) * 1000
     output = result.output
     if not result.ok and name in _SOFT_FAIL_READONLY_TOOLS:
@@ -148,14 +165,10 @@ def _dispatch(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel) -> str
     return output
 
 
-def _dispatch_result(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel):
+async def _dispatch_result(ctx: RunContext[WorkspaceDeps], name: str, args: BaseModel):
     payload = args.model_dump(exclude_none=True)
     t0 = time.monotonic()
-    result = ctx.deps.registry.dispatch(
-        name,
-        payload,
-        workspace_root=ctx.deps.root,
-    )
+    result = await _dispatch_off_loop(ctx, name, payload)
     duration_ms = (time.monotonic() - t0) * 1000
     _record_tool_call(ctx.deps, name, payload, result.output, ok=result.ok, duration_ms=duration_ms)
     return result
@@ -197,7 +210,11 @@ def _maybe_trigger_early_exit(ctx: RunContext[WorkspaceDeps], command: str, *, o
     )
 
 
-_TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
+#: Which toolset is being built. A plain str let a typo reach `_TOOL_DESCRIPTIONS[variant]`
+#: as a KeyError at agent-construction time instead of failing type checking.
+type Variant = Literal["coder", "tester", "readonly"]
+
+_TOOL_DESCRIPTIONS: dict[Variant, dict[str, str]] = {
     "coder": {
         "read_file": "Read a UTF-8 text file from the workspace (optional line range).",
         "write_file": "Write UTF-8 content to a file in the workspace.",
@@ -228,20 +245,11 @@ _TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
 }
 
 
-def _build_toolset(
-    variant: str,
-    *,
-    include_semantic_search: bool = False,
-) -> FunctionToolset[WorkspaceDeps]:
-    """Single toolset factory; ``variant`` selects mutation guards and tool surface.
+_ToolFn = Callable[..., Awaitable[str]]
 
-    - ``coder``: plan-scoped writes, early exit on green acceptance command.
-    - ``tester``: writes restricted to tests/.
-    - ``readonly``: no writes, plus git_diff / git_log (and optional semantic_search).
-    """
-    descriptions = _TOOL_DESCRIPTIONS[variant]
-    mutating = variant in ("coder", "tester")
-    ts: FunctionToolset[WorkspaceDeps] = FunctionToolset()
+
+def _shared_tools(variant: Variant) -> list[_ToolFn]:
+    """The tools every variant gets. Read-only, so no mutation guards are involved."""
 
     async def read_file(
         ctx: RunContext[WorkspaceDeps],
@@ -249,9 +257,30 @@ def _build_toolset(
         start_line: int | None = None,
         end_line: int | None = None,
     ) -> str:
-        return _dispatch(
+        return await _dispatch(
             ctx, "read_file", ReadFileArgs(path=path, start_line=start_line, end_line=end_line)
         )
+
+    async def grep(ctx: RunContext[WorkspaceDeps], pattern: str, path: str = ".") -> str:
+        return await _dispatch(ctx, "grep", GrepArgs(pattern=pattern, path=path))
+
+    async def list_directory(ctx: RunContext[WorkspaceDeps], path: str = ".") -> str:
+        return await _dispatch(ctx, "list_directory", ListDirectoryArgs(path=path))
+
+    async def run_command(ctx: RunContext[WorkspaceDeps], command: str) -> str:
+        result = await _dispatch_result(ctx, "run_command", RunCommandArgs(command=command))
+        if variant == "coder":
+            await asyncio.to_thread(_maybe_trigger_early_exit, ctx, command, ok=result.ok)
+        return result.output
+
+    async def git_status(ctx: RunContext[WorkspaceDeps]) -> str:
+        return await _dispatch(ctx, "git_status", GitStatusArgs())
+
+    return [read_file, grep, list_directory, run_command, git_status]
+
+
+def _mutating_tools(variant: Variant) -> list[_ToolFn]:
+    """Writes, guarded by the variant's scope rule: plan scope for coder, tests/ for tester."""
 
     async def write_file(ctx: RunContext[WorkspaceDeps], path: str, content: str = "") -> str:
         if variant == "tester":
@@ -263,7 +292,7 @@ def _build_toolset(
             return err
         if variant == "coder":
             _invalidate_workspace_cache(ctx.deps)
-        return _dispatch(ctx, "write_file", WriteFileArgs(path=path, content=content))
+        return await _dispatch(ctx, "write_file", WriteFileArgs(path=path, content=content))
 
     async def apply_patch(ctx: RunContext[WorkspaceDeps], patch: str) -> str:
         if variant == "tester":
@@ -275,32 +304,19 @@ def _build_toolset(
             return err
         if variant == "coder":
             _invalidate_workspace_cache(ctx.deps)
-        return _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
+        return await _dispatch(ctx, "apply_patch", ApplyPatchArgs(patch=patch))
 
-    async def grep(ctx: RunContext[WorkspaceDeps], pattern: str, path: str = ".") -> str:
-        return _dispatch(ctx, "grep", GrepArgs(pattern=pattern, path=path))
+    return [write_file, apply_patch]
 
-    async def list_directory(ctx: RunContext[WorkspaceDeps], path: str = ".") -> str:
-        return _dispatch(ctx, "list_directory", ListDirectoryArgs(path=path))
 
-    async def run_command(ctx: RunContext[WorkspaceDeps], command: str) -> str:
-        result = _dispatch_result(ctx, "run_command", RunCommandArgs(command=command))
-        if variant == "coder":
-            _maybe_trigger_early_exit(ctx, command, ok=result.ok)
-        return result.output
-
-    async def git_status(ctx: RunContext[WorkspaceDeps]) -> str:
-        from sprint_crew.tools.git_tools import GitStatusArgs
-
-        return _dispatch(ctx, "git_status", GitStatusArgs())
+def _readonly_extras(*, include_semantic_search: bool) -> list[_ToolFn]:
+    """History and discovery tools, offered only where nothing can be written."""
 
     async def git_diff(ctx: RunContext[WorkspaceDeps]) -> str:
-        from sprint_crew.tools.git_tools import GitDiffArgs
-
-        return _dispatch(ctx, "git_diff", GitDiffArgs())
+        return await _dispatch(ctx, "git_diff", GitDiffArgs())
 
     async def git_log(ctx: RunContext[WorkspaceDeps], n: int = 10) -> str:
-        return _dispatch(ctx, "git_log", GitLogArgs(n=n))
+        return await _dispatch(ctx, "git_log", GitLogArgs(n=n))
 
     async def semantic_search(
         ctx: RunContext[WorkspaceDeps],
@@ -310,7 +326,7 @@ def _build_toolset(
         chunk_kind: str | None = None,
     ) -> str:
         """Semantic search over indexed workspace code (concept-level discovery)."""
-        return _dispatch(
+        return await _dispatch(
             ctx,
             "semantic_search",
             SemanticSearchArgs(
@@ -321,15 +337,31 @@ def _build_toolset(
             ),
         )
 
-    tools = [read_file]
-    if mutating:
-        tools.extend([write_file, apply_patch])
-    tools.extend([grep, list_directory, run_command, git_status])
-    if variant == "readonly":
-        tools.extend([git_diff, git_log])
-        if include_semantic_search:
-            tools.append(semantic_search)
+    tools = [git_diff, git_log]
+    if include_semantic_search:
+        tools.append(semantic_search)
+    return tools
 
+
+def _build_toolset(
+    variant: Variant,
+    *,
+    include_semantic_search: bool = False,
+) -> FunctionToolset[WorkspaceDeps]:
+    """Single toolset factory; ``variant`` selects mutation guards and tool surface.
+
+    - ``coder``: plan-scoped writes, early exit on green acceptance command.
+    - ``tester``: writes restricted to tests/.
+    - ``readonly``: no writes, plus git_diff / git_log (and optional semantic_search).
+    """
+    descriptions = _TOOL_DESCRIPTIONS[variant]
+    tools = _shared_tools(variant)
+    if variant in ("coder", "tester"):
+        tools.extend(_mutating_tools(variant))
+    if variant == "readonly":
+        tools.extend(_readonly_extras(include_semantic_search=include_semantic_search))
+
+    ts: FunctionToolset[WorkspaceDeps] = FunctionToolset()
     for fn in tools:
         if fn.__name__ in descriptions:
             fn.__doc__ = descriptions[fn.__name__]

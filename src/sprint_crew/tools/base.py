@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -29,6 +30,17 @@ class Tool(Protocol):
     args_schema: type[BaseModel]
 
     def execute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult: ...
+
+
+@runtime_checkable
+class AsyncTool(Protocol):
+    """A tool that can run without occupying a thread. See AGENTS.md §3.1.
+
+    Required for any tool whose child can outlive a cancelled run — today ``run_command``
+    (300 s cap) alone; grep and the git tools finish well inside ``GIT_TIMEOUT_S``.
+    """
+
+    async def aexecute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult: ...
 
 
 class ToolRegistry:
@@ -62,13 +74,10 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return sorted(self._tools.keys())
 
-    def dispatch(
-        self,
-        name: str,
-        raw_args: dict[str, Any] | None,
-        *,
-        workspace_root: Path,
-    ) -> ToolResult:
+    def _resolve(
+        self, name: str, raw_args: dict[str, Any] | None
+    ) -> tuple[Tool, BaseModel] | ToolResult:
+        """Look up the tool and validate its arguments, or return the failure to report."""
         tool = self._tools.get(name)
         if tool is None:
             available = ", ".join(self.names()) or "(none)"
@@ -78,7 +87,7 @@ class ToolRegistry:
                 error="unknown tool",
             )
         try:
-            args = tool.args_schema.model_validate(raw_args or {})
+            return tool, tool.args_schema.model_validate(raw_args or {})
         except ValidationError as exc:
             errors = exc.errors(include_url=False)
             return ToolResult(
@@ -86,32 +95,77 @@ class ToolRegistry:
                 output=f"Invalid arguments for {name!r}: {errors}",
                 error="invalid arguments",
             )
+
+    def dispatch(
+        self,
+        name: str,
+        raw_args: dict[str, Any] | None,
+        *,
+        workspace_root: Path,
+    ) -> ToolResult:
+        resolved = self._resolve(name, raw_args)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        tool, args = resolved
         try:
             return tool.execute(args, workspace_root=workspace_root)
-        except ToolError:
-            raise
-        except UnsafePathError as exc:
-            return ToolResult(
-                ok=False,
-                output=f"Path safety check failed: {exc}",
-                error="unsafe path",
-            )
-        except (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError) as exc:
-            return ToolResult(
-                ok=False,
-                output=f"{name!r} filesystem error: {exc}",
-                error=type(exc).__name__,
-            )
-        except OSError as exc:
-            return ToolResult(
-                ok=False,
-                output=f"{name!r} OS error: {exc}",
-                error=type(exc).__name__,
-            )
         except Exception as exc:
-            log.exception("Tool %r crashed unexpectedly", name)
-            return ToolResult(
-                ok=False,
-                output=f"Tool {name!r} crashed: {exc}",
-                error="unexpected",
-            )
+            return _map_tool_exception(name, exc)
+
+    async def adispatch(
+        self,
+        name: str,
+        raw_args: dict[str, Any] | None,
+        *,
+        workspace_root: Path,
+    ) -> ToolResult:
+        """Dispatch without holding the event loop.
+
+        A tool that implements ``aexecute`` (see ``AsyncTool``) is awaited directly, so
+        cancelling the caller kills its child. Everything else is a blocking body that is
+        short enough to hand to a worker thread.
+        """
+        resolved = self._resolve(name, raw_args)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        tool, args = resolved
+        try:
+            if isinstance(tool, AsyncTool):
+                return await tool.aexecute(args, workspace_root=workspace_root)
+            return await asyncio.to_thread(tool.execute, args, workspace_root=workspace_root)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return _map_tool_exception(name, exc)
+
+
+def _map_tool_exception(name: str, exc: Exception) -> ToolResult:
+    """Turn a tool crash into a reportable result. Shared so the two dispatch paths agree."""
+    if isinstance(exc, ToolError):
+        raise exc
+    if isinstance(exc, UnsafePathError):
+        return ToolResult(
+            ok=False,
+            output=f"Path safety check failed: {exc}",
+            error="unsafe path",
+        )
+    if isinstance(
+        exc, FileNotFoundError | PermissionError | IsADirectoryError | NotADirectoryError
+    ):
+        return ToolResult(
+            ok=False,
+            output=f"{name!r} filesystem error: {exc}",
+            error=type(exc).__name__,
+        )
+    if isinstance(exc, OSError):
+        return ToolResult(
+            ok=False,
+            output=f"{name!r} OS error: {exc}",
+            error=type(exc).__name__,
+        )
+    log.exception("Tool %r crashed unexpectedly", name, exc_info=exc)
+    return ToolResult(
+        ok=False,
+        output=f"Tool {name!r} crashed: {exc}",
+        error="unexpected",
+    )

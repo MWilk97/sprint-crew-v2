@@ -9,17 +9,16 @@ and collide across questions; indices are checkable.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
+from sprint_crew.schemas._base import STRICT
 from sprint_crew.schemas.console import IntentSummary
-
-_STRICT = ConfigDict(extra="forbid")
 
 
 class InterpreterOption(BaseModel):
     """One answer the user can pick for a clarify question."""
 
-    model_config = _STRICT
+    model_config = STRICT
 
     label: str = Field(..., min_length=1)
     detail: str | None = None
@@ -27,7 +26,7 @@ class InterpreterOption(BaseModel):
 
 
 class InterpreterQuestion(BaseModel):
-    model_config = _STRICT
+    model_config = STRICT
 
     text: str = Field(..., min_length=1)
     why_asked: str = Field(..., min_length=1)
@@ -45,7 +44,7 @@ class IntentAnalysis(IntentSummary):
     surfaces everything here except the questions, which it maps to ClarifyQuestion.
     """
 
-    model_config = _STRICT
+    model_config = STRICT
 
     # Empty means the request is already actionable — the session skips straight to ready.
     questions: list[InterpreterQuestion] = Field(default_factory=list)
