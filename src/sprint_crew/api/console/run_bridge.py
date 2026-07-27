@@ -14,7 +14,7 @@ from sprint_crew.api.console.clarify import (
     clarification_lines,
     resolve_answer_text,
 )
-from sprint_crew.api.console.state import _TERMINAL_STATUSES, _touch
+from sprint_crew.api.console.state import _TERMINAL_STATUSES, touch
 from sprint_crew.orchestrator.backlog import backlog_store, get_backlog_run
 from sprint_crew.orchestrator.run_registry import run_registry
 from sprint_crew.schemas.console import (
@@ -108,4 +108,4 @@ async def sync_sprint_progress(session: ConsoleSession) -> None:
         session.status = ConsoleSessionStatus.CANCELLED
     if session.status in _TERMINAL_STATUSES:
         session.queue_position = None
-    _touch(session)
+    await touch(session)

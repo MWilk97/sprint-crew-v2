@@ -22,13 +22,13 @@ from sprint_crew.api.console.run_bridge import (
 from sprint_crew.api.console.state import (
     _STARTED_STATUSES,
     _TERMINAL_STATUSES,
-    _emit,
-    _get_session_or_404,
     _lock_for,
-    _touch,
     _utc_now_iso,
+    arun_console_reaper,
+    emit,
+    require_session,
     router,
-    run_console_reaper,
+    touch,
 )
 from sprint_crew.orchestrator.run_registry import run_registry
 from sprint_crew.schemas.console import (
@@ -60,24 +60,26 @@ async def create_console_session(body: CreateConsoleSessionRequest) -> ConsoleSe
                 ConsoleMessage(role=ConsoleMessageRole.USER, content=body.initial_prompt)
             )
             await enter_clarifying(session)
-        _touch(session)
+        await touch(session)
     return session
 
 
 @router.get("/sessions/{id}", response_model=ConsoleSession)
 async def get_console_session(id: str) -> ConsoleSession:
+    await require_session(id)
     async with _lock_for(id):
-        session = _get_session_or_404(id)
+        session = await require_session(id)
         await sync_sprint_progress(session)
         if session.status in _TERMINAL_STATUSES:
-            run_console_reaper()
+            await arun_console_reaper()
         return session
 
 
 @router.post("/sessions/{id}/messages", response_model=ConsoleSession)
 async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSession:
+    await require_session(id)
     async with _lock_for(id):
-        session = _get_session_or_404(id)
+        session = await require_session(id)
         if session.status in _STARTED_STATUSES or session.status in _TERMINAL_STATUSES:
             raise HTTPException(
                 status_code=409,
@@ -86,14 +88,15 @@ async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSess
         session.messages.append(ConsoleMessage(role=ConsoleMessageRole.USER, content=body.content))
         if session.status is ConsoleSessionStatus.COLLECTING:
             await enter_clarifying(session)
-        _touch(session)
+        await touch(session)
         return session
 
 
 @router.post("/sessions/{id}/clarify", response_model=ConsoleSession)
 async def submit_clarify_answers(id: str, body: ClarifyRequest) -> ConsoleSession:
+    await require_session(id)
     async with _lock_for(id):
-        session = _get_session_or_404(id)
+        session = await require_session(id)
         if session.status is not ConsoleSessionStatus.CLARIFYING:
             raise HTTPException(
                 status_code=409,
@@ -103,21 +106,22 @@ async def submit_clarify_answers(id: str, body: ClarifyRequest) -> ConsoleSessio
             apply_clarify_answers(session, body.answers)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _touch(session)
+        await touch(session)
         return session
 
 
 @router.post("/sessions/{id}/confirm", response_model=ConsoleSession)
 async def confirm_console_session(id: str) -> ConsoleSession:
+    await require_session(id)
     async with _lock_for(id):
-        session = _get_session_or_404(id)
+        session = await require_session(id)
         if session.status is not ConsoleSessionStatus.READY:
             raise HTTPException(
                 status_code=409,
                 detail=f"session is {session.status.value}; confirm requires ready",
             )
         session.confirmed = True
-        _touch(session)
+        await touch(session)
         return session
 
 
@@ -128,8 +132,9 @@ async def start_console_run(id: str) -> ConsoleSession:
     202, not 200: the run has been accepted, not performed. It lands in ``queued`` and
     becomes ``running`` when it wins the single run slot.
     """
+    await require_session(id)
     async with _lock_for(id):
-        session = _get_session_or_404(id)
+        session = await require_session(id)
         if session.status is not ConsoleSessionStatus.READY:
             raise HTTPException(
                 status_code=409,
@@ -142,8 +147,8 @@ async def start_console_run(id: str) -> ConsoleSession:
             # Plan mode never ships: no from-prompt run, no Jira, no git writes (ADR 0012).
             session.plan_result = build_plan_result(session)
             session.status = ConsoleSessionStatus.COMPLETED
-            _touch(session)
-            run_console_reaper()
+            await touch(session)
+            await arun_console_reaper()
             return session
 
         # Lazy import: app.py imports this router at module load.
@@ -158,7 +163,7 @@ async def start_console_run(id: str) -> ConsoleSession:
         except Exception as exc:
             session.status = ConsoleSessionStatus.FAILED
             session.error = str(exc)
-            _touch(session)
+            await touch(session)
             raise
         session.sprint_ref = SprintRunRef(backlog_run_id=run_id)
         # position 0 (or None) means nothing is ahead, so report running rather than making a
@@ -167,7 +172,7 @@ async def start_console_run(id: str) -> ConsoleSession:
         position = run_registry().position(run_id)
         session.status = ConsoleSessionStatus.QUEUED if position else ConsoleSessionStatus.RUNNING
         session.queue_position = position or None
-        _touch(session)
+        await touch(session)
         return session
 
 
@@ -187,8 +192,9 @@ async def cancel_console_session(id: str) -> ConsoleSession:
     ``ACCEPTANCE_TEST_TIMEOUT_S`` / ``run_command``'s own timeout, not by ``CANCEL_GRACE_S``
     alone — the grace window only governs when the task is hard-cancelled.
     """
+    await require_session(id)
     async with _lock_for(id):
-        session = _get_session_or_404(id)
+        session = await require_session(id)
         if session.status in _TERMINAL_STATUSES:
             raise HTTPException(status_code=409, detail=f"session already {session.status.value}")
 
@@ -201,7 +207,7 @@ async def cancel_console_session(id: str) -> ConsoleSession:
 
         if live and not was_queued:
             session.cancel_requested_at = _utc_now_iso()
-            _emit(
+            await emit(
                 session,
                 agent_event(
                     "orchestrator",
@@ -211,7 +217,7 @@ async def cancel_console_session(id: str) -> ConsoleSession:
                     run_id=run_id,
                 ),
             )
-            _touch(session)
+            await touch(session)
             return session
 
         session.status = ConsoleSessionStatus.CANCELLED
@@ -220,10 +226,10 @@ async def cancel_console_session(id: str) -> ConsoleSession:
             # A queued run's body never executes, so nothing else will update its row.
             session.cancel_requested_at = _utc_now_iso()
             await asyncio.to_thread(cancel_backlog_run, run_id)
-        _emit(
+        await emit(
             session,
             agent_event("orchestrator", "cancelled", "Session cancelled", level="warning"),
         )
-        _touch(session)
-        run_console_reaper()
+        await touch(session)
+        await arun_console_reaper()
         return session

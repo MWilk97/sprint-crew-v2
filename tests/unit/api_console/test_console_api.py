@@ -78,11 +78,57 @@ def test_session_survives_restart(client: TestClient) -> None:
     # process-local locks (a restart) must not lose the session.
     session = _create(client, mode="code", prompt="Add a /metrics endpoint")
     sid = session["session_id"]
-    console_module._locks.clear()
+    console_module.reset_console_locks()
 
     resp = client.get(f"/v1/console/sessions/{sid}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "clarifying"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/console/sessions/cs-nope",
+        "/v1/console/sessions/cs-nope/events",
+    ],
+)
+def test_unknown_session_does_not_allocate_a_lock(client: TestClient, path: str) -> None:
+    """Every handler used to lock first and look up second, so any made-up id minted a
+    permanent lock entry. The reaper only evicts ids that were real sessions, so nothing
+    reclaimed them — an unbounded dict fed by 404s.
+    """
+    console_module.reset_console_locks()
+
+    for index in range(25):
+        assert client.get(f"{path}-{index}").status_code == 404
+
+    assert console_module.lock_count() == 0
+
+
+def test_unknown_session_post_routes_do_not_allocate_a_lock(client: TestClient) -> None:
+    console_module.reset_console_locks()
+
+    for suffix, body in (
+        ("messages", {"content": "hi"}),
+        ("clarify", {"answers": [{"question_id": "q-scope", "selected_suggestion_id": "s-x"}]}),
+        ("confirm", None),
+        ("start", None),
+        ("cancel", None),
+    ):
+        resp = client.post(f"/v1/console/sessions/cs-nope/{suffix}", json=body)
+        assert resp.status_code == 404, suffix
+
+    assert console_module.lock_count() == 0
+
+
+def test_real_session_still_gets_one_lock(client: TestClient) -> None:
+    """The guard must not have been implemented by never locking at all."""
+    console_module.reset_console_locks()
+    session = _create(client, mode="plan")
+
+    client.get(f"/v1/console/sessions/{session['session_id']}")
+
+    assert console_module.lock_count() == 1
 
 
 def test_get_after_reap_returns_404(client: TestClient, monkeypatch) -> None:

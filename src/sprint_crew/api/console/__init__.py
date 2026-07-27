@@ -36,7 +36,8 @@ from sprint_crew.api.console.run_bridge import (
     sync_sprint_progress,
 )
 from sprint_crew.api.console.state import (
-    _locks,
+    lock_count,
+    reset_console_locks,
     reset_console_store,
     router,
     run_console_reaper,
@@ -55,7 +56,6 @@ start_console_run = _routes.start_console_run
 cancel_console_session = _routes.cancel_console_session
 
 __all__ = [
-    "_locks",
     "apply_clarify_answers",
     "build_clarify_questions",
     "build_plan_result",
@@ -66,7 +66,9 @@ __all__ = [
     "enter_clarifying",
     "get_console_events",
     "get_console_session",
+    "lock_count",
     "post_console_message",
+    "reset_console_locks",
     "reset_console_store",
     "router",
     "run_console_reaper",

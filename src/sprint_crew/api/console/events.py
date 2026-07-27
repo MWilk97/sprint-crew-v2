@@ -9,18 +9,21 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from sprint_crew.api.console.state import (
     _TERMINAL_STATUSES,
-    _get_session_or_404,
     _lock_for,
+    has_events,
+    load_session,
+    max_event_seq,
+    read_events,
+    require_session,
     router,
 )
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.backlog import get_backlog_run
-from sprint_crew.orchestrator.console_store import console_store
 from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.orchestrator.event_log import EventLog, event_log
 from sprint_crew.orchestrator.session import get_session
@@ -46,6 +49,12 @@ def _backfill_events(session: ConsoleSession, log: EventLog) -> None:
         log.append_many(session.session_id, sprint_session_id, sprint_session.events)
 
 
+async def _backfill(session: ConsoleSession) -> None:
+    """The one composite in this module — it reads sprint sessions as well as the log, so
+    it gets an explicit hop off the loop rather than a helper in ``state``."""
+    await asyncio.to_thread(_backfill_events, session, event_log())
+
+
 @router.get("/sessions/{id}/events", response_model=ConsoleEventsPage)
 async def get_console_events(id: str, since: int = 0, limit: int = 500) -> ConsoleEventsPage:
     """The console timeline, served by polling.
@@ -56,12 +65,12 @@ async def get_console_events(id: str, since: int = 0, limit: int = 500) -> Conso
     keeps polling until it receives an empty page while ``complete`` is true.
     """
     limit = max(1, min(limit, 1000))
+    await require_session(id)
     async with _lock_for(id):
-        session = _get_session_or_404(id)
-        log = event_log()
-        if since <= 0 and not log.has_events(id):
-            _backfill_events(session, log)
-        events = log.read(id, since=since, limit=limit)
+        session = await require_session(id)
+        if since <= 0 and not await has_events(id):
+            await _backfill(session)
+        events = await read_events(id, since=since, limit=limit)
         next_seq = events[-1].seq if events and events[-1].seq is not None else since
         complete = session.status in _TERMINAL_STATUSES
         return ConsoleEventsPage(events=events, next_seq=next_seq, complete=complete)
@@ -85,7 +94,7 @@ async def _stream_is_complete(session_id: str) -> bool:
     (``sync_sprint_progress``), so consult the backlog run directly rather than trusting the
     stored status alone. A reaped/missing session also counts as complete so the stream ends.
     """
-    session = await asyncio.to_thread(console_store().load, session_id)
+    session = await load_session(session_id)
     if session is None or session.status in _TERMINAL_STATUSES:
         return True
     ref = session.sprint_ref
@@ -114,9 +123,7 @@ async def stream_console_events(id: str, request: Request, since: int = 0) -> Ev
     Auth: browser ``EventSource`` cannot set headers, so ``require_token`` also accepts
     ``?token=`` (see api/auth.py).
     """
-    session = await asyncio.to_thread(console_store().load, id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Console session not found")
+    await require_session(id)
 
     last_event_id = request.headers.get("last-event-id")
     if last_event_id is not None:
@@ -126,22 +133,26 @@ async def stream_console_events(id: str, request: Request, since: int = 0) -> Ev
             pass
     cursor = max(since, 0)
 
-    log = event_log()
-    if cursor <= 0 and not await asyncio.to_thread(log.has_events, id):
+    if cursor <= 0 and not await has_events(id):
         async with _lock_for(id):
-            fresh = _get_session_or_404(id)
-            if not log.has_events(id):
-                await asyncio.to_thread(_backfill_events, fresh, log)
+            fresh = await require_session(id)
+            if not await has_events(id):
+                await _backfill(fresh)
 
     heartbeat = get_settings().sse_heartbeat_s
     bus = event_bus()
-    queue = bus.subscribe(id)
 
     async def _events() -> AsyncIterator[ServerSentEvent]:
         nonlocal cursor
+        # Subscribed inside the generator, not beside it: the `finally` that unsubscribes
+        # only runs once the generator has started, so a client that disconnects before
+        # the first iteration used to leave its subscription behind. Still before the
+        # replay below, which is what closes the handoff gap (events appended mid-replay
+        # land in the queue and are de-duplicated by seq).
+        queue = bus.subscribe(id)
         try:
             while True:
-                batch = await asyncio.to_thread(log.read, id, since=cursor, limit=500)
+                batch = await read_events(id, since=cursor, limit=500)
                 if not batch:
                     break
                 for event in batch:
@@ -154,7 +165,7 @@ async def stream_console_events(id: str, request: Request, since: int = 0) -> Ev
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=heartbeat)
                 except TimeoutError:
-                    tail = await asyncio.to_thread(log.max_seq, id)
+                    tail = await max_event_seq(id)
                     if cursor >= tail and await _stream_is_complete(id):
                         yield ServerSentEvent(event="done", data="")
                         return
