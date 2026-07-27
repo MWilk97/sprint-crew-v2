@@ -23,6 +23,15 @@ in [`docs/README.md`](docs/README.md).
 - Forbidden segments: `.git`, `.venv`, `node_modules`, caches.
 - Placeholder paths (`<name>`, `<ext>`) are rejected.
 
+### 3.1 Model-authored commands
+
+Two paths execute strings the model wrote — the `run_command` tool and `acceptance_tests`. Both go through [`exec_policy.py`](src/sprint_crew/exec_policy.py) so their rules cannot drift apart, and neither uses a shell.
+
+- **Allowlist is on argv[0] *and* on shell syntax.** Checking argv[0] alone accepted `pytest -q; env` and `pytest -q $(env)` — argv[0] is `pytest` in both. Operators are detected with `shlex` in `punctuation_chars` mode, not a substring scan, so a quoted argument containing one (`python -c "import os; print(x)"`) is still valid.
+- **`sandbox_env()` is the only environment a child may inherit.** This process holds HF, Jira, GitHub and console tokens; a subprocess the model asked for has no business seeing them.
+- **Validate the raw string, then normalize.** `normalize_test_command` rewrites argv[0] into an absolute interpreter path that no longer matches the allowlist.
+- **A long-running tool needs `aexecute`** (`AsyncTool` in [`tools/base.py`](src/sprint_crew/tools/base.py)). `asyncio.to_thread` is not cancellable: the coroutine unwinds while the child runs to completion, so Stop leaves a process holding the single run slot. Everything spawned through [`proc.py`](src/sprint_crew/proc.py) gets its own process group and a SIGTERM→SIGKILL ladder, so the whole tree dies with the run. POSIX only.
+
 ## 4. Architecture (v2)
 
 - **Single pipeline:** LangGraph `build_sprint_graph` / `run_sprint_cycle` is the only sprint-cycle engine (from-ticket and backlog). [`batch_cycle.py`](src/sprint_crew/orchestrator/batch_cycle.py) is a thin Jira/workspace orchestrator that calls `create_and_run_cycle` per ticket (no dual CrewAI flows).
@@ -41,6 +50,16 @@ in [`docs/README.md`](docs/README.md).
 - **Model serving split:** vLLM container flags and HF model IDs live in [`infra/docker-compose.yml`](infra/docker-compose.yml); [`infra/models.yaml`](infra/models.yaml) is the Python client config (ports, `served_name`). Its `tool_call_parser` fields are documentation-only — the parser vLLM actually uses comes from the compose flags.
 - After a failed lane test, always `./scripts/lane-ctl.sh stop all` before retrying.
 - If a lane is slow despite health=OK, check whether another vLLM container is still running (`docker ps`, `nvidia-smi`).
+
+### 4.2 Console package layout
+
+[`api/console/`](src/sprint_crew/api/console/) is layered so the import graph stays acyclic: `state` (router, per-session locks, the persistence seam) ← `clarify` (Interpreter + answer validation) and `run_bridge` (console↔backlog-run translation) ← `routes` (session lifecycle) and `events` (polling + SSE). Importing the package registers every route.
+
+- **Single-worker assumption.** The per-session `asyncio.Lock`s in `state` are process-local; this is not safe across multiple API workers.
+- **All blocking I/O goes through `state`.** Handlers have no other way to reach a store, which keeps SQLite off the event loop by construction rather than by review. The two `to_thread` calls in `events.py` are composites and say so.
+- **Locks are only ever keyed by a session that exists** — `require_session` runs before `_lock_for`, or an unknown id mints an entry nothing reclaims.
+- **Console status is derived, never owned.** The run is the authority; `run_bridge.sync_sprint_progress` is the one place that translation happens.
+- **Start queues and returns 202**; cancel stops a queued run outright and asks a running one to unwind at its next checkpoint ([ADR 0014](docs/adr/0014-run-queue-and-cancel.md)).
 
 ## 5. Orchestration
 

@@ -1,7 +1,6 @@
-"""Router, per-session locking, and the single persistence seam for console handlers.
+"""Router, per-session locking, and the persistence seam. See AGENTS.md §4.2.
 
-Everything here is shared by every other module in this package and depends on none of
-them, which is what keeps the import graph acyclic.
+Depends on no other module in this package, which is what keeps the import graph acyclic.
 """
 
 from __future__ import annotations
@@ -37,14 +36,10 @@ _TERMINAL_STATUSES = frozenset(
 # accepting a message that silently changes nothing is worse than a 409.
 _STARTED_STATUSES = frozenset({ConsoleSessionStatus.QUEUED, ConsoleSessionStatus.RUNNING})
 
-# One asyncio.Lock per session id, held across each handler's read-modify-write.
-# threading.Lock did not protect across await points inside one event loop, so
-# concurrent clarify + start could interleave. Entries are evicted when a session
-# is reaped. Single-worker assumption: this dict is not shared across processes.
-#
-# Only ever keyed by an id that has been confirmed to exist — see require_session. Every
-# handler used to lock first and look up second, so a request for any made-up id minted a
-# permanent entry and nothing ever reclaimed it.
+# One asyncio.Lock per session id, held across each handler's read-modify-write; a
+# threading.Lock does not protect across await points, so clarify + start could interleave.
+# Only ever keyed by an id confirmed to exist (require_session), or 404s would mint entries
+# nothing reclaims. Evicted when a session is reaped.
 _locks: dict[str, asyncio.Lock] = {}
 
 
@@ -92,12 +87,8 @@ def _utc_now_iso() -> str:
 
 
 # --- the persistence seam ----------------------------------------------------------
-#
-# Every store and event-log access a handler makes goes through one of these. They are the
-# only place `asyncio.to_thread` appears in this package, which is what makes "blocking
-# SQLite never runs on the event loop" a property of the code rather than of reviewer
-# vigilance — previously some handlers threaded these reads and others made the identical
-# call inline.
+# Every store and event-log access a handler makes goes through one of these, so "blocking
+# SQLite never runs on the event loop" holds by construction (AGENTS.md §4.2).
 
 
 async def load_session(session_id: str) -> ConsoleSession | None:
@@ -105,11 +96,7 @@ async def load_session(session_id: str) -> ConsoleSession | None:
 
 
 async def require_session(session_id: str) -> ConsoleSession:
-    """Load a session or 404.
-
-    Call this *before* taking the session lock as well as inside it: locking first is what
-    let an unknown id allocate a lock entry that nothing ever reclaimed.
-    """
+    """Load a session or 404. Call *before* taking the lock as well as inside it."""
     session = await load_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Console session not found")

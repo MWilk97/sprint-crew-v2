@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sprint_crew.api import console as console_module
+from sprint_crew.api.console.clarify import apply_clarify_answers
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.backlog import BacklogRunStore
 from sprint_crew.schemas.console import (
@@ -307,10 +308,8 @@ def test_apply_clarify_answers_rejects_custom_when_not_allowed() -> None:
         ],
     )
     with pytest.raises(ValueError, match="does not allow a custom answer"):
-        console_module.apply_clarify_answers(
-            session, [ClarifyAnswer(question_id="q-strict", custom_text="two")]
-        )
-    console_module.apply_clarify_answers(
+        apply_clarify_answers(session, [ClarifyAnswer(question_id="q-strict", custom_text="two")])
+    apply_clarify_answers(
         session, [ClarifyAnswer(question_id="q-strict", selected_suggestion_id="s-1")]
     )
     assert session.status is ConsoleSessionStatus.READY

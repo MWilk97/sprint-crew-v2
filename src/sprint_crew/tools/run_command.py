@@ -66,13 +66,10 @@ class RunCommandTool:
     args_schema = RunCommandArgs
 
     async def aexecute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult:
-        """The path agents actually take (see ToolRegistry.adispatch).
+        """The path agents actually take (ToolRegistry.adispatch).
 
-        Native async rather than ``to_thread(execute)`` because this child can live for
-        ``_DEFAULT_TIMEOUT_SECONDS`` and a thread is not cancellable: pressing Stop would
-        unwind the coroutine while the pytest it started kept burning CPU — possibly
-        alongside the next run admitted into the single slot. ``sprint_crew.proc`` kills
-        the whole process group instead.
+        Native async, not ``to_thread(execute)``: a thread is not cancellable and this
+        child can live 300 s past a Stop. See AGENTS.md §3.1.
         """
         assert isinstance(args, RunCommandArgs)
         try:
@@ -91,11 +88,8 @@ class RunCommandTool:
         return _result(result.stdout, result.stderr, result.returncode, argv)
 
     def execute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult:
-        """Blocking fallback for the synchronous registry (orchestrator helpers, tests).
-
-        Kept in step with ``aexecute`` by sharing _prepare/_result; the only difference is
-        that a cancelled caller cannot stop this one.
-        """
+        """Blocking fallback for the sync registry. Shares _prepare/_result with
+        ``aexecute``; the only difference is that a cancelled caller cannot stop it."""
         assert isinstance(args, RunCommandArgs)
         try:
             argv = _prepare(args.command)

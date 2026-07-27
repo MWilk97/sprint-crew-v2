@@ -34,13 +34,10 @@ class Tool(Protocol):
 
 @runtime_checkable
 class AsyncTool(Protocol):
-    """A tool that can also run without occupying a thread.
+    """A tool that can run without occupying a thread. See AGENTS.md §3.1.
 
-    Required for any tool whose child process can outlive a cancelled run — a thread
-    running ``subprocess.run`` cannot be interrupted, so the child survives Stop. Today
-    that is ``run_command`` (300 s cap) alone: grep and the git tools are bounded by
-    ``GIT_TIMEOUT_S`` and finish in well under a second, so paying for ``aexecute`` there
-    would buy nothing. Add one here before adding another long-running tool.
+    Required for any tool whose child can outlive a cancelled run — today ``run_command``
+    (300 s cap) alone; grep and the git tools finish well inside ``GIT_TIMEOUT_S``.
     """
 
     async def aexecute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult: ...

@@ -47,7 +47,7 @@ def _patched_settings(overrides: dict):
 
     Two traps this walks around:
 
-    - Patching one importing module (this used to name `graph.nodes.routing.get_settings`)
+    - Patching one importing module (this used to name `graph.nodes.flow.get_settings`)
       covers that module only, so an override for a field read elsewhere — max_coverage_rounds,
       coder_step_mode — silently did nothing and the test passed regardless.
     - Patching `sprint_crew.config.get_settings` covers *nothing*: every consumer does

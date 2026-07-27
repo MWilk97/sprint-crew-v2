@@ -10,9 +10,9 @@ from sprint_crew.agents.coder import normalize_change
 from sprint_crew.agents.tool_events import tool_call_events
 from sprint_crew.config import Role
 from sprint_crew.graph import lanes
-from sprint_crew.graph.nodes._shared import _swap_lane
-from sprint_crew.graph.pipeline_helpers import (
+from sprint_crew.graph.nodes._support import (
     _deadline_epoch,
+    _swap_lane,
     _timed_detail,
 )
 from sprint_crew.graph.state import (

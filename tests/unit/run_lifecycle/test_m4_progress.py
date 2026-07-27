@@ -23,7 +23,7 @@ from starlette.requests import Request
 
 from sprint_crew.agents.tool_events import tool_call_event, tool_call_events
 from sprint_crew.api import console as console_module
-from sprint_crew.api.console import stream_console_events
+from sprint_crew.api.console.events import stream_console_events
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph import lanes
 from sprint_crew.graph.pipeline import _phased

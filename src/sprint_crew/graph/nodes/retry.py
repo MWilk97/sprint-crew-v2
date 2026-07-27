@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from sprint_crew.graph.pipeline_helpers import (
+from sprint_crew.graph.nodes._support import (
     _coverage_from_dict,
     _timed_detail,
 )

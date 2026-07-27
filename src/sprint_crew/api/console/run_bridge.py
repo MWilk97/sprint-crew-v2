@@ -1,8 +1,6 @@
 """The seam between a console session and the backlog run behind it.
 
-Console status is *derived* from run status rather than owned: the run is the authority,
-and _sync_sprint_progress is the one place that translation happens. Keeping it out of the
-route handlers is what makes that rule reviewable.
+Console status is derived from run status, never owned (AGENTS.md §4.2).
 """
 
 from __future__ import annotations

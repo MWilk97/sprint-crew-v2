@@ -1,8 +1,7 @@
-"""Clarify: Interpreter integration, the deterministic fallback, and answer validation.
+"""Clarify: Interpreter integration, deterministic fallback, answer validation.
 
-No FastAPI in here — the routes call into it. Clarify is the part of the console most
-likely to keep changing (ADR 0013, and Phase 3 language lanes after it), so it is worth
-being unit-testable without going through HTTP.
+No FastAPI here — the routes call in, so this stays unit-testable without HTTP. It is the
+part of the console most likely to keep changing (ADR 0013).
 """
 
 from __future__ import annotations

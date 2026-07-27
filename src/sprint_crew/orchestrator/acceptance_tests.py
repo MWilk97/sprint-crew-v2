@@ -85,12 +85,7 @@ def _pytest_has_prose_arguments(argv: list[str]) -> bool:
 
 
 def validate_acceptance_tests(commands: list[str]) -> list[str]:
-    """Ensure each command is one allowlisted executable, with no prose and no shell syntax.
-
-    The metacharacter check is what makes the allowlist an allowlist. Checking only
-    ``argv[0]`` accepted ``pytest -q; env`` and ``pytest -q | tee /tmp/x`` — argv[0] is
-    ``pytest`` in both — and the runner then handed the original string to a shell.
-    """
+    """One allowlisted executable per command, no prose, no shell syntax (AGENTS.md §3.1)."""
     if not commands:
         raise AcceptanceTestsValidationError(["(empty list)"])
 
@@ -120,18 +115,11 @@ def validate_acceptance_tests(commands: list[str]) -> list[str]:
 
 
 async def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tuple[str, bool]:
-    """Run each acceptance command, returning combined output and whether all passed.
+    """Run each acceptance command; returns combined output and whether all passed.
 
-    Async rather than sync-in-a-thread so a cancelled run actually kills the child. See
-    sprint_crew.proc: a to_thread'd subprocess.run survives cancellation and keeps a pytest
-    alive for up to ACCEPTANCE_TEST_TIMEOUT_S after the user pressed Stop.
-
-    Exec, not a shell, with ``sandbox_env()``: these strings come from a model, and the
-    orchestrator's own environment holds HF/Jira/GitHub/console tokens.
-
-    Revalidated here even though ``template_plan`` and ``tech_lead_planning`` already
-    validate: this is the function that actually spawns the process, and a future caller
-    that forgets the gate should fail closed rather than inherit a shell.
+    Async so a cancelled run kills the child, exec-not-shell, and sandboxed env — see
+    AGENTS.md §3.1. Revalidated here because this is what spawns the process, so a caller
+    that skipped the plan-time gate fails closed.
     """
     validate_acceptance_tests(commands)
     timeout_s = get_settings().acceptance_test_timeout_s

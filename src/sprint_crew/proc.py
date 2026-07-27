@@ -1,24 +1,10 @@
-"""Subprocess execution that a cancelled run can actually stop.
+"""Subprocess execution that a cancelled run can actually stop. See AGENTS.md §3.1.
 
-``asyncio.to_thread(subprocess.run, ...)`` frees the event loop but is not cancellable:
-cancelling the awaiting task raises inside the coroutine while the worker thread keeps
-running the child to completion. A run therefore reported ``cancelled`` within
-CANCEL_GRACE_S while its pytest kept burning CPU for up to ACCEPTANCE_TEST_TIMEOUT_S —
-possibly alongside the *next* run admitted into the single slot.
+``start_new_session=True`` puts the child in its own process group, because test runners
+spawn their own children and signalling the direct pid alone orphans them. SIGTERM first,
+then SIGKILL, so a runner can clean up its temporary state.
 
-Two details make the kill actually work:
-
-- ``start_new_session=True`` puts the child in its own process group. Test runners spawn
-  their own children (pytest-xdist workers, a build step, a server under test), and
-  signalling the direct pid alone leaves those orphaned. We signal the group.
-- SIGTERM first, then SIGKILL after a grace period, so a test runner gets the chance to
-  clean up its own temporary state before being destroyed.
-
-No shell variant exists on purpose: everything that reaches here is model-authored, and
-``sprint_crew.exec_policy`` rejects shell syntax rather than interpreting it.
-
-POSIX only (``os.killpg``). The deployment target is Linux/GX10; on Windows there is no
-process-group equivalent and this module would need a Job Object instead.
+POSIX only (``os.killpg``); on Windows this would need a Job Object.
 """
 
 from __future__ import annotations
@@ -45,9 +31,8 @@ class ProcResult:
 async def _terminate_group(proc: asyncio.subprocess.Process) -> None:
     """SIGTERM the child's process group, then SIGKILL anything still alive.
 
-    Every failure mode here is benign — the process may have exited between the check and
-    the signal — so they are suppressed rather than masking the cancellation that got us
-    here.
+    Failures are suppressed: the process may exit between the check and the signal, and
+    that must not mask the cancellation that got us here.
     """
     if proc.returncode is not None:
         return

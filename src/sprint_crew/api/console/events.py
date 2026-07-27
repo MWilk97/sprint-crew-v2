@@ -34,11 +34,9 @@ from sprint_crew.schemas.session import AgentEvent, BacklogRunStatus
 def _backfill_events(session: ConsoleSession, log: EventLog) -> None:
     """Project a legacy session's sprint-session events into the events table.
 
-    Sessions that ran before the events table existed have events only inside their
-    sprint sessions. Concatenate them in sprint-session order (stories run
-    sequentially, so this preserves chronology) so the timeline endpoint can still
-    render them. Runs live-appending events never reach here — ``has_events`` is
-    already true for them.
+    Sessions predating the events table have events only inside their sprint sessions.
+    Concatenated in sprint-session order, which is chronological because stories run
+    sequentially. Live runs never reach here — ``has_events`` is already true.
     """
     if session.sprint_ref is None:
         return
@@ -50,8 +48,8 @@ def _backfill_events(session: ConsoleSession, log: EventLog) -> None:
 
 
 async def _backfill(session: ConsoleSession) -> None:
-    """The one composite in this module — it reads sprint sessions as well as the log, so
-    it gets an explicit hop off the loop rather than a helper in ``state``."""
+    """Reads sprint sessions as well as the log, so it threads explicitly rather than
+    going through a ``state`` helper."""
     await asyncio.to_thread(_backfill_events, session, event_log())
 
 
@@ -59,10 +57,9 @@ async def _backfill(session: ConsoleSession) -> None:
 async def get_console_events(id: str, since: int = 0, limit: int = 500) -> ConsoleEventsPage:
     """The console timeline, served by polling.
 
-    ``seq`` is monotonic across every sprint session this console run spawned; poll
-    again with ``since=next_seq`` to drain the next page. ``complete`` reports whether
-    the session reached a terminal status, not whether this page is the last — a client
-    keeps polling until it receives an empty page while ``complete`` is true.
+    ``seq`` is monotonic across every sprint session this run spawned; poll again with
+    ``since=next_seq``. ``complete`` reports terminal status, not last page — a client
+    polls until it gets an empty page while ``complete`` is true.
     """
     limit = max(1, min(limit, 1000))
     await require_session(id)
@@ -77,10 +74,9 @@ async def get_console_events(id: str, since: int = 0, limit: int = 500) -> Conso
 
 
 def _sse_event(event: AgentEvent) -> ServerSentEvent:
-    """One timeline event as an SSE frame. ``id`` = ``seq`` so native EventSource resume
-    works; the payload is the full AgentEvent JSON (same shape the polling endpoint serves),
-    left on the default ``message`` channel so a plain ``onmessage`` handler receives every
-    event and reads ``event_type`` from the body."""
+    """One timeline event as an SSE frame. ``id`` = ``seq`` so EventSource resume works;
+    the payload is the full AgentEvent JSON on the default ``message`` channel, so a plain
+    ``onmessage`` handler gets every event and reads ``event_type`` from the body."""
     return ServerSentEvent(
         id=str(event.seq) if event.seq is not None else None,
         data=event.model_dump_json(),
@@ -88,11 +84,10 @@ def _sse_event(event: AgentEvent) -> ServerSentEvent:
 
 
 async def _stream_is_complete(session_id: str) -> bool:
-    """Read-only terminal check for the SSE loop: true once no more events can be produced.
+    """True once no more events can be produced.
 
-    The console session's stored status only flips terminal when someone GETs it
-    (``sync_sprint_progress``), so consult the backlog run directly rather than trusting the
-    stored status alone. A reaped/missing session also counts as complete so the stream ends.
+    The stored status only flips terminal when someone GETs the session, so consult the
+    backlog run directly. A reaped session counts as complete so the stream ends.
     """
     session = await load_session(session_id)
     if session is None or session.status in _TERMINAL_STATUSES:
@@ -113,15 +108,12 @@ async def _stream_is_complete(session_id: str) -> bool:
 async def stream_console_events(id: str, request: Request, since: int = 0) -> EventSourceResponse:
     """Live SSE timeline — same payload as the polling events endpoint, pushed.
 
-    Resume: the browser sends ``Last-Event-ID`` automatically on reconnect (or pass
-    ``?since=``); we replay from the events table up to the current tail, then stream new
-    events off the in-process bus. Subscribing *before* the replay closes the handoff gap —
-    events appended mid-replay land in the queue and are de-duplicated by ``seq``. A heartbeat
-    comment every ``SSE_HEARTBEAT_S`` survives proxy idle-reap and long GPU silences; a
-    terminal run ends with an explicit ``event: done`` so the client stops reconnecting.
+    Resume: the browser sends ``Last-Event-ID`` on reconnect (or pass ``?since=``); we
+    replay the events table to the current tail, then stream off the in-process bus. A
+    heartbeat every ``SSE_HEARTBEAT_S`` survives proxy idle-reap and long GPU silences; a
+    terminal run ends with ``event: done`` so the client stops reconnecting.
 
-    Auth: browser ``EventSource`` cannot set headers, so ``require_token`` also accepts
-    ``?token=`` (see api/auth.py).
+    Auth: ``EventSource`` cannot set headers, so ``require_token`` also accepts ``?token=``.
     """
     await require_session(id)
 
@@ -144,11 +136,10 @@ async def stream_console_events(id: str, request: Request, since: int = 0) -> Ev
 
     async def _events() -> AsyncIterator[ServerSentEvent]:
         nonlocal cursor
-        # Subscribed inside the generator, not beside it: the `finally` that unsubscribes
-        # only runs once the generator has started, so a client that disconnects before
-        # the first iteration used to leave its subscription behind. Still before the
-        # replay below, which is what closes the handoff gap (events appended mid-replay
-        # land in the queue and are de-duplicated by seq).
+        # Inside the generator, not beside it: the `finally` that unsubscribes only runs
+        # once the generator starts, so a client disconnecting first leaked a subscriber.
+        # Still before the replay, which closes the handoff gap — events appended
+        # mid-replay land in the queue and are de-duplicated by seq.
         queue = bus.subscribe(id)
         try:
             while True:

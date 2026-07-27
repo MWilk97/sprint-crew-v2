@@ -1,23 +1,7 @@
-"""One policy for every externally-authored command this system executes.
+"""One policy for every model-authored command this system executes. See AGENTS.md §3.1.
 
-Two call sites run strings the model wrote: the ``run_command`` tool and
-``orchestrator/acceptance_tests``. They used to disagree about everything that matters —
-the tool filtered the environment down to seven variables and refused a shell, while
-acceptance commands went through ``shell=True`` with the full parent environment, tokens
-included. Same untrusted source, opposite threat models.
-
-Both now import from here, so the rules cannot drift apart again:
-
-- ``ALLOWED_COMMANDS`` — argv[0] must be one of these, checked before anything runs.
-- ``check_command_allowed`` — rejects shell *operators*. Neither path uses a shell any
-  more, so an operator is inert at execution time; rejecting it keeps the contract honest
-  (a plan entry is one command, not a pipeline) and gives the model a clear error instead
-  of a silently-literal argument. Detection is by ``shlex`` in ``punctuation_chars`` mode
-  rather than a substring scan, so a quoted argument that merely *contains* an operator —
-  ``python -c "import os; print(x)"``, ``pytest -k "a or b"`` — is left alone.
-- ``sandbox_env()`` — the passthrough allowlist. HF_TOKEN, JIRA_API_TOKEN, GITHUB_TOKEN
-  and CONSOLE_API_TOKEN are in this process's environment; a subprocess the model asked
-  for has no business seeing them.
+Imported by both the ``run_command`` tool and ``orchestrator/acceptance_tests`` so their
+rules cannot drift apart again.
 """
 
 from __future__ import annotations
@@ -40,7 +24,7 @@ ALLOWED_COMMANDS: frozenset[str] = frozenset(
     }
 )
 
-#: Characters shlex treats as standalone operator tokens in ``punctuation_chars`` mode.
+#: What shlex reports as standalone operator tokens in punctuation_chars mode.
 _PUNCTUATION_CHARS: frozenset[str] = frozenset("();<>|&")
 
 _ENV_PASSTHROUGH: frozenset[str] = frozenset(
@@ -66,10 +50,9 @@ def sandbox_env() -> dict[str, str]:
 
 
 def shell_operators(command: str) -> list[str]:
-    """Unquoted shell operator tokens in ``command`` (``;``, ``|``, ``&&``, ``>``, ``(``…).
+    """Unquoted shell operator tokens (``;``, ``|``, ``&&``, ``>``, ``(``…).
 
-    Raises ``CommandPolicyError`` when the string cannot be tokenised at all (unbalanced
-    quotes), since that is not something to guess at either.
+    Unbalanced quotes raise rather than guess.
     """
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
@@ -81,11 +64,9 @@ def shell_operators(command: str) -> list[str]:
 
 
 def check_command_allowed(command: str) -> str | None:
-    """Validate a raw command string. Returns an error message, or None when it is fine.
+    """Validate a raw command. Returns an error message, or None when it is fine.
 
-    Takes the *raw* string on purpose — it has to see operators before ``shlex.split``
-    flattens them into ordinary tokens, and before ``normalize_test_command`` rewrites
-    argv[0] into an absolute interpreter path that no longer matches the allowlist.
+    Must see the *raw* string: `shlex.split` flattens operators into ordinary tokens.
     """
     stripped = command.strip()
     if not stripped:
@@ -120,11 +101,8 @@ def resolve_executable(argv0: str) -> str:
 def resolve_argv(argv: list[str]) -> list[str]:
     """Resolve argv[0] to an absolute path, leaving an already-resolved one alone.
 
-    ``create_subprocess_exec`` does its own PATH lookup, but not the ``python`` →
-    ``python3`` fallback, and not against the sandboxed PATH — so resolving here is what
-    makes ``python -m pytest`` behave the same for acceptance commands as it does for the
-    ``run_command`` tool. An argv[0] that already contains a separator has been resolved
-    by ``normalize_test_command`` and is passed through.
+    `create_subprocess_exec` does its own PATH lookup but not the `python` → `python3`
+    fallback, so both call sites resolve here instead.
     """
     if not argv:
         raise CommandPolicyError("Empty command.")

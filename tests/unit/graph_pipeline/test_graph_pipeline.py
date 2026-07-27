@@ -8,7 +8,7 @@ from tests.helpers.acceptance_output import SCRUM3_COLLECTION
 from tests.helpers.ticket_fixtures import greeter_ticket
 
 from sprint_crew.config import Role
-from sprint_crew.graph.nodes.terminal import failed
+from sprint_crew.graph.nodes.flow import failed
 from sprint_crew.graph.pipeline import (
     build_sprint_graph,
     code_implement,
@@ -237,7 +237,7 @@ def test_route_after_retry_downgrades_excess_plan_retries(passing_review: Review
         "review_outcome": passing_review.model_dump(),
         "plan_retries": 2,
     }
-    with patch("sprint_crew.graph.nodes.routing.get_settings") as settings_mock:
+    with patch("sprint_crew.graph.nodes.flow.get_settings") as settings_mock:
         settings_mock.return_value.max_plan_retries = 1
         assert route_after_retry(state) == "code"  # type: ignore[arg-type]
 
@@ -341,7 +341,7 @@ async def test_deadline_epoch_survives_graph_input_roundtrip() -> None:
     """
     from langgraph.graph import END, START, StateGraph
 
-    from sprint_crew.graph.pipeline_helpers import _deadline_exceeded
+    from sprint_crew.graph.nodes._support import _deadline_exceeded
     from sprint_crew.graph.state import SprintState
 
     seen: dict = {}
@@ -500,17 +500,17 @@ async def test_settings_overrides_actually_reach_the_nodes(graph_run_mocks) -> N
     unmistakably not the default, and reads it from two different modules.
     """
     from sprint_crew.agents import coder
-    from sprint_crew.graph.nodes import routing
+    from sprint_crew.graph.nodes import flow
 
     with graph_run_mocks(
         reviewer=AsyncMock(),
         formatter_result=None,
         settings_overrides={"max_review_retries": 99, "max_coverage_rounds": 77},
     ):
-        assert routing.get_settings().max_review_retries == 99
+        assert flow.get_settings().max_review_retries == 99
         assert coder.get_settings().max_coverage_rounds == 77
 
-    assert routing.get_settings().max_review_retries != 99
+    assert flow.get_settings().max_review_retries != 99
 
 
 def test_settings_overrides_reject_an_unknown_field(graph_run_mocks) -> None:

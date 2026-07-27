@@ -15,13 +15,12 @@ from pydantic import BaseModel
 
 @lru_cache(maxsize=32)
 def _cached_store(store_cls: type, db_path: Path):
-    """One store instance per (class, database file).
+    """One store per (class, database file).
 
-    The `*_store()` factories are called per operation, and constructing a store runs
-    `_init_db` — so a single `load()` opened two connections: one to re-create a table that
-    already existed, one to read. Keyed on the path so a test that repoints
-    SPRINT_SESSION_DB gets its own instance. A store holds no connection, only a path, so
-    sharing one across threads is safe.
+    The factories are called per operation and constructing a store runs `_init_db`, so an
+    uncached `load()` opened two connections — one to re-create an existing table, one to
+    read. Keyed on the path so a repointed SPRINT_SESSION_DB still isolates. A store holds
+    a path, not a connection, so sharing it across threads is safe.
     """
     return store_cls(db_path)
 
@@ -106,10 +105,8 @@ class TypedJsonStore[T: BaseModel](SqliteJsonStore):
     key column is named after the model's own id field in all three, so the base can
     derive the key rather than have each subclass restate it.
 
-    ``model`` is checked against the ``T`` in the subclass's base at class-creation time.
-    Without that the parameter is decorative: ``class S(TypedJsonStore[ConsoleSession])``
-    with ``model = BacklogRun`` type-checks, and only fails when a payload is validated in
-    production.
+    ``model`` is checked against ``T`` at class-creation time; without that the parameter
+    is decorative and a mismatch only surfaces when a payload is validated in production.
     """
 
     model: ClassVar[type[BaseModel]]
@@ -129,12 +126,7 @@ class TypedJsonStore[T: BaseModel](SqliteJsonStore):
             )
 
     def _extra_columns(self, item: T) -> dict[str, str]:
-        """Columns beyond key + payload. Override to mirror a model field into a column.
-
-        Replaces a ``tracks_updated_at`` flag that made the base reach for
-        ``item.updated_at`` on a plain ``BaseModel`` — untypeable, and silently wrong for a
-        model without the field.
-        """
+        """Columns beyond key + payload. Override to mirror a model field into a column."""
         return {}
 
     def save(self, item: T) -> None:

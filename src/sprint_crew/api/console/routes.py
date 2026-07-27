@@ -1,8 +1,7 @@
-"""The console session lifecycle routes: create, read, message, clarify, confirm, start, cancel.
+"""Session lifecycle: create, read, message, clarify, confirm, start, cancel.
 
-Every handler is a thin orchestration over state/clarify/run_bridge, so this file reads as
-the API contract. The two timeline routes live in ``events.py`` with the transport they
-belong to.
+Thin orchestration over state/clarify/run_bridge, so this file reads as the API contract.
+The two timeline routes live in ``events.py`` with the transport they belong to.
 """
 
 from __future__ import annotations
@@ -127,11 +126,8 @@ async def confirm_console_session(id: str) -> ConsoleSession:
 
 @router.post("/sessions/{id}/start", response_model=ConsoleSession, status_code=202)
 async def start_console_run(id: str) -> ConsoleSession:
-    """Queue the run and return (M5). Planning progress arrives on the event stream.
-
-    202, not 200: the run has been accepted, not performed. It lands in ``queued`` and
-    becomes ``running`` when it wins the single run slot.
-    """
+    """Queue the run and return 202 — accepted, not performed. Planning progress arrives
+    on the event stream; the run becomes ``running`` when it wins the single slot."""
     await require_session(id)
     async with _lock_for(id):
         session = await require_session(id)
@@ -178,19 +174,13 @@ async def start_console_run(id: str) -> ConsoleSession:
 
 @router.post("/sessions/{id}/cancel", response_model=ConsoleSession)
 async def cancel_console_session(id: str) -> ConsoleSession:
-    """Stop the session, and the run behind it if one is live (M5).
+    """Stop the session, and the run behind it if one is live. Always 200; ``status`` plus
+    ``cancel_requested_at`` say which of two shapes happened.
 
-    Three shapes, all answered 200 — ``status`` plus ``cancel_requested_at`` say which:
-
-    - nothing started, or the run is still queued: terminal ``cancelled`` immediately;
-    - the run is executing: Stop is *accepted*. ``cancel_requested_at`` is set, the status
-      stays ``running``, and a ``cancel_requested`` event goes out so the UI can show
-      "stopping…". It flips to ``cancelled`` once the run actually unwinds.
-
-    A running cancel cannot be instant: the run stops at its next checkpoint, and a
-    checkpoint is invisible while a subprocess is mid-call. Worst case is bounded by
-    ``ACCEPTANCE_TEST_TIMEOUT_S`` / ``run_command``'s own timeout, not by ``CANCEL_GRACE_S``
-    alone — the grace window only governs when the task is hard-cancelled.
+    Nothing started, or still queued: terminal ``cancelled`` immediately. Executing: Stop is
+    *accepted* — status stays ``running`` and a ``cancel_requested`` event goes out, flipping
+    to ``cancelled`` once the run unwinds. That cannot be instant; the run stops at its next
+    checkpoint (ADR 0014).
     """
     await require_session(id)
     async with _lock_for(id):
