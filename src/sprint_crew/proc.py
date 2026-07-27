@@ -8,11 +8,14 @@ possibly alongside the *next* run admitted into the single slot.
 
 Two details make the kill actually work:
 
-- ``start_new_session=True`` puts the child in its own process group. Acceptance commands
-  run through a shell, so the process we spawn is ``sh`` and pytest is its *child*;
-  signalling the shell's pid alone leaves pytest orphaned. We signal the group.
+- ``start_new_session=True`` puts the child in its own process group. Test runners spawn
+  their own children (pytest-xdist workers, a build step, a server under test), and
+  signalling the direct pid alone leaves those orphaned. We signal the group.
 - SIGTERM first, then SIGKILL after a grace period, so a test runner gets the chance to
   clean up its own temporary state before being destroyed.
+
+No shell variant exists on purpose: everything that reaches here is model-authored, and
+``sprint_crew.exec_policy`` rejects shell syntax rather than interpreting it.
 
 POSIX only (``os.killpg``). The deployment target is Linux/GX10; on Windows there is no
 process-group equivalent and this module would need a Job Object instead.
@@ -75,18 +78,6 @@ async def _communicate(proc: asyncio.subprocess.Process, *, timeout: float | Non
         stderr=(stderr or b"").decode("utf-8", errors="replace"),
         returncode=proc.returncode if proc.returncode is not None else -1,
     )
-
-
-async def run_shell(command: str, *, cwd: Path, timeout: float | None = None) -> ProcResult:
-    """Run ``command`` through a shell, killable by cancelling the awaiting task."""
-    proc = await asyncio.create_subprocess_shell(
-        command,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
-    )
-    return await _communicate(proc, timeout=timeout)
 
 
 async def run_argv(

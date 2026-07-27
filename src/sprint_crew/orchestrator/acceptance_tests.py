@@ -4,9 +4,15 @@ import shlex
 from pathlib import Path
 
 from sprint_crew.config import get_settings
+from sprint_crew.exec_policy import (
+    ALLOWED_COMMANDS,
+    CommandPolicyError,
+    check_command_allowed,
+    resolve_argv,
+    sandbox_env,
+)
 from sprint_crew.orchestrator.pytest_cmd import normalize_test_command
-from sprint_crew.proc import run_shell
-from sprint_crew.tools.run_command import ALLOWED_COMMANDS
+from sprint_crew.proc import run_argv
 
 # Prose tokens that must not appear as bare pytest arguments (not after -k/-m/etc.).
 _PROSE_STOP_WORDS: frozenset[str] = frozenset(
@@ -79,7 +85,12 @@ def _pytest_has_prose_arguments(argv: list[str]) -> bool:
 
 
 def validate_acceptance_tests(commands: list[str]) -> list[str]:
-    """Ensure each command starts with an allowlisted executable and has no prose tokens."""
+    """Ensure each command is one allowlisted executable, with no prose and no shell syntax.
+
+    The metacharacter check is what makes the allowlist an allowlist. Checking only
+    ``argv[0]`` accepted ``pytest -q; env`` and ``pytest -q | tee /tmp/x`` — argv[0] is
+    ``pytest`` in both — and the runner then handed the original string to a shell.
+    """
     if not commands:
         raise AcceptanceTestsValidationError(["(empty list)"])
 
@@ -88,6 +99,9 @@ def validate_acceptance_tests(commands: list[str]) -> list[str]:
         stripped = cmd.strip()
         if not stripped:
             invalid.append("(empty command)")
+            continue
+        if check_command_allowed(stripped) is not None:
+            invalid.append(stripped)
             continue
         try:
             argv = shlex.split(stripped)
@@ -111,14 +125,37 @@ async def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tup
     Async rather than sync-in-a-thread so a cancelled run actually kills the child. See
     sprint_crew.proc: a to_thread'd subprocess.run survives cancellation and keeps a pytest
     alive for up to ACCEPTANCE_TEST_TIMEOUT_S after the user pressed Stop.
+
+    Exec, not a shell, with ``sandbox_env()``: these strings come from a model, and the
+    orchestrator's own environment holds HF/Jira/GitHub/console tokens.
+
+    Revalidated here even though ``template_plan`` and ``tech_lead_planning`` already
+    validate: this is the function that actually spawns the process, and a future caller
+    that forgets the gate should fail closed rather than inherit a shell.
     """
+    validate_acceptance_tests(commands)
     timeout_s = get_settings().acceptance_test_timeout_s
     lines: list[str] = []
     all_passed = True
     for cmd in commands:
+        # Validate the raw string first (above): normalize rewrites argv[0] into an
+        # absolute .venv/bin/pytest path that no longer matches the allowlist.
         normalized = normalize_test_command(cmd, workspace_root)
         lines.append(f"$ {normalized}")
-        result = await run_shell(normalized, cwd=workspace_root, timeout=timeout_s)
+        try:
+            result = await run_argv(
+                resolve_argv(shlex.split(normalized)),
+                cwd=workspace_root,
+                env=sandbox_env(),
+                timeout=timeout_s,
+            )
+        except (CommandPolicyError, FileNotFoundError, NotADirectoryError, PermissionError) as exc:
+            # A shell reported a missing interpreter as exit 127; exec raises instead. Still
+            # a failed acceptance test, not a crashed run.
+            all_passed = False
+            lines.append(f"could not start command: {exc}")
+            lines.append("")
+            continue
         if result.timed_out:
             # A hung command is a failed acceptance test, not a crashed run.
             all_passed = False

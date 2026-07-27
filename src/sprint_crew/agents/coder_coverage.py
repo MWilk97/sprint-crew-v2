@@ -9,25 +9,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sprint_crew.agents.coder import (
-    _continuation_turn_budget,
-    _deadline_reached,
-    run_coder_loop,
-    run_coder_plan,
-)
+from sprint_crew.agents import coder
+from sprint_crew.agents.coder import _continuation_turn_budget, _deadline_reached
 from sprint_crew.agents.prompts_coder import (
     build_coder_build_fix_prompt,
     build_coder_continuation_prompt,
 )
 from sprint_crew.config import get_settings
+from sprint_crew.orchestrator import acceptance_tests, plan_coverage
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
-from sprint_crew.orchestrator.acceptance_tests import run_acceptance_tests
-from sprint_crew.orchestrator.plan_coverage import (
-    PlanCoverageResult,
-    continuation_makes_sense,
-    coverage_improved,
-    validate_plan_coverage,
-)
+from sprint_crew.orchestrator.plan_coverage import PlanCoverageResult
 from sprint_crew.orchestrator.run_registry import cancel_requested
 from sprint_crew.schemas.ticket import TaskPlan
 
@@ -48,7 +39,7 @@ async def run_coder_with_coverage(
     # across steps and continuation rounds (see run_coder_loop). The callees append into
     # it and return it, so the returned value is discarded rather than merged.
     tool_log: list[dict] = []
-    raw_output, _ = await run_coder_plan(
+    raw_output, _ = await coder.run_coder_plan(
         task_plan,
         workspace_root,
         role_specialization=role_specialization,
@@ -59,7 +50,7 @@ async def run_coder_with_coverage(
         tool_call_log=tool_log,
     )
 
-    coverage = validate_plan_coverage(
+    coverage = plan_coverage.validate_plan_coverage(
         task_plan,
         workspace_root,
         baseline_paths=baseline_paths,
@@ -71,10 +62,10 @@ async def run_coder_with_coverage(
             break
         if _deadline_reached(deadline_epoch) or cancel_requested():
             break
-        if not continuation_makes_sense(coverage, workspace_root, task_plan):
+        if not plan_coverage.continuation_makes_sense(coverage, workspace_root, task_plan):
             break
         continuation_prompt = build_coder_continuation_prompt(coverage)
-        continuation_output, _ = await run_coder_loop(
+        continuation_output, _ = await coder.run_coder_loop(
             task_plan,
             workspace_root,
             role_specialization=role_specialization,
@@ -86,12 +77,12 @@ async def run_coder_with_coverage(
             tool_call_log=tool_log,
         )
         raw_output = continuation_output
-        new_coverage = validate_plan_coverage(
+        new_coverage = plan_coverage.validate_plan_coverage(
             task_plan,
             workspace_root,
             baseline_paths=baseline_paths,
         )
-        if not coverage_improved(prior_coverage, new_coverage):
+        if not plan_coverage.coverage_improved(prior_coverage, new_coverage):
             coverage = new_coverage
             break
         prior_coverage = coverage
@@ -101,9 +92,10 @@ async def run_coder_with_coverage(
     acceptance_verified = False
     if coverage.satisfied and not _deadline_reached(deadline_epoch) and not cancel_requested():
         # Cancel is checked before starting: launching a 900 s child after Stop is what
-        # makes a cancel feel broken. Once running, the child dies with the task
-        # (sprint_crew.proc) rather than outliving the run that spawned it.
-        acceptance_output, acceptance_green = await run_acceptance_tests(
+        # makes a cancel feel broken. Once running, the child dies with the task — both
+        # here and in the run_command tool, which spawns through the same executor
+        # (sprint_crew.proc) rather than outliving the run.
+        acceptance_output, acceptance_green = await acceptance_tests.run_acceptance_tests(
             workspace_root, task_plan.acceptance_tests
         )
         acceptance_verified = acceptance_green
@@ -111,7 +103,7 @@ async def run_coder_with_coverage(
             analysis = analyze_acceptance_output(acceptance_output)
             if analysis.kind != "none" and not analysis.tester_can_help:
                 build_fix_prompt = build_coder_build_fix_prompt(analysis)
-                continuation_output, _ = await run_coder_loop(
+                continuation_output, _ = await coder.run_coder_loop(
                     task_plan,
                     workspace_root,
                     role_specialization=role_specialization,
