@@ -86,7 +86,6 @@ def _build_coder_agent(
         Role.CODING,
         system_prompt=build_coder_system_prompt(role_specialization=role_specialization),
         toolset=build_coder_toolset(),
-        retries=3,
         model_settings=model_settings,
     )
     return agent, deps

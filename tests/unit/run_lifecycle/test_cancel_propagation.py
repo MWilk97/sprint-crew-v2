@@ -313,15 +313,12 @@ async def test_coder_skips_acceptance_tests_when_cancelled(tmp_path: Path, cance
     )
     acceptance = AsyncMock(return_value=("", True))
     with (
+        patch("sprint_crew.agents.coder.run_coder_plan", new=AsyncMock(return_value=("out", []))),
         patch(
-            "sprint_crew.agents.coder_coverage.run_coder_plan",
-            new=AsyncMock(return_value=("out", [])),
-        ),
-        patch(
-            "sprint_crew.agents.coder_coverage.validate_plan_coverage",
+            "sprint_crew.orchestrator.plan_coverage.validate_plan_coverage",
             return_value=type("C", (), {"satisfied": True})(),
         ),
-        patch("sprint_crew.agents.coder_coverage.run_acceptance_tests", new=acceptance),
+        patch("sprint_crew.orchestrator.acceptance_tests.run_acceptance_tests", new=acceptance),
     ):
         _raw, _log, _cov, output, verified = await run_coder_with_coverage(plan, tmp_path)
 

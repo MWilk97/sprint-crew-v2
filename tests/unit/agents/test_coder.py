@@ -158,7 +158,8 @@ async def test_run_coder_with_coverage_skips_unfixable_continuation(
     plan_with_missing_source: TaskPlan,
     tmp_path,
 ) -> None:
-    from sprint_crew.agents import coder_coverage as coder
+    from sprint_crew.agents import coder, coder_coverage
+    from sprint_crew.orchestrator import plan_coverage
 
     unsatisfied = PlanCoverageResult(
         missing=["tests/test_feature.py"],
@@ -168,11 +169,11 @@ async def test_run_coder_with_coverage_skips_unfixable_continuation(
     )
     with (
         patch.object(coder, "run_coder_plan", new=AsyncMock(return_value=("done", []))),
-        patch.object(coder, "validate_plan_coverage", return_value=unsatisfied),
-        patch.object(coder, "continuation_makes_sense", return_value=False),
+        patch.object(plan_coverage, "validate_plan_coverage", return_value=unsatisfied),
+        patch.object(plan_coverage, "continuation_makes_sense", return_value=False),
         patch.object(coder, "run_coder_loop", new=AsyncMock()) as loop_mock,
     ):
-        _, _, coverage, _, _ = await coder.run_coder_with_coverage(
+        _, _, coverage, _, _ = await coder_coverage.run_coder_with_coverage(
             plan_with_missing_source, tmp_path
         )
 
@@ -184,7 +185,8 @@ async def test_run_coder_with_coverage_skips_unfixable_continuation(
 async def test_run_coder_with_coverage_stops_on_stall(
     plan_with_missing_source: TaskPlan, tmp_path
 ) -> None:
-    from sprint_crew.agents import coder_coverage as coder
+    from sprint_crew.agents import coder, coder_coverage
+    from sprint_crew.orchestrator import plan_coverage
 
     stalled = PlanCoverageResult(
         missing=["feature.py"],
@@ -195,13 +197,13 @@ async def test_run_coder_with_coverage_stops_on_stall(
 
     with (
         patch.object(coder, "run_coder_plan", new=AsyncMock(return_value=("done", []))),
-        patch.object(coder, "validate_plan_coverage", side_effect=[stalled, stalled]),
-        patch.object(coder, "continuation_makes_sense", return_value=True),
+        patch.object(plan_coverage, "validate_plan_coverage", side_effect=[stalled, stalled]),
+        patch.object(plan_coverage, "continuation_makes_sense", return_value=True),
         patch.object(
             coder, "run_coder_loop", new=AsyncMock(return_value=("still missing", []))
         ) as loop_mock,
     ):
-        _, _, coverage, _, _ = await coder.run_coder_with_coverage(
+        _, _, coverage, _, _ = await coder_coverage.run_coder_with_coverage(
             plan_with_missing_source, tmp_path
         )
 

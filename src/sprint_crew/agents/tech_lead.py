@@ -64,7 +64,6 @@ async def run_tech_lead_loop(
         Role.WORK,
         system_prompt=build_tech_lead_system_prompt(),
         toolset=build_readonly_toolset(include_semantic_search=True),
-        retries=3,
         model_settings=ModelSettings(temperature=0),
     )
     if repo_context is None:

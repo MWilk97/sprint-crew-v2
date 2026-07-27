@@ -78,6 +78,17 @@ select = ["E", "F", "I", "UP", "B", "RUF", "C901"]
 ignore = ["E501", "UP042", "UP047", "RUF001"]
 
 [tool.ruff.lint.mccabe]
-# Ratchet, not an aspiration: 23 is today's worst (_build_toolset in tools/pydantic_ai.py).
-# Lower it as functions get split; do not raise it to make a new one fit.
-max-complexity = 23
+# A ceiling set at the current worst function cannot detect anything except a new function
+# worse than the worst — which is what 23 (_build_toolset, since split) was doing. 12 binds
+# on new code; the functions already above it are listed in per-file-ignores below so the
+# debt is enumerated rather than hidden. Do not raise this to make a new function fit.
+max-complexity = 12
+
+[tool.ruff.lint.per-file-ignores]
+# C901 debt predating the ceiling. Remove an entry when its function is split; do not add
+# one without splitting first.
+"src/sprint_crew/agents/tech_lead_planning.py" = ["C901"]  # run_tech_lead_validated (15)
+"src/sprint_crew/api/console/events.py" = ["C901"]         # stream_console_events (13)
+"src/sprint_crew/orchestrator/plan_validation.py" = ["C901"]  # validate_plan_structure (13)
+"src/sprint_crew/orchestrator/retry.py" = ["C901"]         # format_review_feedback (22)
+"tests/helpers/from_prompt_assertions.py" = ["C901"]       # classify_integration_failure (13)
