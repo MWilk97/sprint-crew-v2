@@ -6,6 +6,14 @@ Each milestone below carries its own status line — the per-milestone marker is
 contract change carries an `FE →` note for the separate front-end roadmap session.
 **Written:** 2026-07-25, from branch `feature/interpreter-clarify` (2 commits ahead of `origin/main`, unpushed).
 
+> **Every `file.py:NNN` reference in this document predates the M0–M5 refactors and is not
+> a current pointer.** Two files it cites repeatedly no longer exist at those paths:
+> `api/console.py` is now the package `api/console/` (state / clarify / run_bridge / routes /
+> events) and `graph/pipeline.py` is now graph wiring only, with the node bodies in
+> `graph/nodes/`. The references are kept because they document what the analysis was based
+> on; follow the names, not the line numbers. `tests/unit/test_docs_examples.py` exempts this
+> file from the citation check for exactly this reason.
+
 ## Decisions taken as input
 
 | Decision | Choice |

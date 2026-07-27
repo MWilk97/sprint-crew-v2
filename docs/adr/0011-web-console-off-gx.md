@@ -4,7 +4,7 @@
 
 The content was folded into [archive/HISTORY.md](../archive/HISTORY.md#target-console-collapsed-from-vision--roadmap--adr-0011)
 when the docs were consolidated to one owner per fact. This stub exists because the decision
-is still cited from live code and contracts — `config.py`, `api/app.py`, `api/console.py`,
+is still cited from live code and contracts — `config.py`, `api/app.py`, `api/console/`,
 `schemas/console.py`, `.env.example` and ADR 0014 all reference "ADR 0011" for the CORS and
 API-boundary rationale, and those citations previously pointed at a deleted file.
 

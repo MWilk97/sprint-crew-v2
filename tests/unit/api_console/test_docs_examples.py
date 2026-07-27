@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import yaml
 
@@ -55,6 +57,62 @@ def test_markdown_contract_does_not_restate_the_event_vocabulary() -> None:
         f"chat-console-api.md appears to restate the event vocabulary ({len(inline)} of "
         f"{len(EventType)} types inline). Cite the OpenAPI EventType enum instead."
     )
+
+
+#: Relative markdown links, minus anchors and external URLs.
+_LINK_RE = re.compile(r"\[[^\]]*\]\((?!https?://|#|mailto:)([^)\s]+)\)")
+
+#: Line-numbered code citations in prose, e.g. `api/console.py:296-413`.
+_CITATION_RE = re.compile(r"`([\w./-]+\.(?:py|yaml|yml|md|json|toml)):\d+(?:-\d+)?`")
+
+#: Historical snapshots that deliberately describe the code as it was, not as it is.
+_SNAPSHOT_DOCS = {"docs/roadmap-backend-interactive-console.md"}
+
+
+def _markdown_files() -> list[Path]:
+    root = get_settings().project_root
+    files = [root / "README.md", root / "AGENTS.md"]
+    files.extend(sorted((root / "docs").rglob("*.md")))
+    return [f for f in files if f.is_file()]
+
+
+def test_markdown_links_resolve() -> None:
+    """Splitting api/console.py into a package left four docs pointing at a deleted file.
+
+    The docs sweep landed *before* the refactor on the same branch and nobody re-swept, so
+    nothing caught it. Cheap to check, and the failure mode is silent otherwise.
+    """
+    root = get_settings().project_root
+    broken: list[str] = []
+    for path in _markdown_files():
+        for target in _LINK_RE.findall(path.read_text(encoding="utf-8")):
+            resolved = (path.parent / target.split("#", 1)[0]).resolve()
+            if not resolved.exists():
+                broken.append(f"{path.relative_to(root)} -> {target}")
+
+    assert not broken, "dead relative links:\n" + "\n".join(broken)
+
+
+def test_code_citations_name_files_that_exist() -> None:
+    """`module.py:123` citations in prose. Line numbers are not checked — they rot on every
+    refactor — but the file being gone means the reader has nowhere to look at all.
+
+    Historical-snapshot documents are exempt: they describe a past state on purpose and say
+    so in their own banner.
+    """
+    root = get_settings().project_root
+    broken: list[str] = []
+    for path in _markdown_files():
+        if str(path.relative_to(root)) in _SNAPSHOT_DOCS:
+            continue
+        for target in _CITATION_RE.findall(path.read_text(encoding="utf-8")):
+            if (
+                not (root / target).exists()
+                and not (root / "src" / "sprint_crew" / target).exists()
+            ):
+                broken.append(f"{path.relative_to(root)} -> {target}")
+
+    assert not broken, "citations naming missing files:\n" + "\n".join(broken)
 
 
 def test_openapi_console_session_properties_match_the_model() -> None:
