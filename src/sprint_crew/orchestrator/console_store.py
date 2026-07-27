@@ -14,10 +14,15 @@ import shutil
 from datetime import UTC, datetime
 
 from sprint_crew.config import get_settings
-from sprint_crew.orchestrator.store import TypedJsonStore
+from sprint_crew.orchestrator.store import TypedJsonStore, _cached_store
 from sprint_crew.schemas.console import ConsoleSession, ConsoleSessionStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(tz=UTC).isoformat()
+
 
 _TERMINAL_STATUSES = frozenset(
     {
@@ -30,7 +35,6 @@ _TERMINAL_STATUSES = frozenset(
 
 class ConsoleSessionStore(TypedJsonStore[ConsoleSession]):
     model = ConsoleSession
-    tracks_updated_at = True
     table = "console_sessions"
     key_column = "session_id"
     create_sql = """
@@ -41,6 +45,16 @@ class ConsoleSessionStore(TypedJsonStore[ConsoleSession]):
         )
     """
 
+    def save(self, item: ConsoleSession) -> None:
+        # Stamped by the store, like SessionStore: every write is a state change worth
+        # dating, and the reaper sorts on this column. Callers used to be responsible for
+        # it, so one that forgot wrote a stale sort key.
+        item.updated_at = _utc_now_iso()
+        super().save(item)
+
+    def _extra_columns(self, item: ConsoleSession) -> dict[str, str]:
+        return {"updated_at": item.updated_at}
+
     def delete(self, session_id: str) -> bool:
         return self._delete(session_id)
 
@@ -49,7 +63,7 @@ class ConsoleSessionStore(TypedJsonStore[ConsoleSession]):
 
 
 def console_store() -> ConsoleSessionStore:
-    return ConsoleSessionStore(get_settings().session_db)
+    return _cached_store(ConsoleSessionStore, get_settings().session_db)
 
 
 def _parse_updated_at(value: str) -> datetime | None:

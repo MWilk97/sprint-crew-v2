@@ -12,6 +12,7 @@ from sprint_crew.orchestrator.console_store import (
     console_store,
     reap_console_sessions,
 )
+from sprint_crew.orchestrator.store import TypedJsonStore
 from sprint_crew.schemas.console import (
     ClarifyAnswer,
     ClarifyQuestion,
@@ -21,6 +22,7 @@ from sprint_crew.schemas.console import (
     ConsoleSessionStatus,
     SprintRunRef,
 )
+from sprint_crew.schemas.session import BacklogRun
 
 
 @pytest.fixture(autouse=True)
@@ -60,8 +62,55 @@ def _session(
     return session
 
 
-def _iso_days_ago(days: float) -> str:
-    return (datetime.now(tz=UTC) - timedelta(days=days)).isoformat()
+def _days_from_now(days: float) -> datetime:
+    """A clock to hand the reaper.
+
+    Age is simulated by moving the reaper's `now` forward rather than by backdating
+    `updated_at`, because the store stamps that field on every save — the same rule that
+    keeps the TTL honest makes a pre-backdated row unwritable.
+    """
+    return datetime.now(tz=UTC) + timedelta(days=days)
+
+
+def test_store_factory_reuses_one_instance_per_database() -> None:
+    """The factory is called per operation, and constructing a store runs `_init_db` — so a
+    single `load()` opened two connections, one to re-create a table that already existed."""
+    assert console_store() is console_store()
+
+
+def test_store_factory_still_isolates_a_different_database(tmp_path, monkeypatch) -> None:
+    """The cache is keyed on the path, so repointing SPRINT_SESSION_DB must not hand back
+    the previous database — that would silently break every test's isolation."""
+    first = console_store()
+    monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "other.db"))
+    get_settings.cache_clear()
+
+    second = console_store()
+
+    assert second is not first
+    assert second.db_path != first.db_path
+
+
+def test_store_model_must_match_its_type_parameter() -> None:
+    """Without this check the generic is decorative: the mismatch type-checks fine and
+    only surfaces when a payload is validated in production."""
+    with pytest.raises(TypeError, match="must be the same model"):
+
+        class Mismatched(TypedJsonStore[ConsoleSession]):
+            model = BacklogRun
+            table = "whatever"
+            key_column = "session_id"
+            create_sql = "CREATE TABLE IF NOT EXISTS whatever (session_id TEXT PRIMARY KEY)"
+
+
+def test_matching_store_declaration_is_accepted() -> None:
+    class Matched(TypedJsonStore[ConsoleSession]):
+        model = ConsoleSession
+        table = "whatever"
+        key_column = "session_id"
+        create_sql = "CREATE TABLE IF NOT EXISTS whatever (session_id TEXT PRIMARY KEY)"
+
+    assert Matched.model is ConsoleSession
 
 
 def test_round_trip_survives_restart() -> None:
@@ -89,24 +138,38 @@ def test_delete_and_list() -> None:
     assert {s.session_id for s in store.list_all()} == {"cs-2"}
 
 
+def test_store_stamps_updated_at_on_every_save() -> None:
+    """The reaper's TTL clock is this column, so no caller gets to forget to set it."""
+    store = console_store()
+    session = _session("cs-1", updated_at="2020-01-01T00:00:00+00:00")
+
+    store.save(session)
+
+    restored = store.load("cs-1")
+    assert restored is not None
+    assert restored.updated_at != "2020-01-01T00:00:00+00:00"
+    # Mutated in place too: the handler returns this object in the HTTP response.
+    assert session.updated_at == restored.updated_at
+
+
 def test_reaper_deletes_old_terminal_only() -> None:
     store = console_store()
-    store.save(
-        _session("cs-old", status=ConsoleSessionStatus.COMPLETED, updated_at=_iso_days_ago(30))
-    )
-    store.save(
-        _session("cs-recent", status=ConsoleSessionStatus.COMPLETED, updated_at=_iso_days_ago(1))
-    )
-    store.save(
-        _session("cs-running", status=ConsoleSessionStatus.RUNNING, updated_at=_iso_days_ago(30))
-    )
+    store.save(_session("cs-old", status=ConsoleSessionStatus.COMPLETED))
+    store.save(_session("cs-running", status=ConsoleSessionStatus.RUNNING))
 
-    reaped = reap_console_sessions()
+    reaped = reap_console_sessions(now=_days_from_now(30))
 
     assert reaped == ["cs-old"]
     assert store.load("cs-old") is None
-    assert store.load("cs-recent") is not None
     assert store.load("cs-running") is not None
+
+
+def test_reaper_keeps_sessions_inside_the_ttl() -> None:
+    store = console_store()
+    store.save(_session("cs-recent", status=ConsoleSessionStatus.COMPLETED))
+
+    assert reap_console_sessions(now=_days_from_now(1)) == []
+    assert store.load("cs-recent") is not None
 
 
 def test_reaper_deletes_workspace(tmp_path) -> None:
@@ -118,11 +181,10 @@ def test_reaper_deletes_workspace(tmp_path) -> None:
         _session(
             "cs-old",
             status=ConsoleSessionStatus.COMPLETED,
-            updated_at=_iso_days_ago(30),
             sprint_session_ids=["sprint-abc"],
         )
     )
 
-    reap_console_sessions()
+    reap_console_sessions(now=_days_from_now(30))
 
     assert not workspace.exists()

@@ -27,6 +27,30 @@ async def awaiting_human(state: SprintState) -> dict[str, Any]:
 
 
 async def failed(state: SprintState) -> dict[str, Any]:
+    """Terminal failure. Reports *why*, which means not overwriting an upstream reason.
+
+    ``techLeadPlan`` routes here with ``status``/``error`` already set when planning
+    aborts. Rebuilding ``error`` from an empty ReviewOutcome in that case threw the real
+    message away and announced "Max review retries exceeded" on attempt 0 — misleading
+    exactly when the field is being read to find out what happened.
+    """
+    upstream_error = str(state.get("error") or "")
+    if upstream_error:
+        return {
+            "status": SessionStatus.FAILED,
+            "error": upstream_error,
+            "events": [
+                _event(
+                    "orchestrator",
+                    "failed",
+                    "Planning aborted",
+                    level="error",
+                    error=upstream_error,
+                    attempt=state.get("attempt", 0),
+                )
+            ],
+        }
+
     outcome = ReviewOutcome.model_validate(state.get("review_outcome", {}))
     coverage_raw = state.get("plan_coverage")
     coverage = _coverage_from_dict(coverage_raw)

@@ -9,11 +9,14 @@ plain commands in a workspace the orchestrator owns.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 
 from sprint_crew.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def git_run(
@@ -38,8 +41,17 @@ def git_output(argv: list[str], cwd: Path) -> str:
     Callers that inspect status/diff text want one string and treat a failure as "no
     output"; keeping that shape here is what let a second, timeout-less copy of git_run
     grow in plan_coverage.py.
+
+    A timeout is one of those failures. ``git_run`` lets ``TimeoutExpired`` propagate so a
+    caller that checks exit codes fails loudly, but this one promises a string — and it is
+    called from the coverage hot path inside a tool call, where raising would abort the
+    agent's turn over a slow ``git status``.
     """
-    proc = git_run(argv, cwd=cwd)
+    try:
+        proc = git_run(argv, cwd=cwd)
+    except subprocess.TimeoutExpired:
+        logger.warning("git %s timed out in %s; treating as no output", argv[0], cwd)
+        return ""
     return (proc.stdout or "") + (proc.stderr or "")
 
 

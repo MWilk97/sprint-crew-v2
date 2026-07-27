@@ -251,15 +251,20 @@ class RunRegistry:
         return True
 
     async def _escalate(self, entry: RunEntry) -> None:
-        await asyncio.sleep(get_settings().cancel_grace_s)
-        body = entry.body_task
-        if body is not None and not body.done():
-            logger.warning(
-                "run %s ignored cooperative cancel for %.0fs; hard-cancelling",
-                entry.run_id,
-                get_settings().cancel_grace_s,
-            )
-            body.cancel()
+        try:
+            await asyncio.sleep(get_settings().cancel_grace_s)
+            body = entry.body_task
+            if body is not None and not body.done():
+                logger.warning(
+                    "run %s ignored cooperative cancel for %.0fs; hard-cancelling",
+                    entry.run_id,
+                    get_settings().cancel_grace_s,
+                )
+                body.cancel()
+        finally:
+            # Cleared so the entry stops holding a finished watchdog, and so a later
+            # cancel() can tell that no escalation is armed any more.
+            entry.escalate_task = None
 
     def get(self, run_id: str) -> RunEntry | None:
         return self._entries.get(run_id)
@@ -289,7 +294,9 @@ class RunRegistry:
     def reset(self) -> None:
         """Test hook: cancel everything outstanding and drop the table."""
         for entry in list(self._entries.values()):
-            for task in (entry.body_task, entry.wrapper_task):
+            # escalate_task included: it sleeps for CANCEL_GRACE_S, so leaving it out left
+            # a watchdog running past the reset that dropped its entry.
+            for task in (entry.body_task, entry.wrapper_task, entry.escalate_task):
                 if task is not None and not task.done():
                     task.cancel()
         self._entries.clear()

@@ -6,7 +6,7 @@ from collections import deque
 from sprint_crew.config import get_settings
 from sprint_crew.integrations.jira_client import get_jira_client
 from sprint_crew.orchestrator.complexity import PromptComplexity, assess_prompt_complexity
-from sprint_crew.orchestrator.store import TypedJsonStore
+from sprint_crew.orchestrator.store import TypedJsonStore, _cached_store
 from sprint_crew.schemas.backlog import BacklogPlan, BacklogStory
 from sprint_crew.schemas.session import BacklogRun
 from sprint_crew.schemas.ticket import JiraTicket
@@ -137,7 +137,7 @@ class BacklogRunStore(TypedJsonStore[BacklogRun]):
 
 
 def backlog_store() -> BacklogRunStore:
-    return BacklogRunStore(get_settings().session_db)
+    return _cached_store(BacklogRunStore, get_settings().session_db)
 
 
 def create_jira_tickets(plan: BacklogPlan) -> dict[str, JiraTicket]:

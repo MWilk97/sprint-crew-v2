@@ -16,7 +16,7 @@ from sprint_crew.graph.state import SprintState
 from sprint_crew.orchestrator.emitter import Emitter, emit_live, reset_emitter, set_emitter
 from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.orchestrator.run_registry import RunCancelled
-from sprint_crew.orchestrator.store import TypedJsonStore
+from sprint_crew.orchestrator.store import TypedJsonStore, _cached_store
 from sprint_crew.schemas.change import CodeChange, ReviewOutcome, TestAdditions
 from sprint_crew.schemas.session import AgentEvent, SessionStatus, SprintSession, agent_event
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
@@ -28,7 +28,6 @@ def _utc_now_iso() -> str:
 
 class SessionStore(TypedJsonStore[SprintSession]):
     model = SprintSession
-    tracks_updated_at = True
     table = "sessions"
     key_column = "session_id"
     create_sql = """
@@ -45,9 +44,12 @@ class SessionStore(TypedJsonStore[SprintSession]):
         item.updated_at = _utc_now_iso()
         super().save(item)
 
+    def _extra_columns(self, item: SprintSession) -> dict[str, str]:
+        return {"updated_at": item.updated_at}
+
 
 def session_store() -> SessionStore:
-    return SessionStore(get_settings().session_db)
+    return _cached_store(SessionStore, get_settings().session_db)
 
 
 def collect_stale_workspaces(*, keep: str | None = None) -> list[str]:

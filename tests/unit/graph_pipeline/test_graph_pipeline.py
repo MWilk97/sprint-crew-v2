@@ -8,6 +8,7 @@ from tests.helpers.acceptance_output import SCRUM3_COLLECTION
 from tests.helpers.ticket_fixtures import greeter_ticket
 
 from sprint_crew.config import Role
+from sprint_crew.graph.nodes.terminal import failed
 from sprint_crew.graph.pipeline import (
     build_sprint_graph,
     code_implement,
@@ -188,6 +189,37 @@ async def test_test_implement_keeps_work_lane_warm_after_reporter(
 def test_route_after_plan_fails_on_aborted_plan() -> None:
     assert route_after_plan({"status": SessionStatus.FAILED}) == "failed"  # type: ignore[arg-type]
     assert route_after_plan({"status": SessionStatus.RUNNING}) == "code"  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_failed_node_preserves_an_upstream_planning_error() -> None:
+    """techLeadPlan routes here with the real reason already in state. Rebuilding `error`
+    from an empty ReviewOutcome threw it away and claimed "Max review retries exceeded"
+    on attempt 0 — wrong exactly when someone is reading the field to debug."""
+    state = {
+        "status": SessionStatus.FAILED,
+        "error": "TechLead planning failed for DEMO-1: lane returned no plan",
+        "attempt": 0,
+    }
+
+    result = await failed(state)  # type: ignore[arg-type]
+
+    assert result["error"] == "TechLead planning failed for DEMO-1: lane returned no plan"
+    assert result["events"][0].summary == "Planning aborted"
+
+
+@pytest.mark.asyncio
+async def test_failed_node_still_summarises_retry_exhaustion() -> None:
+    state = {
+        "review_outcome": ReviewOutcome(
+            ticket_key="DEMO-1", passed=False, summary="nope", tests_passed=False
+        ).model_dump(),
+        "attempt": 4,
+    }
+
+    result = await failed(state)  # type: ignore[arg-type]
+
+    assert result["events"][0].summary == "Max review retries exceeded"
 
 
 def test_route_after_gate_rejects_incomplete_coverage(passing_review: ReviewOutcome) -> None:
@@ -456,6 +488,39 @@ async def test_graph_exhausted_retries_end_in_failed(
         result = await graph.ainvoke(graph_state)
 
     assert result["status"] == SessionStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_settings_overrides_actually_reach_the_nodes(graph_run_mocks) -> None:
+    """Guard for the fixture itself.
+
+    `settings_overrides` used to patch one module's `get_settings`, so an override for a
+    field read anywhere else did nothing — and the existing tests could not tell, because
+    the value they overrode happened to equal the real default. Uses a value that is
+    unmistakably not the default, and reads it from two different modules.
+    """
+    from sprint_crew.agents import coder
+    from sprint_crew.graph.nodes import routing
+
+    with graph_run_mocks(
+        reviewer=AsyncMock(),
+        formatter_result=None,
+        settings_overrides={"max_review_retries": 99, "max_coverage_rounds": 77},
+    ):
+        assert routing.get_settings().max_review_retries == 99
+        assert coder.get_settings().max_coverage_rounds == 77
+
+    assert routing.get_settings().max_review_retries != 99
+
+
+def test_settings_overrides_reject_an_unknown_field(graph_run_mocks) -> None:
+    with pytest.raises(AssertionError, match="no such Settings field"):
+        with graph_run_mocks(
+            reviewer=AsyncMock(),
+            formatter_result=None,
+            settings_overrides={"max_reviw_retries": 4},
+        ):
+            pass
 
 
 @pytest.mark.asyncio
