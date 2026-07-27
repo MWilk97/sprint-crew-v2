@@ -14,6 +14,7 @@ import shutil
 from datetime import UTC, datetime
 
 from sprint_crew.config import get_settings
+from sprint_crew.orchestrator.diff_store import diff_store
 from sprint_crew.orchestrator.store import TypedJsonStore, _cached_store
 from sprint_crew.schemas.console import ConsoleSession, ConsoleSessionStatus
 
@@ -105,6 +106,9 @@ def reap_console_sessions(now: datetime | None = None) -> list[str]:
         if updated is None or (now - updated).total_seconds() < cutoff_seconds:
             continue
         _delete_session_workspaces(session)
+        # Diff snapshots are the one piece of session state large enough to be worth
+        # reclaiming explicitly; the events table is left alone, as it always has been.
+        diff_store().delete_for_console_session(session.session_id)
         store.delete(session.session_id)
         reaped.append(session.session_id)
     if reaped:

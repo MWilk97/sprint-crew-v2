@@ -1,6 +1,6 @@
 # Chat console API contract
 
-**Status: Implemented (durable sessions, SSE timeline, queued + cancellable runs).** The `/v1/console/*` routes are live in [api/console/](../../src/sprint_crew/api/console/), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
+**Status: Implemented (durable sessions, SSE timeline, queued + cancellable runs, structured diffs).** The `/v1/console/*` routes are live in [api/console/](../../src/sprint_crew/api/console/), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
 
 Implementation status / MVP limitations:
 
@@ -12,6 +12,7 @@ Implementation status / MVP limitations:
 - **Start is non-blocking (M5).** `POST /start` returns `202` as soon as the run is queued. Workspace clone, vector indexing, context enrichment, the Work-lane load and the ScrumMaster call all happen after the response and report on the event stream. Previously the request blocked for the whole planning phase.
 - **One run at a time (M5).** The GPU serialises runs, so a second start lands in `queued` with a `queue_position`. See [Run queue and cancel](#run-queue-and-cancel-m5).
 - **`POST /cancel` really cancels (M5).** A queued run is dropped; a running run is asked to stop at its next checkpoint. See [Cancel](#post-v1consolesessionsidcancel).
+- **Structured diffs are read-only (M6).** `GET /sessions/{id}/diff` and `.../diff/{path}` serve a per-file, per-hunk view of what the agent changed, captured at each review pass. Per-file accept/reject is not in this contract version.
 - Progress mirroring: `GET /sessions/{id}` refreshes a queued or running code-mode session from the run registry and the backlog run (`sprint_ref.sprint_session_ids`, `queue_position`, completed/failed/cancelled status); clients may also poll `GET /sprint/backlog/{run_id}` directly.
 
 Notes:
@@ -315,6 +316,61 @@ The events table is the source of truth; the stream is a live view over it. A sl
 **Closed event vocabulary.** `event_type` is drawn from a documented closed set — the `EventType` enum in [chat-console.openapi.yaml](chat-console.openapi.yaml), which is the single source of truth and is pinned against `schemas/session.py` by `tests/unit/test_docs_examples.py`. It is deliberately not restated here: this paragraph used to carry its own copy of the list and fell four milestones behind.
 
 The wire type stays a plain string on purpose: **a client must render an unknown `event_type` generically, never reject the event** — each milestone adds types (M4 added `lane_loading`/`phase_started`, M5 added `run_queued`, `run_started`, `workspace_ready`, `backlog_planned`, `cancel_requested`, `cancelled`) and an older client must not break on them. `phase` and `level` (`debug | info | warning | error`) are present for filtering.
+
+### GET /v1/console/sessions/{id}/diff
+
+The structured diff of what the agent changed, as a file list. Query params: `sprint_session_id`, `attempt`.
+
+```json
+{
+  "snapshot": {
+    "sprint_session_id": "8f21…", "ticket_key": "DEMO-1", "attempt": 0,
+    "git_sha": "a1b2c3d", "captured_at": "2026-07-27T09:12:03+00:00",
+    "files": [
+      {"path": "src/metrics.py", "old_path": null, "action": "created", "additions": 41, "deletions": 0, "binary": false, "truncated": false},
+      {"path": "src/app.py", "old_path": null, "action": "modified", "additions": 3, "deletions": 1, "binary": false, "truncated": false}
+    ],
+    "total_additions": 44, "total_deletions": 1, "truncated": false
+  },
+  "available": [
+    {"sprint_session_id": "8f21…", "attempt": 0, "ticket_key": "DEMO-1", "captured_at": "2026-07-27T09:12:03+00:00", "files_changed": 2, "total_additions": 44, "total_deletions": 1}
+  ]
+}
+```
+
+- **Hunks are not here.** A change of any size is megabytes of hunks and a UI renders a file tree before it renders one file. Fetch them per file, on expand.
+- **`snapshot: null` is a `200`.** No diff exists until the first review pass, which is most of a run — a client polling this should not have to read `404` as "normal". `404` means the session id is unknown.
+- **A run has many snapshots.** One sprint session per backlog story, each reviewed up to `MAX_REVIEW_RETRIES` times. `available` lists every capture, oldest first; with no query params the newest is served. Cache keyed on `(sprint_session_id, attempt)` — the same path has different content per attempt.
+- **What the diff is against.** The working tree versus that story's base commit (`git_sha`), captured at review time each attempt. For story N of a backlog run the base is story N−1's commit, so a snapshot is one story's work, never the run's cumulative change. It therefore lags the live tool-call events by a phase: during `codeImplement` the newest snapshot is the previous attempt's, which is why `captured_at` and `attempt` are on it.
+
+### GET /v1/console/sessions/{id}/diff/{path}
+
+Full hunks for one file, from the same snapshot the bare route serves (or the one named by `sprint_session_id` + `attempt`).
+
+```json
+{
+  "path": "src/app.py", "action": "modified", "additions": 3, "deletions": 1,
+  "binary": false, "truncated": false,
+  "header_lines": ["diff --git a/src/app.py b/src/app.py", "index de98044..a7bc997 100644", "--- a/src/app.py", "+++ b/src/app.py"],
+  "hunks": [
+    {"old_start": 12, "old_lines": 3, "new_start": 12, "new_lines": 5, "section": "def create_app():",
+     "lines": [
+       {"kind": "context", "content": "    app = FastAPI()", "old_lineno": 12, "new_lineno": 12},
+       {"kind": "del", "content": "    return app", "old_lineno": 13, "new_lineno": null},
+       {"kind": "add", "content": "    app.include_router(metrics_router)", "old_lineno": null, "new_lineno": 13}
+     ]}
+  ]
+}
+```
+
+- `path` may contain slashes; percent-encode `#`, `?` and `%`.
+- **`binary: true` means there are no hunks** — git reports only that the files differ. Render "binary file changed", not an empty diff.
+- **`truncated: true`** means the file exceeded `DIFF_MAX_FILE_BYTES` and was shortened; its hunk counts are rescoped to the lines it actually carries. Say so in the UI. The snapshot-level `truncated` is a different and worse thing: whole files omitted past `DIFF_MAX_FILES`.
+- **Renames arrive as a delete plus a create.** Deliberate for this contract version — do not try to re-pair them. `old_path` carries the previous name where git supplied one.
+- `header_lines` is the `diff --git` preamble verbatim, kept so the original bytes can be reconstructed. A diff view can ignore it.
+- **Read-only.** Per-file accept/reject is a later milestone; nothing here changes run state.
+
+A `diff_updated` event goes out on the timeline whenever a snapshot is captured, carrying `files_changed`, `additions` and `deletions` — refresh off that rather than polling.
 
 ## Mapping to the current /sprint/* API
 

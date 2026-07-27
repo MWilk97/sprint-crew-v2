@@ -66,6 +66,8 @@ class EventType(StrEnum):
     BACKLOG_PLANNED = "backlog_planned"
     CANCEL_REQUESTED = "cancel_requested"
     CANCELLED = "cancelled"
+    # M6 structured diffs
+    DIFF_UPDATED = "diff_updated"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]

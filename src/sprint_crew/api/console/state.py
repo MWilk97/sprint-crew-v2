@@ -12,9 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from sprint_crew.api.auth import require_token
 from sprint_crew.orchestrator.console_store import console_store, reap_console_sessions
+from sprint_crew.orchestrator.diff_store import diff_store
 from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.schemas.console import ConsoleSession, ConsoleSessionStatus
+from sprint_crew.schemas.diff import DiffSnapshotRef, FileDiff, WorkspaceDiffSnapshot
 from sprint_crew.schemas.session import AgentEvent
 
 router = APIRouter(
@@ -66,6 +68,7 @@ def lock_count() -> int:
 def reset_console_store() -> None:
     console_store().clear()
     event_log().clear()
+    diff_store().clear()
     event_bus().clear()
     _locks.clear()
 
@@ -119,6 +122,32 @@ async def read_events(session_id: str, *, since: int, limit: int) -> list[AgentE
 
 async def max_event_seq(session_id: str) -> int:
     return await asyncio.to_thread(event_log().max_seq, session_id)
+
+
+async def latest_diff(session_id: str) -> WorkspaceDiffSnapshot | None:
+    return await asyncio.to_thread(diff_store().latest, session_id)
+
+
+async def latest_diff_key(session_id: str) -> tuple[str, int] | None:
+    return await asyncio.to_thread(diff_store().latest_key, session_id)
+
+
+async def diff_snapshot(
+    session_id: str, sprint_session_id: str, attempt: int
+) -> WorkspaceDiffSnapshot | None:
+    return await asyncio.to_thread(diff_store().get, session_id, sprint_session_id, attempt)
+
+
+async def diff_refs(session_id: str) -> list[DiffSnapshotRef]:
+    return await asyncio.to_thread(diff_store().list_refs, session_id)
+
+
+async def diff_file(
+    session_id: str, sprint_session_id: str, attempt: int, path: str
+) -> FileDiff | None:
+    return await asyncio.to_thread(
+        diff_store().get_file, session_id, sprint_session_id, attempt, path
+    )
 
 
 async def emit(session: ConsoleSession, event: AgentEvent) -> None:
