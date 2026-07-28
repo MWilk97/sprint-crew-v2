@@ -13,8 +13,9 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from sprint_crew.vector.indexer import index_workspace  # noqa: E402
+from sprint_crew.vector.indexer import delete_index, index_workspace  # noqa: E402
 from sprint_crew.vector.search import semantic_search  # noqa: E402
+from sprint_crew.vector.store import collection_for_run  # noqa: E402
 
 
 def _check_url(name: str, url: str, path: str = "/health") -> None:
@@ -36,29 +37,35 @@ def main() -> None:
     _check_url("qdrant", qdrant, "/healthz")
     _check_url("embed", embed.replace("/v1", ""), "/health")
 
+    # Probe collections are run-scoped and dropped at the end: this is a round-trip check,
+    # not a repo anyone will search later, and it must not land in the shared LRU.
     fixture = ROOT / "fixtures" / "repo"
-    session_id = f"probe-{uuid.uuid4().hex[:8]}"
-    print(f"Indexing {fixture} as {session_id}...")
-    result = index_workspace(fixture, session_id)
-    print(f"Indexed {result.chunks} chunks from {result.files} files in {result.seconds:.2f}s")
-
-    hits = semantic_search(session_id, "greeting hello function", top_k=3)
-    print(f"Search hits (repo): {len(hits)}")
-    for hit in hits:
-        print(f"  {hit.path}:{hit.start_line}-{hit.end_line} score={hit.score:.3f}")
-
+    probe = collection_for_run(f"probe-{uuid.uuid4().hex[:8]}")
     vector_fixture = ROOT / "fixtures" / "vector_repo"
-    vector_session = f"probe-vector-{uuid.uuid4().hex[:8]}"
-    print(f"Indexing {vector_fixture} as {vector_session}...")
-    vector_result = index_workspace(vector_fixture, vector_session)
-    print(
-        f"Indexed {vector_result.chunks} chunks from {vector_result.files} files "
-        f"in {vector_result.seconds:.2f}s"
-    )
-    vector_hits = semantic_search(vector_session, "ferry dispatch outbound queue", top_k=5)
-    print(f"Search hits (vector_repo): {len(vector_hits)}")
-    for hit in vector_hits:
-        print(f"  {hit.path}:{hit.start_line}-{hit.end_line} score={hit.score:.3f}")
+    vector_probe = collection_for_run(f"probe-vector-{uuid.uuid4().hex[:8]}")
+    try:
+        print(f"Indexing {fixture} as {probe}...")
+        result = index_workspace(fixture, probe, repo_key="probe")
+        print(f"Indexed {result.chunks} chunks from {result.files} files in {result.seconds:.2f}s")
+
+        hits = semantic_search([probe], "greeting hello function", top_k=3)
+        print(f"Search hits (repo): {len(hits)}")
+        for hit in hits:
+            print(f"  {hit.path}:{hit.start_line}-{hit.end_line} score={hit.score:.3f}")
+
+        print(f"Indexing {vector_fixture} as {vector_probe}...")
+        vector_result = index_workspace(vector_fixture, vector_probe, repo_key="probe")
+        print(
+            f"Indexed {vector_result.chunks} chunks from {vector_result.files} files "
+            f"in {vector_result.seconds:.2f}s"
+        )
+        vector_hits = semantic_search([vector_probe], "ferry dispatch outbound queue", top_k=5)
+        print(f"Search hits (vector_repo): {len(vector_hits)}")
+        for hit in vector_hits:
+            print(f"  {hit.path}:{hit.start_line}-{hit.end_line} score={hit.score:.3f}")
+    finally:
+        delete_index(probe)
+        delete_index(vector_probe)
 
     if not hits:
         print(

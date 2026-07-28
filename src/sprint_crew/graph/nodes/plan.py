@@ -15,13 +15,14 @@ from sprint_crew.graph.nodes._support import (
 )
 from sprint_crew.graph.state import (
     SprintState,
+    index_scope_from_state,
     ticket_from_state,
     workspace_from_state,
 )
 from sprint_crew.orchestrator.plan_validation import snapshot_baseline_paths
 from sprint_crew.orchestrator.repo_context import (
     enrich_repo_context_with_hits,
-    maybe_index_workspace,
+    maybe_index_overlay,
     pre_search_agent_event,
 )
 from sprint_crew.orchestrator.template_plan import work_lane_required_for_ticket
@@ -38,16 +39,14 @@ async def init_session(state: SprintState) -> dict[str, Any]:
     ticket = ticket_from_state(state)
     template_fast_path = not work_lane_required_for_ticket(ticket)
 
-    session_id = state["session_id"]
+    # Only the overlay: this workspace may be a chained clone carrying the previous
+    # story's commits, which are this run's business and nobody else's (roadmap M8).
     index_result = await asyncio.to_thread(
-        maybe_index_workspace,
-        workspace,
-        session_id,
-        ticket=ticket,
+        maybe_index_overlay, workspace, index_scope_from_state(state)
     )
     events: list[AgentEvent] = []
     if index_result is not None:
-        if index_result.chunks >= 0:
+        if not index_result.unchanged:
             events.append(
                 _event(
                     "orchestrator",
@@ -64,7 +63,7 @@ async def init_session(state: SprintState) -> dict[str, Any]:
                 _event(
                     "orchestrator",
                     "vector_index_skipped",
-                    "Vector index unchanged — git SHA matches existing collection",
+                    "Vector index unchanged — workspace matches the indexed content",
                     git_sha=index_result.git_sha,
                 ),
             )
@@ -107,7 +106,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
     plan_query = f"{ticket.summary}\n{ticket.description}"
     context_text, pre_hits = enrich_repo_context_with_hits(
         workspace,
-        session_id,
+        index_scope_from_state(state),
         plan_query,
         ticket=ticket,
     )

@@ -39,6 +39,10 @@ def isolate_unit_tests_from_services(
     monkeypatch.setenv("VECTOR_INDEX_ENABLED", "false")
     monkeypatch.setenv("CLARIFY_LLM_ENABLED", "false")
     monkeypatch.setenv("CONSOLE_API_TOKEN", TEST_API_TOKEN)
+    # M8: session creation clones a repo in a background task. Off by default here for the
+    # same reason as the two above — a test that does not opt in should not do git I/O, and
+    # a task outliving its test would race tmp_path teardown.
+    monkeypatch.setenv("CONSOLE_WORKSPACE_ON_CREATE", "false")
     get_settings.cache_clear()
 
 

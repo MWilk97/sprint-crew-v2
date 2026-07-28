@@ -43,7 +43,7 @@ def test_verify_prompt_surfaces_path_reindexes_and_searches(tmp_path: Path) -> N
 
     with (
         patch(
-            "tests.helpers.from_prompt_live.maybe_index_workspace", return_value=FakeIndexResult()
+            "tests.helpers.from_prompt_live.maybe_index_shared", return_value=FakeIndexResult()
         ) as index_mock,
         patch(
             "tests.helpers.from_prompt_live.semantic_search",
@@ -53,9 +53,11 @@ def test_verify_prompt_surfaces_path_reindexes_and_searches(tmp_path: Path) -> N
         result = verify_prompt_surfaces_path(workspace, "run-abc", fragments=("ferry",))
 
     index_mock.assert_called_once()
-    assert index_mock.call_args[0][1] == "postcheck-run-abc"
+    scope = index_mock.call_args[0][1]
+    # Its own collection: the postcheck audits the run's index, it must not write into it.
+    assert scope.shared == "code_chunks_run_postcheck-run-abc"
     search_mock.assert_called_once_with(
-        "postcheck-run-abc",
+        (scope.shared,),
         POSTCHECK_QUERIES["ferry"],
         top_k=5,
     )
@@ -92,7 +94,7 @@ def test_verify_prompt_surfaces_path_multi_fragment(tmp_path: Path) -> None:
         ]
 
     with (
-        patch("tests.helpers.from_prompt_live.maybe_index_workspace", return_value=None),
+        patch("tests.helpers.from_prompt_live.maybe_index_shared", return_value=None),
         patch("tests.helpers.from_prompt_live.semantic_search", side_effect=fake_search),
     ):
         result = verify_prompt_surfaces_path(workspace, "run-xyz", fragments=("ferry", "retry"))
@@ -106,7 +108,7 @@ def test_verify_prompt_surfaces_path_raises_when_missing_fragment(tmp_path: Path
     workspace = tmp_path / "repo"
     workspace.mkdir()
     with (
-        patch("tests.helpers.from_prompt_live.maybe_index_workspace", return_value=None),
+        patch("tests.helpers.from_prompt_live.maybe_index_shared", return_value=None),
         patch("tests.helpers.from_prompt_live.semantic_search", return_value=[]),
     ):
         with pytest.raises(AssertionError, match="ferry"):

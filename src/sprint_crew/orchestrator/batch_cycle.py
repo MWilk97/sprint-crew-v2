@@ -20,23 +20,22 @@ from sprint_crew.orchestrator.session import (
 )
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SessionStatus
-from sprint_crew.vector.indexer import delete_workspace_index
+from sprint_crew.vector.indexer import delete_index
+from sprint_crew.vector.store import collection_for_run
 
 logger = logging.getLogger(__name__)
 
 
-def _cleanup_vector_indexes(session_ids: list[str], run_id: str) -> None:
+def _cleanup_vector_overlays(session_ids: list[str]) -> None:
+    """Drop this run's dirty overlays. The shared repo index deliberately survives — it is
+    what the next session on this repo starts warm from (roadmap M8). Planning has no
+    overlay: it runs against a pristine clone, so it reads and writes the shared tier only.
+    """
     for session_id in session_ids:
         try:
-            delete_workspace_index(session_id)
+            delete_index(collection_for_run(session_id))
         except Exception:
-            logger.warning(
-                "Failed to delete vector index for session %s", session_id, exc_info=True
-            )
-    try:
-        delete_workspace_index(f"backlog-{run_id}")
-    except Exception:
-        logger.warning("Failed to delete vector index for backlog run %s", run_id, exc_info=True)
+            logger.warning("Failed to delete vector overlay for %s", session_id, exc_info=True)
 
 
 async def run_backlog_batched(
@@ -97,10 +96,10 @@ async def run_backlog_batched(
                 completed_session_ids.append(session_id)
                 parent_workspace = workspace
                 try:
-                    delete_workspace_index(session_id)
+                    delete_index(collection_for_run(session_id))
                 except Exception:
                     logger.warning(
-                        "Failed to delete vector index for completed session %s",
+                        "Failed to delete vector overlay for completed session %s",
                         session_id,
                         exc_info=True,
                     )
@@ -170,4 +169,4 @@ async def run_backlog_batched(
         # Best-effort: a hard cancel can interrupt these awaits mid-way, which is why the
         # RunRegistry repeats the lane teardown from its uncancelled wrapper task.
         await stop_all_lanes()
-        _cleanup_vector_indexes(session_ids, run_id)
+        _cleanup_vector_overlays(session_ids)

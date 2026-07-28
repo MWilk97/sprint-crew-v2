@@ -43,6 +43,30 @@ class ConsoleSessionStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class WorkspaceStatus(str, Enum):
+    """Progress of the session's own checkout (roadmap M8).
+
+    Independent of the session status: a session is usable while its clone is still
+    arriving, and the two reach their end states in either order.
+    """
+
+    PENDING = "pending"
+    CLONING = "cloning"
+    READY = "ready"
+    FAILED = "failed"
+    # Reclaimed by the workspace LRU. The session is still readable; its checkout is gone.
+    EVICTED = "evicted"
+
+
+class IndexStatus(str, Enum):
+    PENDING = "pending"
+    INDEXING = "indexing"
+    READY = "ready"
+    # Nothing to index, or indexing is switched off — not an error.
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
 class ConsoleMessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -175,6 +199,14 @@ class ConsoleSession(BaseModel):
     sprint_ref: SprintRunRef | None = None
     plan_result: ConsolePlanResult | None = None
     error: str | None = None
+    # The session's own checkout and index, prepared in the background from creation
+    # (roadmap M8). A second async dimension: these advance independently of ``status``,
+    # so a client renders them separately rather than folding both into one spinner.
+    workspace_status: WorkspaceStatus = WorkspaceStatus.PENDING
+    workspace_root: str | None = None
+    workspace_error: str | None = None
+    index_status: IndexStatus = IndexStatus.PENDING
+    index_error: str | None = None
     # How many runs must finish before this one starts (M5). Non-null only while ``queued``,
     # where it is 1 or more; null the moment the run is admitted or the session ends.
     queue_position: int | None = Field(default=None, ge=1)
@@ -184,6 +216,35 @@ class ConsoleSession(BaseModel):
     cancel_requested_at: str | None = None
     created_at: str = Field(default_factory=_utc_now_iso)
     updated_at: str = Field(default_factory=_utc_now_iso)
+
+
+class ConsoleSessionSummary(BaseModel):
+    """One row of session history (roadmap M8).
+
+    Deliberately not a whole ``ConsoleSession``: messages, clarify state and plan results
+    are unbounded, and a history sidebar renders none of them.
+    """
+
+    model_config = STRICT
+
+    session_id: str = Field(..., min_length=1)
+    mode: ConsoleMode
+    status: ConsoleSessionStatus
+    workspace_status: WorkspaceStatus
+    # First thing the user asked, truncated — what a sidebar shows as the session's name.
+    title: str | None = None
+    repo_url: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class ConsoleSessionPage(BaseModel):
+    model_config = STRICT
+
+    sessions: list[ConsoleSessionSummary] = Field(default_factory=list)
+    total: int = 0
+    # Null when this page is the last one.
+    next_offset: int | None = None
 
 
 class ConsoleEventsPage(BaseModel):

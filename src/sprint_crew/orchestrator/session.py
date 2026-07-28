@@ -52,34 +52,6 @@ def session_store() -> SessionStore:
     return _cached_store(SessionStore, get_settings().session_db)
 
 
-def collect_stale_workspaces(*, keep: str | None = None) -> list[str]:
-    """Stopgap GC: delete workspace clones older than ``WORKSPACE_TTL_DAYS``.
-
-    Age-based on directory mtime so an in-flight workspace (recently written) is never
-    removed; ``keep`` protects the session about to be (re)created. This exists only
-    because workspaces are otherwise never collected.
-
-    TODO(M8): delete this and its call site once the store-aware reaper lands.
-    """
-    settings = get_settings()
-    base = settings.workspace_base
-    if not base.exists():
-        return []
-    cutoff = time.time() - settings.workspace_ttl_days * 86400.0
-    removed: list[str] = []
-    for child in base.iterdir():
-        if not child.is_dir() or (keep is not None and child.name == keep):
-            continue
-        try:
-            if child.stat().st_mtime >= cutoff:
-                continue
-            shutil.rmtree(child)
-        except OSError:
-            continue
-        removed.append(child.name)
-    return removed
-
-
 def prepare_workspace(
     session_id: str,
     source: Path | None = None,
@@ -87,7 +59,6 @@ def prepare_workspace(
     repo_url: str | None = None,
 ) -> Path:
     settings = get_settings()
-    collect_stale_workspaces(keep=session_id)
     dest = settings.workspace_base / session_id
     if dest.exists():
         shutil.rmtree(dest)
@@ -95,7 +66,7 @@ def prepare_workspace(
     if repo_url:
         dest.mkdir(parents=True, exist_ok=True)
         proc = subprocess.run(
-            ["git", "clone", "--depth", "1", repo_url, str(dest)],
+            ["git", "clone", "--depth", str(settings.git_clone_depth), repo_url, str(dest)],
             capture_output=True,
             text=True,
             check=False,

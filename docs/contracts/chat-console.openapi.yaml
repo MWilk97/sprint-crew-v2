@@ -75,10 +75,47 @@ paths:
                 sprint_ref: null
                 plan_result: null
                 error: null
+                workspace_status: cloning
+                workspace_root: null
+                workspace_error: null
+                index_status: pending
+                index_error: null
                 created_at: "2026-07-16T09:00:00+00:00"
                 updated_at: "2026-07-16T09:00:00+00:00"
         "422":
           $ref: "#/components/responses/ValidationError"
+    get:
+      operationId: listConsoleSessions
+      summary: Session history, newest first (M8)
+      description: |
+        Summaries only — no messages, clarify state or plan results. Fetch one session
+        by id for the full object.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 25, minimum: 1, maximum: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
+      responses:
+        "200":
+          description: One page of session summaries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSessionPage"
+              example:
+                sessions:
+                  - session_id: cs-7f3a
+                    mode: code
+                    status: completed
+                    workspace_status: ready
+                    title: Add a /metrics endpoint with request counters
+                    repo_url: https://github.com/example/service
+                    created_at: "2026-07-16T09:00:00+00:00"
+                    updated_at: "2026-07-16T09:41:00+00:00"
+                total: 1
+                next_offset: null
   /v1/console/sessions/{id}:
     get:
       operationId: getConsoleSession
@@ -94,6 +131,22 @@ paths:
                 $ref: "#/components/schemas/ConsoleSession"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteConsoleSession
+      summary: Delete a session and everything it owns (M8)
+      description: |
+        Removes the session row, its clone, its diff snapshots and its timeline.
+        Refuses while a run is live — cancel first; deleting under a running agent
+        would leave it writing into a workspace nobody owns.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Session is queued, running or awaiting_review.
   /v1/console/sessions/{id}/messages:
     post:
       operationId: postConsoleMessage
@@ -863,10 +916,76 @@ components:
           description: |
             Set when Stop was accepted but the run has not stopped yet (M5). While
             this is non-null and status is still "running", render a pending state.
+        workspace_status:
+          allOf:
+            - $ref: "#/components/schemas/WorkspaceStatus"
+          description: |
+            Progress of the session's own checkout (M8). Advances independently of
+            `status`: a session is usable while its clone is still arriving, so render
+            the two separately rather than folding them into one spinner.
+        workspace_root:
+          type: [string, "null"]
+          description: Absolute server path of the clone; null until it is ready.
+        workspace_error:
+          type: [string, "null"]
+        index_status:
+          allOf:
+            - $ref: "#/components/schemas/IndexStatus"
+          description: |
+            Progress of the repository index (M8). "skipped" is not an error — there
+            was nothing worth indexing, or indexing is switched off.
+        index_error:
+          type: [string, "null"]
         created_at:
           type: string
         updated_at:
           type: string
+    WorkspaceStatus:
+      type: string
+      description: |
+        M8. "evicted" means the clone was reclaimed by the workspace LRU: the session
+        is still readable, its checkout is gone.
+      enum: [pending, cloning, ready, failed, evicted]
+    IndexStatus:
+      type: string
+      enum: [pending, indexing, ready, skipped, failed]
+    ConsoleSessionSummary:
+      type: object
+      additionalProperties: false
+      required: [session_id, mode, status, workspace_status, created_at, updated_at]
+      properties:
+        session_id:
+          type: string
+          minLength: 1
+        mode:
+          $ref: "#/components/schemas/ConsoleMode"
+        status:
+          $ref: "#/components/schemas/ConsoleSessionStatus"
+        workspace_status:
+          $ref: "#/components/schemas/WorkspaceStatus"
+        title:
+          type: [string, "null"]
+          description: First user message, truncated — the session's name in a history list.
+        repo_url:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    ConsoleSessionPage:
+      type: object
+      additionalProperties: false
+      required: [sessions, total]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConsoleSessionSummary"
+        total:
+          type: integer
+        next_offset:
+          type: [integer, "null"]
+          description: Offset of the next page, or null when this is the last one.
     EventType:
       type: string
       description: |
@@ -911,6 +1030,11 @@ components:
         - rejection_recorded
         - diff_review_expired
         - review_budget_exhausted
+        - repo_cloning
+        - repo_ready
+        - repo_failed
+        - index_progress
+        - index_ready
     AgentEvent:
       type: object
       additionalProperties: false

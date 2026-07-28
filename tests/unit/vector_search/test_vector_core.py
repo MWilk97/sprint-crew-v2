@@ -92,7 +92,7 @@ def test_semantic_search_filters_path_prefix(
     }
     mock_store_cls.return_value.search.return_value = [point_ok, point_skip]
 
-    hits = semantic_search("sess-1", "authentication", path_prefix="src/")
+    hits = semantic_search(["coll-1"], "authentication", path_prefix="src/")
     assert len(hits) == 1
     assert hits[0].path == "src/auth.py"
 
@@ -103,7 +103,7 @@ def test_semantic_search_unavailable_when_disabled(tmp_path: Path, monkeypatch) 
 
     get_settings.cache_clear()
 
-    tool = SemanticSearchTool(session_id="sess-1")
+    tool = SemanticSearchTool(collections=["coll-1"])
     result = tool.execute(
         SemanticSearchArgs(query="hello"),
         workspace_root=tmp_path,
@@ -112,16 +112,16 @@ def test_semantic_search_unavailable_when_disabled(tmp_path: Path, monkeypatch) 
     assert "unavailable" in result.output
 
 
-def test_semantic_search_uses_session_id(tmp_path: Path, monkeypatch) -> None:
+def test_semantic_search_uses_given_collections(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("VECTOR_INDEX_ENABLED", "true")
     from sprint_crew.config import get_settings
 
     get_settings.cache_clear()
 
-    calls: list[str] = []
+    calls: list[tuple[str, ...]] = []
 
-    def fake_search(session_id: str, query: str, **kwargs):
-        calls.append(session_id)
+    def fake_search(collections, query: str, **kwargs):
+        calls.append(tuple(collections))
         return []
 
     monkeypatch.setattr(
@@ -129,9 +129,9 @@ def test_semantic_search_uses_session_id(tmp_path: Path, monkeypatch) -> None:
         fake_search,
     )
 
-    tool = SemanticSearchTool(session_id="explicit-id")
+    tool = SemanticSearchTool(collections=["overlay", "shared"])
     tool.execute(SemanticSearchArgs(query="auth"), workspace_root=tmp_path)
-    assert calls == ["explicit-id"]
+    assert calls == [("overlay", "shared")]
 
 
 def test_semantic_search_rejects_unsafe_path_prefix(tmp_path: Path, monkeypatch) -> None:
@@ -140,7 +140,7 @@ def test_semantic_search_rejects_unsafe_path_prefix(tmp_path: Path, monkeypatch)
 
     get_settings.cache_clear()
 
-    tool = SemanticSearchTool(session_id="sess-1")
+    tool = SemanticSearchTool(collections=["coll-1"])
     result = tool.execute(
         SemanticSearchArgs(query="hello", path_prefix="../.git"),
         workspace_root=tmp_path,

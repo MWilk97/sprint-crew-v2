@@ -141,7 +141,7 @@ async def test_from_prompt_planning_stops_work_lane_when_scrum_master_fails(tmp_
     stop_mock = AsyncMock()
     with (
         patch("sprint_crew.orchestrator.prompt_run.prepare_workspace", return_value=tmp_path),
-        patch("sprint_crew.orchestrator.prompt_run.maybe_index_workspace"),
+        patch("sprint_crew.orchestrator.prompt_run.maybe_index_shared"),
         patch("sprint_crew.orchestrator.prompt_run.enrich_repo_context", return_value=""),
         patch("sprint_crew.orchestrator.prompt_run.ensure_lane", new=AsyncMock()),
         patch("sprint_crew.orchestrator.prompt_run.stop_lane", new=stop_mock),

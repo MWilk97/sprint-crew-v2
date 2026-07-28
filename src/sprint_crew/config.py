@@ -126,9 +126,17 @@ class Settings(BaseSettings):
         default=Path.home() / "sprint-workspaces",
         alias="SPRINT_WORKSPACE_BASE",
     )
-    # Stopgap workspace GC: clones older than this are swept on the next prepare_workspace.
-    # TODO(M8): delete once the store-aware reaper lands (see roadmap milestone M8).
-    workspace_ttl_days: float = Field(default=14.0, alias="WORKSPACE_TTL_DAYS")
+    # Depth 50 rather than 1: the clone is now a session-long reference checkout, and the
+    # agents' git_log tool returns almost nothing against a single-commit history.
+    git_clone_depth: int = Field(default=50, alias="GIT_CLONE_DEPTH")
+    # Console sessions own a clone from creation (roadmap M8). Both switches exist because
+    # a repo that cannot be cloned, or an embed sidecar that is down, must not stop a
+    # session being created — and because CI wants neither.
+    console_workspace_on_create: bool = Field(default=True, alias="CONSOLE_WORKSPACE_ON_CREATE")
+    console_index_on_create: bool = Field(default=True, alias="CONSOLE_INDEX_ON_CREATE")
+    # Every session is a clone, so disk is the binding constraint. Beyond this, terminal
+    # sessions' workspaces are evicted least-recently-used first.
+    console_max_workspaces: int = Field(default=10, alias="CONSOLE_MAX_WORKSPACES")
     checkpoint_db: Path = Field(
         default=Path.home() / ".sprint-crew" / "checkpoints.db",
         alias="SPRINT_CHECKPOINT_DB",
@@ -171,6 +179,12 @@ class Settings(BaseSettings):
     )
     vector_top_k: int = Field(default=8, alias="VECTOR_TOP_K")
     vector_score_threshold: float = Field(default=0.55, alias="VECTOR_SCORE_THRESHOLD")
+    # Repo-keyed collections outlive the runs that built them (roadmap M8), so an LRU cap
+    # is what bounds Qdrant instead of the old delete-after-every-run. 0 disables the cap.
+    vector_max_collections: int = Field(default=10, alias="VECTOR_MAX_COLLECTIONS")
+    # Drop prefixed collections the manifest does not know — session-keyed leftovers from
+    # before the re-key, and overlays whose run died before its cleanup ran.
+    vector_orphan_sweep: bool = Field(default=True, alias="VECTOR_ORPHAN_SWEEP")
 
     @property
     def project_root(self) -> Path:

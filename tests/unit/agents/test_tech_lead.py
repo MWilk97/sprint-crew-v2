@@ -15,7 +15,12 @@ from sprint_crew.agents.tech_lead_planning import run_tech_lead_validated
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.repo_context import gather_repo_context, paths_from_ticket
 from sprint_crew.schemas.ticket import JiraTicket, PlanStep, TaskPlan
+from sprint_crew.vector.scope import IndexScope
 from sprint_crew.vector.search import SearchHit
+
+
+def _scope() -> IndexScope:
+    return IndexScope(repo_key="k", shared="shared", overlay="overlay")
 
 
 def test_paths_from_ticket_extracts_greeter_py() -> None:
@@ -77,7 +82,7 @@ def test_enrich_repo_context_appends_semantic_section(tmp_workspace, monkeypatch
 
     from sprint_crew.orchestrator.repo_context import enrich_repo_context
 
-    text = enrich_repo_context(tmp_workspace, "sess-1", "authentication middleware")
+    text = enrich_repo_context(tmp_workspace, _scope(), "authentication middleware")
     assert "=== repo_manifest" in text
     assert "=== pre_search" in text
     assert text.count("auth.py") == 1
@@ -112,7 +117,7 @@ def test_enrich_repo_context_with_hits_returns_hit_list(tmp_workspace, monkeypat
         pre_search_agent_event,
     )
 
-    text, hits = enrich_repo_context_with_hits(tmp_workspace, "sess-1", "authentication")
+    text, hits = enrich_repo_context_with_hits(tmp_workspace, _scope(), "authentication")
     assert hits == [hit]
     assert "auth.py" in text
     event = pre_search_agent_event("authentication", hits)
@@ -154,7 +159,7 @@ def test_append_programmatic_semantic_search_records_tool_log() -> None:
     ):
         result = _append_programmatic_semantic_search(
             "handoff text",
-            session_id="sess-1",
+            collections=("overlay", "shared"),
             ticket=ticket,
             tool_log=log,
         )

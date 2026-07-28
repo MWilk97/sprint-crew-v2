@@ -21,10 +21,11 @@ from sprint_crew.graph.lanes import ensure_lane, stop_lane
 from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
 from sprint_crew.orchestrator.emitter import Emitter, emit_live, reset_emitter, set_emitter
 from sprint_crew.orchestrator.event_log import event_log
-from sprint_crew.orchestrator.repo_context import enrich_repo_context, maybe_index_workspace
+from sprint_crew.orchestrator.repo_context import enrich_repo_context, maybe_index_shared
 from sprint_crew.orchestrator.session import prepare_workspace
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import BacklogRun, agent_event
+from sprint_crew.vector.scope import index_scope_for
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +82,11 @@ async def _plan(workspace_id: str, prompt: str, repo_url: str | None) -> Backlog
             repo_url=repo_url,
         )
     )
-    await asyncio.to_thread(maybe_index_workspace, workspace, workspace_id, prompt=prompt)
-    repo_context = await asyncio.to_thread(enrich_repo_context, workspace, workspace_id, prompt)
+    # A fresh clone, so this is the repository's committed state — the one workspace
+    # allowed to refresh the shared index. No overlay: nothing has been edited yet.
+    scope = index_scope_for(workspace)
+    await asyncio.to_thread(maybe_index_shared, workspace, scope, prompt=prompt)
+    repo_context = await asyncio.to_thread(enrich_repo_context, workspace, scope, prompt)
 
     work_lane = Role.WORK
     await ensure_lane(work_lane)

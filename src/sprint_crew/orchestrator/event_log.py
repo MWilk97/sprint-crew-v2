@@ -135,6 +135,15 @@ class EventLog:
     def has_events(self, console_session_id: str) -> bool:
         return self.max_seq(console_session_id) > 0
 
+    def delete_for_session(self, console_session_id: str) -> None:
+        """Drop one session's timeline. Only the delete route calls this — the reaper
+        deliberately leaves events alone, as it always has."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM events WHERE console_session_id = ?",
+                (console_session_id,),
+            )
+
     def clear(self) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM events")

@@ -25,12 +25,16 @@ from sprint_crew.api.console.state import (
     _utc_now_iso,
     arun_console_reaper,
     close_review,
+    drop_lock,
     emit,
+    list_sessions_page,
     pending_review,
+    purge_session,
     require_session,
     router,
     touch,
 )
+from sprint_crew.api.console.workspace import schedule_workspace_prep
 from sprint_crew.orchestrator.run_registry import run_registry
 from sprint_crew.schemas.console import (
     ClarifyRequest,
@@ -38,12 +42,17 @@ from sprint_crew.schemas.console import (
     ConsoleMessageRole,
     ConsoleMode,
     ConsoleSession,
+    ConsoleSessionPage,
     ConsoleSessionStatus,
+    ConsoleSessionSummary,
     CreateConsoleSessionRequest,
     PostMessageRequest,
     SprintRunRef,
 )
 from sprint_crew.schemas.session import agent_event
+
+# How much of the opening message becomes a session's title in the history list.
+_TITLE_CHARS = 120
 
 
 @router.post("/sessions", response_model=ConsoleSession, status_code=201)
@@ -56,6 +65,9 @@ async def create_console_session(body: CreateConsoleSessionRequest) -> ConsoleSe
         target_language=body.target_language,
     )
     async with _lock_for(session.session_id):
+        # Before clarify, not after: the clone runs while the Interpreter thinks (15-120 s),
+        # instead of starting once it is done.
+        schedule_workspace_prep(session)
         if body.initial_prompt:
             session.messages.append(
                 ConsoleMessage(role=ConsoleMessageRole.USER, content=body.initial_prompt)
@@ -63,6 +75,55 @@ async def create_console_session(body: CreateConsoleSessionRequest) -> ConsoleSe
             await enter_clarifying(session)
         await touch(session)
     return session
+
+
+@router.get("/sessions", response_model=ConsoleSessionPage)
+async def list_console_sessions(limit: int = 25, offset: int = 0) -> ConsoleSessionPage:
+    """Session history, newest first. Summaries only — see `GET /sessions/{id}` for one."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    sessions, total = await list_sessions_page(limit=limit, offset=offset)
+    return ConsoleSessionPage(
+        sessions=[_summarize(s) for s in sessions],
+        total=total,
+        next_offset=offset + limit if offset + limit < total else None,
+    )
+
+
+def _summarize(session: ConsoleSession) -> ConsoleSessionSummary:
+    first_user = next(
+        (m.content for m in session.messages if m.role is ConsoleMessageRole.USER),
+        None,
+    )
+    return ConsoleSessionSummary(
+        session_id=session.session_id,
+        mode=session.mode,
+        status=session.status,
+        workspace_status=session.workspace_status,
+        title=first_user[:_TITLE_CHARS] if first_user else None,
+        repo_url=session.repo_url,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+    )
+
+
+@router.delete("/sessions/{id}", status_code=204)
+async def delete_console_session(id: str) -> None:
+    """Delete a session and everything it owns: row, clone, diffs, timeline.
+
+    Refuses while a run is live rather than cancelling implicitly — deleting the session
+    under a running agent would leave the run writing into a workspace nobody owns.
+    """
+    await require_session(id)
+    async with _lock_for(id):
+        session = await require_session(id)
+        if session.status in _STARTED_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"session is {session.status.value}; cancel it before deleting",
+            )
+        await purge_session(session)
+    drop_lock(id)
 
 
 @router.get("/sessions/{id}", response_model=ConsoleSession)

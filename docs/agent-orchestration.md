@@ -157,14 +157,21 @@ Semantic retrieval layer. **On by default** (`VECTOR_INDEX_ENABLED=true` on GX10
 
 ### When indexing runs
 
-Orchestrator calls `maybe_index_workspace` after `prepare_workspace` when:
+Two tiers since M8 ([ADR 0016](adr/0016-durable-repo-index.md)): a **shared** collection per
+repository holding committed state, and a per-run **overlay** holding whatever differs from it.
 
-- `should_use_vector` is true (ticket/prompt complexity is **SIMPLE** or **COMPLEX**), and
-- the workspace has at least one indexable file.
+- `maybe_index_shared` runs against a pristine clone only — console session creation and
+  from-prompt planning. It is what a second session on the same repo starts warm from.
+- `maybe_index_overlay` runs at sprint-session start and again after `codeImplement`, so the
+  agent's own edits are searchable instead of the index going stale mid-run.
 
-**TRIVIAL** tickets (greeter template fast-path) skip indexing and retrieval entirely.
+Both are gated on `should_use_vector` (ticket/prompt complexity **SIMPLE** or **COMPLEX**) and
+on the workspace having at least one indexable file. **TRIVIAL** tickets (greeter template
+fast-path) skip indexing and retrieval entirely.
 
-Failures are logged and the sprint continues without semantic search.
+Re-indexing is incremental: `vector/manifest.py` keeps per-file content hashes and only
+changed files are re-embedded. Failures are logged and the sprint continues without semantic
+search.
 
 ### Infrastructure
 
@@ -180,7 +187,7 @@ Default embedding model: `jinaai/jina-embeddings-v2-base-code` (Apache 2.0, CPU 
 
 | Consumer | Behavior |
 |----------|----------|
-| **Interpreter** (console clarify) | No index today — questions are grounded in the prompt only; wiring a workspace into clarify is follow-up work (ADR 0013) |
+| **Interpreter** (console clarify) | No index today — questions are grounded in the prompt only. M8 gives the session a warm index at creation, so the remaining work is passing `repo_context` into `run_interpreter` (M9, ADR 0013) |
 | **ScrumMaster** (`from-prompt`) | `enrich_repo_context` adds repo manifest + pre_search + semantic hits |
 | **TechLead static** (SIMPLE) | `enrich_repo_context` pre-fetches manifest + pre_search into Work lane prompt |
 | **TechLead tool_loop** (COMPLEX) | Seeded manifest/pre_search in loop prompt; `semantic_search` tool + verify with `grep` / `read_file`; JSON step uses ground-truth `repo_context` + handoff |

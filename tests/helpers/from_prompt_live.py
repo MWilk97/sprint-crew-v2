@@ -11,12 +11,14 @@ from sprint_crew.orchestrator.backlog import BacklogRunStore, normalize_backlog_
 from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
 from sprint_crew.orchestrator.repo_context import (
     enrich_repo_context_with_hits,
-    maybe_index_workspace,
+    maybe_index_shared,
 )
 from sprint_crew.orchestrator.session import SessionStore, prepare_workspace
 from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus, SprintSession
+from sprint_crew.vector.scope import IndexScope, index_scope_for
 from sprint_crew.vector.search import semantic_search
+from sprint_crew.vector.store import collection_for_run
 from tests.helpers.vector_ab import copy_fixture_workspace
 from tests.helpers.vector_tiers import failure_class_from_session, last_gate_result
 
@@ -105,8 +107,9 @@ async def run_from_prompt_live(
     _git_root, repo_url = init_vector_repo_git(fixture_path, tmp_path, name=f"git-{run_id[:8]}")
 
     workspace = prepare_workspace(scrum_workspace_id, source=fixture_path)
-    maybe_index_workspace(workspace, scrum_workspace_id, prompt=prompt)
-    repo_context, _pre_hits = enrich_repo_context_with_hits(workspace, scrum_workspace_id, prompt)
+    scope = index_scope_for(workspace)
+    maybe_index_shared(workspace, scope, prompt=prompt)
+    repo_context, _pre_hits = enrich_repo_context_with_hits(workspace, scope, prompt)
 
     work_lane = Role.WORK
     await ensure_lane(work_lane)
@@ -166,10 +169,13 @@ def verify_prompt_surfaces_path(
     top_k: int = 5,
 ) -> PostCheckResult:
     """Re-index final workspace and search per fragment; used after backlog cleanup drops Qdrant."""
+    # A throwaway collection of its own: the run's overlays are dropped on cleanup, and
+    # this postcheck must not write into the shared repo index it is auditing.
     collection_id = postcheck_collection_id(run_id)
-    index_result = maybe_index_workspace(
+    scope = IndexScope(repo_key="postcheck", shared=collection_for_run(collection_id))
+    index_result = maybe_index_shared(
         workspace,
-        collection_id,
+        scope,
         prompt=_index_prompt_for_fragments(fragments),
     )
     chunks = index_result.chunks if index_result is not None else None
@@ -180,7 +186,7 @@ def verify_prompt_surfaces_path(
 
     for fragment in fragments:
         query = POSTCHECK_QUERIES.get(fragment, fragment)
-        hits = semantic_search(collection_id, query, top_k=top_k)
+        hits = semantic_search(scope.collections, query, top_k=top_k)
         hit_pairs = [(h.path, h.score) for h in hits]
         hits_by_fragment[fragment] = hit_pairs
         found = any(fragment in path for path, _score in hit_pairs)

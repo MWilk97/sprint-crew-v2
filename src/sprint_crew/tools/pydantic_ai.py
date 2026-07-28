@@ -32,6 +32,7 @@ from sprint_crew.tools.read_file import ReadFileArgs
 from sprint_crew.tools.run_command import RunCommandArgs
 from sprint_crew.tools.semantic_search import SemanticSearchArgs, semantic_search_tool
 from sprint_crew.tools.write_file import WriteFileArgs
+from sprint_crew.vector.scope import index_scope_for
 
 
 @dataclass
@@ -399,7 +400,8 @@ def workspace_deps(
     tools = list(ALL_TOOLS if mutate else READONLY_TOOLS)
     settings = get_settings()
     if include_semantic_search and settings.vector_index_enabled:
-        tools.append(semantic_search_tool(session_id or root.name))
+        scope = index_scope_for(root, run_scope_id=session_id or root.name)
+        tools.append(semantic_search_tool(scope.collections))
     if require_full_coverage is None:
         require_full_coverage = settings.coder_early_exit_requires_coverage
     return WorkspaceDeps(

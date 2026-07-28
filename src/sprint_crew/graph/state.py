@@ -7,6 +7,7 @@ from typing import Annotated, Any, TypedDict
 from sprint_crew.schemas.change import CodeChange
 from sprint_crew.schemas.session import AgentEvent, SessionStatus
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
+from sprint_crew.vector.scope import IndexScope, index_scope_for
 
 
 class SprintState(TypedDict, total=False):
@@ -59,6 +60,11 @@ def task_plan_from_state(state: SprintState) -> TaskPlan:
 
 def code_change_from_state(state: SprintState) -> CodeChange:
     return CodeChange.model_validate(state["code_change"])
+
+
+def index_scope_from_state(state: SprintState) -> IndexScope:
+    """The run's collections: its own overlay in front of the repo's shared index (M8)."""
+    return index_scope_for(workspace_from_state(state), run_scope_id=state["session_id"])
 
 
 def workspace_from_state(state: SprintState) -> Path:
