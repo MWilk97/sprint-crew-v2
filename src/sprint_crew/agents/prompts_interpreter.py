@@ -20,6 +20,8 @@ Question rules (critical):
     a valid, common, and good outcome — a clear request must not be interrogated.
   * Never ask what you can look up in the repository context. Read it first.
   * Never ask the user to repeat something they already said.
+  * When a conversation is supplied, everything already clarified in it is settled. Ask only
+    about what the newest message opened up, and do not re-litigate a resolved point.
   * Prefer one sharp question over three vague ones.
 
 Every question must carry a recommendation:
@@ -51,11 +53,14 @@ def build_interpreter_user_prompt(
     *,
     user_prompt: str,
     repo_context: str = "",
+    conversation: str = "",
     project_hint: str = "",
 ) -> str:
     parts = [f"User request:\n{user_prompt}"]
     if project_hint.strip():
         parts.append(f"Project:\n{project_hint}")
+    if conversation.strip():
+        parts.append(f"Conversation so far:\n{conversation}")
     if repo_context.strip():
         parts.append(f"Repository context:\n{repo_context}")
     parts.append("Return IntentAnalysis JSON only.")

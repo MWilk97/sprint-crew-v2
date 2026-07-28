@@ -11,11 +11,16 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
-from sprint_crew.api.console.clarify import apply_clarify_answers, enter_clarifying
+from sprint_crew.api.console.clarify import (
+    StaleClarifyRoundError,
+    apply_clarify_answers,
+    enter_clarifying,
+)
 from sprint_crew.api.console.run_bridge import (
     build_plan_result,
     build_run_prompt,
     cancel_backlog_run,
+    sync_ask_state,
     sync_sprint_progress,
 )
 from sprint_crew.api.console.state import (
@@ -122,6 +127,13 @@ async def delete_console_session(id: str) -> None:
                 status_code=409,
                 detail=f"session is {session.status.value}; cancel it before deleting",
             )
+        await sync_ask_state(session)
+        if session.ask_in_flight:
+            # Same reason as a live run: purging the workspace under the Explainer would
+            # leave it reading files out of a directory nobody owns.
+            raise HTTPException(
+                status_code=409, detail="an answer is being generated; cancel the ask first"
+            )
         await purge_session(session)
     drop_lock(id)
 
@@ -132,6 +144,7 @@ async def get_console_session(id: str) -> ConsoleSession:
     async with _lock_for(id):
         session = await require_session(id)
         await sync_sprint_progress(session)
+        await sync_ask_state(session)
         if session.status in _TERMINAL_STATUSES:
             await arun_console_reaper()
         return session
@@ -139,6 +152,14 @@ async def get_console_session(id: str) -> ConsoleSession:
 
 @router.post("/sessions/{id}/messages", response_model=ConsoleSession)
 async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSession:
+    """Add a message and re-interpret. No longer inert outside ``collecting`` (roadmap M9).
+
+    A message sent while clarifying or ready used to be appended and silently ignored, which
+    made the composer a lie in the two states a user is most likely to want it. It now
+    re-runs the Interpreter over the whole conversation, which *replaces* the open question
+    set — see ``clarify.roll_clarify_round``. ``ready`` can therefore go back to
+    ``clarifying``, the first backwards transition in this state machine.
+    """
     await require_session(id)
     async with _lock_for(id):
         session = await require_session(id)
@@ -147,9 +168,25 @@ async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSess
                 status_code=409,
                 detail=f"session is {session.status.value}; no further messages accepted",
             )
+        await sync_ask_state(session)
+        if session.ask_in_flight:
+            raise HTTPException(
+                status_code=409,
+                detail="an answer is being generated; wait for it or cancel the ask",
+            )
         session.messages.append(ConsoleMessage(role=ConsoleMessageRole.USER, content=body.content))
-        if session.status is ConsoleSessionStatus.COLLECTING:
-            await enter_clarifying(session)
+        rolled = await enter_clarifying(session)
+        if rolled:
+            await emit(
+                session,
+                agent_event(
+                    "orchestrator",
+                    "clarify_round_started",
+                    f"Clarify round {session.clarify_round}",
+                    round=session.clarify_round,
+                    questions=len(session.clarify_questions),
+                ),
+            )
         await touch(session)
         return session
 
@@ -166,6 +203,10 @@ async def submit_clarify_answers(id: str, body: ClarifyRequest) -> ConsoleSessio
             )
         try:
             apply_clarify_answers(session, body.answers)
+        except StaleClarifyRoundError as exc:
+            # 409, not 400: the request was well formed and was correct when the client
+            # rendered it. The question set moved on — refetch and answer the new one.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await touch(session)
@@ -253,6 +294,11 @@ async def cancel_console_session(id: str) -> ConsoleSession:
 
         run_id = session.sprint_ref.backlog_run_id if session.sprint_ref else None
         registry = run_registry()
+        await sync_ask_state(session)
+        if session.active_ask_id is not None:
+            # Ending the session ends the question asked inside it: otherwise the Explainer
+            # keeps the lane and appends an answer to a session nobody is watching.
+            registry.cancel(session.active_ask_id, reason="session cancelled")
         live = run_id is not None and registry.get(run_id) is not None
         was_queued = live and registry.position(run_id) is not None
         if live:

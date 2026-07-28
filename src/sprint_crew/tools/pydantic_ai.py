@@ -391,6 +391,7 @@ def workspace_deps(
     session_id: str | None = None,
     event_agent: str = "agent",
     include_semantic_search: bool = False,
+    index_overlay: bool = True,
     acceptance_tests: tuple[str, ...] | None = None,
     tool_call_log: ToolCallLog | None = None,
     task_plan: TaskPlan | None = None,
@@ -400,7 +401,13 @@ def workspace_deps(
     tools = list(ALL_TOOLS if mutate else READONLY_TOOLS)
     settings = get_settings()
     if include_semantic_search and settings.vector_index_enabled:
-        scope = index_scope_for(root, run_scope_id=session_id or root.name)
+        # ``index_overlay=False`` for a console ask (M9): it reads the session's pristine
+        # checkout, so there is no run overlay to layer — and minting one keyed on the
+        # console session id would both search a collection that does not exist and collide
+        # with the overlay a later run on that same session creates.
+        scope = index_scope_for(
+            root, run_scope_id=(session_id or root.name) if index_overlay else None
+        )
         tools.append(semantic_search_tool(scope.collections))
     if require_full_coverage is None:
         require_full_coverage = settings.coder_early_exit_requires_coverage

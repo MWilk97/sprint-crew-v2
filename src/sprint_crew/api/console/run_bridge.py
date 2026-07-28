@@ -9,7 +9,7 @@ import asyncio
 
 from sprint_crew.api.console.clarify import (
     _user_text,
-    clarification_lines,
+    all_clarification_lines,
     resolve_answer_text,
 )
 from sprint_crew.api.console.state import _TERMINAL_STATUSES, pending_review, touch
@@ -23,6 +23,23 @@ from sprint_crew.schemas.console import (
     PlanPreviewStory,
 )
 from sprint_crew.schemas.session import BacklogRunStatus
+
+
+async def sync_ask_state(session: ConsoleSession) -> None:
+    """Recompute ``ask_in_flight`` from the registry (roadmap M9).
+
+    Derived rather than owned, like ``awaiting_review``: a persisted boolean would survive
+    a restart that killed the task, and a client would be left with a composer disabled
+    forever by an answer that can never arrive. Not persisted here — the read path only
+    needs the response to be right, and every writer touches the session anyway.
+    """
+    if session.active_ask_id is None:
+        session.ask_in_flight = False
+        return
+    live = run_registry().get(session.active_ask_id) is not None
+    session.ask_in_flight = live
+    if not live:
+        session.active_ask_id = None
 
 
 def cancel_backlog_run(run_id: str) -> None:
@@ -44,7 +61,9 @@ def build_run_prompt(session: ConsoleSession) -> str:
     # rediscover them.
     if session.intent is not None and session.intent.assumptions:
         parts.append("Assumptions:\n" + "\n".join(f"- {a}" for a in session.intent.assumptions))
-    lines = clarification_lines(session)
+    # Every round, not just the open one: an answer given before the user sent another
+    # message is still a decision the run has to honour (M9).
+    lines = all_clarification_lines(session)
     if lines:
         parts.append("Clarifications:\n" + "\n".join(lines))
     return "\n\n".join(parts)

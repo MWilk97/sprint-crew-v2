@@ -75,16 +75,16 @@ def test_conversion_assigns_stable_ids_and_resolves_recommendation() -> None:
     questions = to_clarify_questions(_analysis(), limit=4)
     assert len(questions) == 1
     question = questions[0]
-    assert question.question_id == "q-1"
-    assert [s.suggestion_id for s in question.suggestions] == ["s-1-1", "s-1-2"]
-    assert question.recommended_suggestion_id == "s-1-1"
+    assert question.question_id == "q-1-1"
+    assert [s.suggestion_id for s in question.suggestions] == ["s-1-1-1", "s-1-1-2"]
+    assert question.recommended_suggestion_id == "s-1-1-1"
     assert question.why_asked
     assert question.suggestions[0].rationale == "matches scraper defaults"
 
 
 def test_conversion_clamps_out_of_range_recommendation() -> None:
     analysis = _analysis(questions=[_question(recommended_index=99)])
-    assert to_clarify_questions(analysis, limit=4)[0].recommended_suggestion_id == "s-1-2"
+    assert to_clarify_questions(analysis, limit=4)[0].recommended_suggestion_id == "s-1-1-2"
 
 
 def test_conversion_enforces_question_limit() -> None:
@@ -123,7 +123,7 @@ def test_create_uses_interpreter_questions(console_client: TestClient) -> None:
     assert len(session["clarify_questions"]) == 1
     question = session["clarify_questions"][0]
     assert question["text"] == "Should /metrics require auth?"
-    assert question["recommended_suggestion_id"] == "s-1-1"
+    assert question["recommended_suggestion_id"] == "s-1-1-1"
     assert session["intent"]["restated_goal"].startswith("Add a /metrics")
     assert session["intent"]["confidence"] == 0.7
 
@@ -142,7 +142,7 @@ def test_interpreter_failure_falls_back_to_stub(console_client: TestClient) -> N
     with _interpreter(error=RuntimeError("lane exploded")):
         session = _create(console_client)
     assert session["status"] == "clarifying"
-    assert session["clarify_questions"][0]["question_id"] == "q-scope"
+    assert session["clarify_questions"][0]["question_id"] == "q-1-scope"
     assert session["intent"] is None
 
 
@@ -150,7 +150,7 @@ def test_cold_lane_falls_back_without_calling_model(console_client: TestClient) 
     with _interpreter(lane=False) as interpreter:
         session = _create(console_client)
     assert session["status"] == "clarifying"
-    assert session["clarify_questions"][0]["question_id"] == "q-scope"
+    assert session["clarify_questions"][0]["question_id"] == "q-1-scope"
     interpreter.assert_not_awaited()
 
 
