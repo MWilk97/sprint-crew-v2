@@ -150,7 +150,21 @@ paths:
   /v1/console/sessions/{id}/messages:
     post:
       operationId: postConsoleMessage
-      summary: Append a user chat message
+      summary: Append a user chat message and re-interpret
+      description: |
+        No longer inert outside `collecting` (M9). A message posted while clarifying or
+        ready re-runs the Interpreter over the whole conversation, which REPLACES the open
+        question set: `clarify_round` increments, `clarify_questions` is a brand new set
+        with new round-scoped ids, previously given answers move to `prior_clarifications`,
+        and `confirmed` is reset because the confirmation belonged to a different
+        understanding of the request.
+
+        Consequences for a client state machine: `ready` can go BACK to `clarifying` — the
+        first backwards transition here — `clarify_questions` is not append-only, and an
+        answered question can stop being answered. Re-render the clarify form from the
+        response rather than merging into what was on screen.
+
+        409 while an ask is in flight: the Interpreter and the Explainer want the same lane.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       requestBody:
@@ -163,7 +177,7 @@ paths:
               content: It should also cover the backlog endpoints
       responses:
         "200":
-          description: Updated session (may transition to clarifying)
+          description: Updated session (may transition to clarifying, in either direction)
           content:
             application/json:
               schema:
@@ -178,6 +192,10 @@ paths:
     post:
       operationId: submitClarifyAnswers
       summary: Answer pending clarify questions
+      description: |
+        Question ids are round-scoped since M9 (`q-{round}-{n}`). Answering an id from a
+        superseded round is 409, not 400: the request was correct when it was rendered, and
+        the fix is to refetch the session and answer the set that is open now.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       requestBody:
@@ -188,10 +206,10 @@ paths:
               $ref: "#/components/schemas/ClarifyRequest"
             example:
               answers:
-                - question_id: q-scope
-                  selected_suggestion_id: s-scope-focused
+                - question_id: q-1-scope
+                  selected_suggestion_id: s-1-scope-focused
                   custom_text: null
-                - question_id: q-tests
+                - question_id: q-1-tests
                   selected_suggestion_id: null
                   custom_text: unit tests only, no live tiers
       responses:
@@ -210,7 +228,13 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/StateConflict"
+          description: |
+            Session is not clarifying, or the answered question belongs to a superseded
+            clarify round — refetch and answer the current one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
         "422":
           $ref: "#/components/responses/ValidationError"
   /v1/console/sessions/{id}/confirm:
@@ -598,6 +622,137 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConsoleError"
+  /v1/console/sessions/{id}/ask:
+    post:
+      operationId: askConsoleSession
+      summary: Ask a question about the repository (M9)
+      description: |
+        Codebase chat: one read-only Explainer turn against the session's checkout. No
+        ticket, no branch, no commit — nothing this produces reaches git.
+
+        Returns 202 immediately. The answer arrives on the SAME event stream as the
+        timeline (GET .../stream or .../events), not on a channel of its own, as:
+
+          ask_started -> tool_call* -> answer_delta* -> citation* -> answer_complete
+
+        every event carrying `detail.message_id` — the id of the assistant message this
+        response has already appended to `messages`. Render answer_delta chunks as they
+        arrive, then REPLACE the bubble with `detail.text` from answer_complete: that
+        field is authoritative, the deltas are a preview, and replacing is what makes a
+        reconnect (which replays deltas from the log) idempotent. ask_failed ends the
+        answer instead; the bubble should show the error, not keep spinning.
+
+        A cold Work lane is minutes, and lane_loading / lane_ready arrive first. Render
+        that as a real state — a bare spinner reads as broken. There is deliberately no
+        warm-lane policy (ADR 0017).
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+      responses:
+        "202":
+          description: |
+            Accepted. The session already carries the question as a user message; the
+            assistant message it will be answered into is the last one, and its
+            message_id is what the stream's events reference.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "404":
+          description: Unknown session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "409":
+          description: |
+            Not askable right now, and `detail` says which: a run is live in this session
+            or any other (the Work lane is single-tenant), the checkout is not ready yet,
+            an answer is already being generated, or chat is disabled on this server.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+  /v1/console/sessions/{id}/ask/cancel:
+    post:
+      operationId: cancelConsoleAsk
+      summary: Stop generating the current answer (M9)
+      description: |
+        Distinct from POST /cancel, which ends the whole session: abandoning a question is
+        not a reason to throw away the conversation it was asked in. Cancel is cooperative
+        then hard, like a run's (ADR 0014), so expect ask_failed shortly rather than
+        immediately.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Cancel accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+        "404":
+          description: Unknown session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "409":
+          description: No answer is being generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+  /v1/console/sessions/{id}/files/{path}:
+    get:
+      operationId: getConsoleFile
+      summary: Read one file from the session's checkout (M9)
+      description: |
+        What makes a citation a link rather than inert text. Read-only and guarded by the
+        same path safety every agent tool goes through, so it cannot read anything a tool
+        could not.
+
+        This is the session's checkout — the repository's committed state — not the run's
+        working tree. For files a run has changed, use the diff endpoints instead.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: path
+          in: path
+          required: true
+          description: Repository-relative path. Percent-encode "#", "?" and "%".
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: The file's contents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleFile"
+        "400":
+          description: Path escapes the workspace or is otherwise unsafe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "404":
+          description: Unknown session, or the path is not a file in the checkout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "409":
+          description: The session has no ready checkout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
 components:
   securitySchemes:
     bearerAuth:
@@ -699,8 +854,72 @@ components:
         content:
           type: string
           minLength: 1
+        message_id:
+          type: string
+          minLength: 1
+          description: |
+            Stable identity for one turn (M9). Every ask_started / answer_delta /
+            citation / answer_complete / ask_failed event carries this in `detail`,
+            so a client can grow the right bubble when more than one answer exists.
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnswerCitation"
+          description: Only ever populated on an assistant turn produced by an ask (M9).
         timestamp:
           type: string
+    AnswerCitation:
+      type: object
+      additionalProperties: false
+      required: [path, source]
+      description: |
+        Where an answer came from (M9). Derived from the Explainer's tool log and the
+        answer's own inline `path:line` references, never asked of the model. Fetch the
+        file with GET /v1/console/sessions/{id}/files/{path} to render a link.
+      properties:
+        path:
+          type: string
+          minLength: 1
+          description: Repository-relative path in the session's checkout.
+        start_line:
+          type: [integer, "null"]
+          minimum: 1
+        end_line:
+          type: [integer, "null"]
+          minimum: 1
+        source:
+          type: string
+          description: |
+            Which evidence produced it: "read_file" (the answer opened this file),
+            "semantic_search" (it was shown this hit), or "answer" (the prose named a
+            path that exists but was not opened). A UI may rank them in that order.
+    AskRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        question:
+          type: string
+          minLength: 1
+    ConsoleFile:
+      type: object
+      additionalProperties: false
+      required: [path, content, size_bytes]
+      properties:
+        path:
+          type: string
+          minLength: 1
+        content:
+          type: string
+          description: UTF-8 with replacement characters; a prefix when truncated is true.
+        size_bytes:
+          type: integer
+          minimum: 0
+          description: The file's real size, not the length of `content`.
+        truncated:
+          type: boolean
+          default: false
+          description: True when the file exceeded CONSOLE_FILE_MAX_BYTES.
     ClarifySuggestion:
       type: object
       additionalProperties: false
@@ -894,6 +1113,36 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ClarifyAnswer"
+        clarify_round:
+          type: integer
+          minimum: 1
+          default: 1
+          description: |
+            Which round the open questions belong to (M9). A message posted while
+            clarifying or ready re-runs the Interpreter, which REPLACES the question
+            set and increments this. Question ids are round-scoped (`q-{round}-{n}`),
+            so answering an id from a previous round gets 409, not 400 — refetch the
+            session and answer the current set. Do not treat `clarify_questions` as
+            append-only, and do not assume an answered question stays answered.
+        prior_clarifications:
+          type: array
+          items:
+            type: string
+          description: |
+            Resolved Q&A from superseded rounds, kept as context (M9). Still things
+            the user told us, but no longer answers — the questions are gone. Render
+            as history, not as a form.
+        active_ask_id:
+          type: [string, "null"]
+          description: The in-flight ask, if any (M9). See `ask_in_flight`.
+        ask_in_flight:
+          type: boolean
+          default: false
+          description: |
+            True while an answer is being generated (M9). Derived from the server's
+            run registry on every read rather than stored, so it is false again after
+            a restart that killed the task. Disable the composer while it is true;
+            `POST /messages` and `DELETE /sessions/{id}` both 409.
         sprint_ref:
           oneOf:
             - $ref: "#/components/schemas/SprintRunRef"
@@ -1035,6 +1284,12 @@ components:
         - repo_failed
         - index_progress
         - index_ready
+        - ask_started
+        - answer_delta
+        - citation
+        - answer_complete
+        - ask_failed
+        - clarify_round_started
     AgentEvent:
       type: object
       additionalProperties: false

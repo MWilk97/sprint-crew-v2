@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -19,6 +20,10 @@ from sprint_crew.schemas.session import AgentEvent
 
 def _utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
+
+
+def _message_id() -> str:
+    return f"m-{uuid4().hex[:8]}"
 
 
 class ConsoleMode(str, Enum):
@@ -72,11 +77,34 @@ class ConsoleMessageRole(str, Enum):
     ASSISTANT = "assistant"
 
 
+class AnswerCitation(BaseModel):
+    """Where an answer looked (roadmap M9).
+
+    Derived from the Explainer's tool log rather than asked of the model: the paths it
+    actually opened are a fact, whereas a model asked to cite itself invents line numbers.
+    """
+
+    model_config = STRICT
+
+    path: str = Field(..., min_length=1)
+    start_line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    # Which tool surfaced it: "read_file" is a file the answer opened, "semantic_search" a
+    # hit it was shown. A UI may rank the former higher.
+    source: str = Field(..., min_length=1)
+
+
 class ConsoleMessage(BaseModel):
     model_config = STRICT
 
     role: ConsoleMessageRole
     content: str = Field(..., min_length=1)
+    # Stable identity for one turn (roadmap M9). An answer streams as a sequence of
+    # answer_delta events carrying this id, so a client can grow the right bubble; without
+    # it a session with two answers in flight cannot tell whose text just arrived.
+    message_id: str = Field(default_factory=_message_id, min_length=1)
+    # Only ever on an assistant turn produced by an ask.
+    citations: list[AnswerCitation] = Field(default_factory=list)
     timestamp: str = Field(default_factory=_utc_now_iso)
 
 
@@ -183,6 +211,24 @@ class ClarifyRequest(BaseModel):
     answers: list[ClarifyAnswer] = Field(..., min_length=1)
 
 
+class AskRequest(BaseModel):
+    model_config = STRICT
+
+    question: str = Field(..., min_length=1)
+
+
+class ConsoleFile(BaseModel):
+    """One file from the session's checkout, so a citation can be opened (roadmap M9)."""
+
+    model_config = STRICT
+
+    path: str = Field(..., min_length=1)
+    content: str
+    size_bytes: int = Field(..., ge=0)
+    # True when the file exceeded CONSOLE_FILE_MAX_BYTES and ``content`` is a prefix.
+    truncated: bool = False
+
+
 class ConsoleSession(BaseModel):
     model_config = STRICT
 
@@ -196,6 +242,20 @@ class ConsoleSession(BaseModel):
     intent: IntentSummary | None = None
     clarify_questions: list[ClarifyQuestion] = Field(default_factory=list)
     clarify_answers: list[ClarifyAnswer] = Field(default_factory=list)
+    # Which clarify round the open questions belong to (roadmap M9). A message sent while
+    # clarifying or ready re-runs the Interpreter, which *replaces* the question set; ids are
+    # round-scoped (``q-{round}-{n}``) so an answer submitted against a superseded round is
+    # rejected rather than silently matching a new question that happens to share an index.
+    clarify_round: int = Field(default=1, ge=1)
+    # Resolved Q&A from superseded rounds, kept as Interpreter context. Not answers: they
+    # answer questions nobody is asking any more.
+    prior_clarifications: list[str] = Field(default_factory=list)
+    # The in-flight ask, if any (roadmap M9). Derived state — see ``ask_in_flight``.
+    active_ask_id: str | None = None
+    # Whether ``active_ask_id`` is still live in this process's RunRegistry. Recomputed on
+    # read rather than owned, like ``awaiting_review``: a persisted boolean would survive a
+    # restart that killed the task and leave a client's composer disabled forever.
+    ask_in_flight: bool = False
     sprint_ref: SprintRunRef | None = None
     plan_result: ConsolePlanResult | None = None
     error: str | None = None

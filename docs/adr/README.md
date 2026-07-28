@@ -9,6 +9,7 @@
 | [0014](0014-run-queue-and-cancel.md) | Accepted | Single-slot run queue with cooperative cancel and a hard-cancel watchdog |
 | [0015](0015-human-review-gate.md) | Accepted | A run parks on per-file human review before shipping; reject is feedback, never a partial commit |
 | [0016](0016-durable-repo-index.md) | Accepted | A durable per-repo vector index with a per-run overlay for uncommitted work |
+| [0017](0017-codebase-chat.md) | Accepted | Read-only codebase chat streaming on the session timeline; holds the run slot, refused during a run, no warm lane |
 
 **Why the numbering starts at 0010.** It does not continue an earlier series — 0001–0009 were
 never written. The practice began when the console work started, and the first record was

@@ -82,6 +82,16 @@ class EventType(StrEnum):
     REPO_FAILED = "repo_failed"
     INDEX_PROGRESS = "index_progress"
     INDEX_READY = "index_ready"
+    # M9 codebase chat. Every one of these carries ``message_id`` in ``detail``: a session
+    # can hold several answers, and a delta with no bubble to attach to is unrenderable.
+    ASK_STARTED = "ask_started"
+    ANSWER_DELTA = "answer_delta"
+    CITATION = "citation"
+    ANSWER_COMPLETE = "answer_complete"
+    ASK_FAILED = "ask_failed"
+    # M9 multi-turn clarify: the question set was replaced, so a client holding the old one
+    # must refetch rather than submit answers against ids that no longer exist.
+    CLARIFY_ROUND_STARTED = "clarify_round_started"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]

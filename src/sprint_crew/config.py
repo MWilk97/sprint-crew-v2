@@ -92,6 +92,31 @@ class Settings(BaseSettings):
     interpreter_thinking_timeout_s: float = Field(
         default=600.0, alias="INTERPRETER_THINKING_TIMEOUT_S"
     )
+    # Grounded clarify (roadmap M9). The session owns a checkout from creation (M8), so the
+    # Interpreter can finally obey its own "never ask what you can look up in the repository
+    # context" instruction. Capped because enrich_repo_context returns manifest + grep +
+    # pre-search unbounded, and clarify runs against the 120 s interactive deadline above.
+    clarify_repo_context_enabled: bool = Field(default=True, alias="CLARIFY_REPO_CONTEXT_ENABLED")
+    interpreter_repo_context_chars: int = Field(
+        default=12_000, alias="INTERPRETER_REPO_CONTEXT_CHARS"
+    )
+
+    # Codebase chat (roadmap M9, ADR 0017). An ask is one read-only Explainer turn on the
+    # Work lane. It takes the same single admission slot a run does — not for the queue, but
+    # because ensure_lane stops every other lane, so a run starting mid-ask would pull the
+    # lane out from under it. No warm-lane policy: a cold ask pays the load and says so on
+    # the stream (lane_loading/lane_ready) rather than keeping 23 GB resident between
+    # questions, so AGENTS.md §4.1 stands unamended.
+    console_ask_enabled: bool = Field(default=True, alias="CONSOLE_ASK_ENABLED")
+    max_explainer_turns: int = Field(default=8, alias="MAX_EXPLAINER_TURNS")
+    explainer_timeout_s: float = Field(default=300.0, alias="EXPLAINER_TIMEOUT_S")
+    # Answer text streams as coalesced answer_delta events: one event per this many
+    # characters or per this interval, whichever comes first. A per-token event would be one
+    # SQLite row and one bus publish each, and a 2000-token answer would swamp the timeline.
+    answer_delta_chars: int = Field(default=120, alias="ANSWER_DELTA_CHARS")
+    answer_delta_interval_s: float = Field(default=0.25, alias="ANSWER_DELTA_INTERVAL_S")
+    # Citations point at path + line range, so the console serves file contents read-only.
+    console_file_max_bytes: int = Field(default=262_144, alias="CONSOLE_FILE_MAX_BYTES")
 
     # Coder (Laguna S 2.1) sampling — Poolside-recommended defaults. The NVFP4
     # quant degrades on raw/unset sampling, so we always pin these (T=0.7, top_p

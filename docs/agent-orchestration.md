@@ -187,7 +187,8 @@ Default embedding model: `jinaai/jina-embeddings-v2-base-code` (Apache 2.0, CPU 
 
 | Consumer | Behavior |
 |----------|----------|
-| **Interpreter** (console clarify) | No index today — questions are grounded in the prompt only. M8 gives the session a warm index at creation, so the remaining work is passing `repo_context` into `run_interpreter` (M9, ADR 0013) |
+| **Interpreter** (console clarify) | `enrich_repo_context` over the session's own checkout once `workspace_status` is `ready`, capped at `INTERPRETER_REPO_CONTEXT_CHARS` (M9). Best-effort in every direction — no checkout, a failed gather, or a cold lane all degrade to the deterministic stub, because clarify degrades and never blocks (ADR 0013) |
+| **Explainer** (codebase chat) | Read-only tool loop with `semantic_search`, over the **shared** repo tier only — a session's checkout is committed state, so there is no run overlay to layer (ADR 0016, ADR 0017) |
 | **ScrumMaster** (`from-prompt`) | `enrich_repo_context` adds repo manifest + pre_search + semantic hits |
 | **TechLead static** (SIMPLE) | `enrich_repo_context` pre-fetches manifest + pre_search into Work lane prompt |
 | **TechLead tool_loop** (COMPLEX) | Seeded manifest/pre_search in loop prompt; `semantic_search` tool + verify with `grep` / `read_file`; JSON step uses ground-truth `repo_context` + handoff |

@@ -6,7 +6,7 @@ Implementation status / MVP limitations:
 
 - Sessions are **durable in SQLite** (M1): a session id stays valid across an API restart, and terminal sessions are reaped after `CONSOLE_SESSION_TTL_DAYS`. Per-session locking is process-local, so the single-worker assumption still holds.
 - **Clarify questions are model-generated** by the Interpreter on the Work lane ([ADR 0013](../adr/0013-interpreter-clarify.md)). Question count and wording vary by request; `clarify_questions` may legitimately be **empty**, in which case the session opens directly in `ready`. Clients must not assume a fixed set of `question_id`s.
-- **Fallback:** when the Work lane is cold or the Interpreter call fails, the backend serves the older deterministic questions instead (`q-scope`, `q-tests`, and `q-compat` when the prompt mentions an API/endpoint/route). These have `recommended_suggestion_id: null` and `why_asked: null`, which is how a client can tell the two apart. Clarify never fails the request.
+- **Fallback:** when the Work lane is cold or the Interpreter call fails, the backend serves the older deterministic questions instead (`q-{round}-scope`, `q-{round}-tests`, and `q-{round}-compat` when the prompt mentions an API/endpoint/route). These have `recommended_suggestion_id: null` and `why_asked: null`, which is how a client can tell the two apart. Clarify never fails the request.
 - **Attachments (files/images) are not implemented yet.** The Interpreter model is multimodal and the endpoints are designed in ADR 0013, but no attachment routes exist in this contract version.
 - `POST /start` with `mode=code` reuses the same orchestration as `POST /sprint/from-prompt` (which remains unchanged for direct callers); the clarify answers are appended to the prompt.
 - **Start is non-blocking (M5).** `POST /start` returns `202` as soon as the run is queued. Workspace clone, vector indexing, context enrichment, the Work-lane load and the ScrumMaster call all happen after the response and report on the event stream. Previously the request blocked for the whole planning phase.
@@ -82,7 +82,39 @@ A session owns a checkout from the moment it is created, and preparing it is a *
 - `index_status`: `pending → indexing → ready | skipped | failed`. **`skipped` is not an error** — there was nothing worth indexing, or indexing is switched off.
 - `workspace_root` is the absolute server path, null until ready. `workspace_error` / `index_error` carry the reason on failure.
 - Progress arrives on the timeline as the `repo_*` and `index_*` events (see the `EventType` enum in the OpenAPI spec; the indexing ones are debug-level, one per embed batch). These describe the *session's* checkout and are deliberately distinct from `workspace_ready`, which is a run's planning clone.
-- **Nothing is gated on readiness in M8.** Clarify and start work with a failed or pending workspace; grounding them on the repository is M9. A failed clone has no retry route: create a new session.
+- **Nothing is gated on readiness in M8.** Clarify and start work with a failed or pending workspace. A failed clone has no retry route: create a new session.
+- **M9 consumes readiness.** Clarify is *grounded* in the checkout once `workspace_status` is `ready` and falls back to ungrounded questions otherwise — it never waits. `POST /ask` and `GET .../files/{path}` do require `ready` and return `409` before it.
+
+## Codebase chat (M9)
+
+Ask a question about the repository and get a streamed answer with citations. Read-only: no ticket, no branch, no commit. See [ADR 0017](../adr/0017-codebase-chat.md).
+
+- **`POST /sessions/{id}/ask`** returns `202`. The answer arrives on the **same event stream as the timeline** — there is no second transport to build. The sequence, with each type defined in the OpenAPI `EventType` enum:
+
+  ```text
+  ask_started → tool_call* → answer_delta* → citation* → answer_complete
+                                                       └ or ask_failed
+  ```
+
+  Every one carries `detail.message_id`, matching the assistant `ConsoleMessage` the 202 response has already appended.
+- **The completion event is authoritative; deltas are a preview.** Render `detail.text` from each delta as it arrives, then **replace** the bubble with `answer_complete.detail.text`. The two can differ, and replacing is also what makes reconnect correct: `Last-Event-ID` replays the deltas, so a client that appends would double the answer.
+- **Deltas are coalesced**, not per-token — one event per `ANSWER_DELTA_CHARS` or `ANSWER_DELTA_INTERVAL_S`. They are `debug` level so a level filter can hide them.
+- **A cold Work lane means minutes before the first token**, reported by the lane-load events M4 already emits. Render that as a named state; a bare spinner reads as broken. There is deliberately no warm lane.
+- **When ask is refused (`409`)**, `detail` says which: a run is live *in any session* (the Work lane is single-tenant), the checkout is not ready, an answer is already being generated, or chat is switched off. `ask_in_flight` is derived server-side on every read, so it is `false` again after a restart that killed the task.
+- **`POST /sessions/{id}/ask/cancel`** stops generating without ending the session — abandoning a question is not a reason to discard the conversation. `POST /cancel` cancels an in-flight ask too, as part of ending the session.
+- **`GET /sessions/{id}/files/{path}`** serves one file from the checkout so a citation is a link rather than inert text. Read-only and path-guarded; it cannot read anything an agent tool could not. This is the *committed* checkout — for files a run changed, use the diff endpoints.
+- `citations` on an assistant message carry `path`, optional `start_line`/`end_line`, and `source` (`read_file` | `semantic_search` | `answer`). They are derived from what the agent actually opened, not asked of the model.
+
+## Multi-turn clarify (M9)
+
+`POST /messages` used to be silently ignored outside `collecting`. It now re-runs the Interpreter over the whole conversation, and that **replaces** the open question set. Consequences a client must handle:
+
+- **Question ids are round-scoped**: `q-{round}-{n}`, with `clarify_round` on the session. Re-render the clarify form from the response instead of merging into what is on screen.
+- **`clarify_questions` is not append-only**, and an answered question can stop being answered. Answers from a retired round move to `prior_clarifications` as prose — still decisions the user made, and they still reach the run prompt, but no longer answers to anything.
+- **`ready` can go back to `clarifying`** — the first backwards transition in this state machine.
+- **`confirmed` is revoked** on every re-interpretation: a confirmation belonged to a different understanding of the request.
+- **Answering a retired round is `409`, not `400`.** The request was correct when it was rendered; refetch and answer the current set.
+- A `clarify_round_started` event marks each new round on the timeline, carrying `detail.round`. The first interpretation is not a new round and emits nothing.
 
 ## Session history (M8)
 
@@ -182,23 +214,27 @@ Response `201` — full session object. With no `initial_prompt` the status is `
   "repo_url": "https://github.com/example/service",
   "target_language": null,
   "messages": [
-    {"role": "user", "content": "Add a /metrics endpoint with request counters", "timestamp": "2026-07-16T09:00:00+00:00"}
+    {"role": "user", "content": "Add a /metrics endpoint with request counters", "message_id": "m-1a2b3c4d", "citations": [], "timestamp": "2026-07-16T09:00:00+00:00"}
   ],
   "intent": null,
   "clarify_questions": [
     {
-      "question_id": "q-scope",
+      "question_id": "q-1-scope",
       "text": "Which part of the repo should change?",
       "why_asked": null,
       "recommended_suggestion_id": null,
       "suggestions": [
-        {"suggestion_id": "s-scope-focused", "label": "Only the files needed for this change"},
-        {"suggestion_id": "s-scope-broad", "label": "Related modules too", "detail": "including tests and docs touched by the change"}
+        {"suggestion_id": "s-1-scope-focused", "label": "Only the files needed for this change"},
+        {"suggestion_id": "s-1-scope-broad", "label": "Related modules too", "detail": "including tests and docs touched by the change"}
       ],
       "allow_custom": true
     }
   ],
   "clarify_answers": [],
+  "clarify_round": 1,
+  "prior_clarifications": [],
+  "active_ask_id": null,
+  "ask_in_flight": false,
   "sprint_ref": null,
   "plan_result": null,
   "error": null,
@@ -215,13 +251,13 @@ Return the full session object (same shape as above). The UI polls this for stat
 
 ### POST /v1/console/sessions/{id}/messages
 
-Append a user chat message; the backend may respond with assistant messages and/or move to `clarifying`.
+Append a user chat message and re-interpret. **No longer inert outside `collecting` (M9)** — see [Multi-turn clarify](#multi-turn-clarify-m9).
 
 ```json
 {"content": "It should also cover the backlog endpoints"}
 ```
 
-Response `200`: updated session. Errors: `404`; `409` if the session has already started (`queued` or `running`) or is terminal; `422` empty content.
+Response `200`: updated session, with a **new** `clarify_questions` set whenever the session was already `clarifying` or `ready`. Errors: `404`; `409` if the session has already started (`queued`, `running`, `awaiting_review`), is terminal, or has an answer being generated; `422` empty content.
 
 ### POST /v1/console/sessions/{id}/clarify
 
@@ -230,13 +266,13 @@ Submit answers to pending clarify questions.
 ```json
 {
   "answers": [
-    {"question_id": "q-scope", "selected_suggestion_id": "s-scope-focused", "custom_text": null},
-    {"question_id": "q-tests", "selected_suggestion_id": null, "custom_text": "unit tests only, no live tiers"}
+    {"question_id": "q-1-scope", "selected_suggestion_id": "s-1-scope-focused", "custom_text": null},
+    {"question_id": "q-1-tests", "selected_suggestion_id": null, "custom_text": "unit tests only, no live tiers"}
   ]
 }
 ```
 
-Response `200`: updated session — `status: "ready"` once every pending question is answered, otherwise still `clarifying`. Errors: `404`; `400` unknown `question_id`, both/neither answer fields set, or `custom_text` for a question with `allow_custom: false`; `409` if not in `clarifying`.
+Response `200`: updated session — `status: "ready"` once every pending question is answered, otherwise still `clarifying`. Errors: `404`; `400` unknown `question_id`, both/neither answer fields set, or `custom_text` for a question with `allow_custom: false`; `409` if not in `clarifying`, **or if the answered question belongs to a superseded clarify round** (M9) — refetch the session and answer the set that is open now.
 
 ### POST /v1/console/sessions/{id}/confirm
 

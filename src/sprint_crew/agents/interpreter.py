@@ -20,13 +20,20 @@ from sprint_crew.schemas.console import ClarifyQuestion, ClarifySuggestion
 from sprint_crew.schemas.intent import IntentAnalysis
 
 
-def to_clarify_questions(analysis: IntentAnalysis, *, limit: int) -> list[ClarifyQuestion]:
-    """Map model output to API questions, assigning ids and resolving recommendations."""
+def to_clarify_questions(
+    analysis: IntentAnalysis, *, limit: int, round_no: int = 1
+) -> list[ClarifyQuestion]:
+    """Map model output to API questions, assigning ids and resolving recommendations.
+
+    Ids carry ``round_no`` because a later message re-interprets and replaces the whole set
+    (roadmap M9). Without it, round 2's first question would be ``q-1`` again and would
+    silently inherit round 1's answer.
+    """
     questions: list[ClarifyQuestion] = []
     for q_index, question in enumerate(analysis.questions[:limit], start=1):
         suggestions = [
             ClarifySuggestion(
-                suggestion_id=f"s-{q_index}-{o_index}",
+                suggestion_id=f"s-{round_no}-{q_index}-{o_index}",
                 label=option.label,
                 detail=option.detail,
                 rationale=option.rationale,
@@ -37,7 +44,7 @@ def to_clarify_questions(analysis: IntentAnalysis, *, limit: int) -> list[Clarif
         recommended = suggestions[min(question.recommended_index, len(suggestions) - 1)]
         questions.append(
             ClarifyQuestion(
-                question_id=f"q-{q_index}",
+                question_id=f"q-{round_no}-{q_index}",
                 text=question.text,
                 why_asked=question.why_asked,
                 suggestions=suggestions,
@@ -52,6 +59,7 @@ async def run_interpreter(
     *,
     user_prompt: str,
     repo_context: str = "",
+    conversation: str = "",
     project_hint: str = "",
     role: Role | None = None,
     thinking: bool | None = None,
@@ -74,6 +82,7 @@ async def run_interpreter(
         user_prompt=build_interpreter_user_prompt(
             user_prompt=user_prompt,
             repo_context=repo_context,
+            conversation=conversation,
             project_hint=project_hint,
         ),
         output_type=IntentAnalysis,

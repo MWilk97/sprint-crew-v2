@@ -1,6 +1,6 @@
 # Backend roadmap — interactive console ("Cursor-like") for sprint-crew-v2
 
-**Status:** M0–M8 are **landed**; M9 onward is **proposed**.
+**Status:** M0–M9 are **landed**; M10 onward is **proposed**.
 Each milestone below carries its own status line — the per-milestone marker is authoritative.
 **Scope:** backend (`sprint-crew-v2`) only. Front-end work is *flagged but not planned* here; every
 contract change carries an `FE →` note for the separate front-end roadmap session.
@@ -465,6 +465,23 @@ history — fine for indexing, but `git log` as an agent tool returns almost not
 
 ### M9 — Codebase chat and grounded clarify
 
+**Status (2026-07-28):** Landed. Explainer in `agents/explainer.py`, routes in
+`api/console/ask.py`, grounding and rounds in `api/console/clarify.py`. See
+[ADR 0017](adr/0017-codebase-chat.md). Six deliberate deviations from the plan below:
+the answer **streams as coalesced token deltas** rather than per-turn — the roadmap's ban
+on token streaming is about `structured_completion`'s guided JSON, which this agent does
+not use — with `answer_complete` carrying the authoritative text and deltas treated as a
+preview, which is also what makes an SSE reconnect idempotent; citations are **derived**
+from the tool log and the answer's own `path:line` references rather than asked of the
+model, so no second model call is needed and no line number is invented; an ask is
+**submitted through the RunRegistry** so a run started mid-ask cannot pull the lane out
+from under it via `ensure_lane`, on top of the planned 409-while-running; `GET
+.../files/{path}` was added because a citation with nothing to fetch is inert text;
+multi-turn clarify needed **round-scoped question ids** and a `prior_clarifications` list,
+which the plan did not anticipate — replacing a question set silently re-used round 1's
+ids and inherited its answers; and **no warm lane** was adopted (appendix question 2),
+so a cold ask pays the load and says so on the stream rather than amending AGENTS.md §4.1.
+
 **Goal.** Ask a question about the repo and get a streamed answer with citations. No ticket, no branch, no PR.
 
 **Backend changes.**
@@ -668,8 +685,14 @@ Consolidated for the front-end roadmap session. Ordered by milestone; `†` mark
 | 18c | M8 | **`GET /v1/console/sessions?limit=&offset=`** — paged summaries for a history sidebar | new endpoint |
 | 18d | M8 | **`DELETE /v1/console/sessions/{id}`** — 409 while a run is live, 204 otherwise | new endpoint |
 | 18e | M8 | `GET /health` reports workspace count and free disk | additive |
-| 19 | M9 | **`POST .../ask`** — codebase chat, streamed `answer_delta`/`citation`/`answer_complete` | new endpoint |
-| 20 | M9 | `POST /messages` no longer inert outside `collecting`; clarify can revise mid-conversation | behavioural |
+| 19 | M9 | **`POST .../ask`** — codebase chat; `ask_started`/`answer_delta`/`citation`/`answer_complete`/`ask_failed` on the *existing* stream, all carrying `detail.message_id` | new endpoint |
+| 19a | M9 | Render deltas as they arrive, then **replace** the bubble with `answer_complete.detail.text` — that field is authoritative and replacing is what makes a `Last-Event-ID` reconnect idempotent | † rendering |
+| 19b | M9 | `message_id` and `citations` on `ConsoleMessage`; `ask_in_flight` / `active_ask_id` on the session (derived, false after a restart) | additive |
+| 19c | M9 | **`POST .../ask/cancel`** — stop generating without ending the session | new endpoint |
+| 19d | M9 | **`GET .../files/{path}`** — read one file from the checkout, so a citation is a link | new endpoint |
+| 19e | M9 | A cold Work lane means minutes of `lane_loading` before the first token. Render it as a state, not a spinner — there is deliberately no warm lane (ADR 0017) | behavioural |
+| 20 | M9 | `POST /messages` no longer inert outside `collecting`; it re-interprets and **replaces** the question set | † state machine |
+| 20a | M9 | Round-scoped ids (`q-{round}-{n}`) + `clarify_round` + `prior_clarifications`. `clarify_questions` is not append-only, an answered question can stop being answered, `ready` can go **back** to `clarifying`, and `confirmed` is revoked. Answering a retired round is **409**, not 400 | † state machine |
 | 21 | M10 | `plan` mode becomes async with progress (was instant); richer `plan_result` | † semantics |
 | 22 | M10 | **`POST .../promote`** — plan → code without re-clarifying | new endpoint |
 | 23 | M11 | **`POST .../attachments`** + `attachment_ids` on message/create | new endpoint |
@@ -690,7 +713,7 @@ against polling costs nothing and de-risks the streaming milestone.
 # Appendix — Open questions to settle before the milestones that need them
 
 1. **Which Work-lane model is actually deployed?** `AGENTS.md` §8.4 says `Qwen3-30B-A3B-Thinking-2507` (text-only); ADR 0013 and `docs/model-evaluation.md` say `Qwen3.6-35B-A3B-NVFP4` (vision). `infra/docker-compose.yml` is the tiebreaker for what runs, but the docs need reconciling regardless. **Blocks M11.** Cheap to settle: `probe_interpreter.py --image`.
-2. **Warm-lane policy for chat.** Is an idle-timeout warm Work lane acceptable, or must every chat turn pay a load? Needs an ADR either way, since AGENTS.md §4.1 is currently absolute. **Blocks M9's latency target.**
+2. **Warm-lane policy for chat.** ~~Is an idle-timeout warm Work lane acceptable, or must every chat turn pay a load?~~ **Settled in M9: no warm lane.** Every chat turn pays the load, and `lane_loading`/`lane_ready` make the wait visible rather than hiding it. Amending AGENTS.md §4.1 is a real decision about a shared box and deserves its own session with measurements — how often a second question lands inside the timeout, and what a resident 23 GB costs concurrent GPU work — rather than riding along with the milestone that first makes chat exist. See [ADR 0017 §5](adr/0017-codebase-chat.md). **Revisit if first-ask latency is what stops the feature being used.**
 3. **Rejection budget.** Is 3 user-rejection rounds right, and should they consume review retries or not? Recommendation: separate budget. **Blocks M7.**
 4. **Workspace retention.** How many clones may accumulate, and is a 14-day TTL right for terminal sessions? **Blocks M8's eviction policy.**
 5. **Does the FE want the `/sprint/*` endpoints at all after M2?** The events endpoint plus `sprint_ref` would let the console be the only surface the UI touches. Deprecating `/sprint/*` for UI use (keeping it for scripts) would simplify the contract considerably. Worth deciding *with* the front-end roadmap.
