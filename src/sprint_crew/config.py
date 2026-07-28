@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -117,6 +117,19 @@ class Settings(BaseSettings):
     answer_delta_interval_s: float = Field(default=0.25, alias="ANSWER_DELTA_INTERVAL_S")
     # Citations point at path + line range, so the console serves file contents read-only.
     console_file_max_bytes: int = Field(default=262_144, alias="CONSOLE_FILE_MAX_BYTES")
+
+    # Plan mode (roadmap M10, ADR 0018). ``quick`` is ScrumMaster only; ``deep`` adds a
+    # read-only TechLead pass per story, which is a model run each — bounded by
+    # MAX_BACKLOG_STORIES above, not by a cap of its own. The default is what a start with
+    # no body gets, so it is the cheap one.
+    console_plan_default_depth: Literal["quick", "deep"] = Field(
+        default="quick", alias="CONSOLE_PLAN_DEFAULT_DEPTH"
+    )
+    # How long a plan run waits for the session's checkout before giving up. Prep starts at
+    # session creation and clarify takes tens of seconds, so this is only ever the tail.
+    console_plan_workspace_wait_s: float = Field(
+        default=120.0, alias="CONSOLE_PLAN_WORKSPACE_WAIT_S"
+    )
 
     # Coder (Laguna S 2.1) sampling — Poolside-recommended defaults. The NVFP4
     # quant degrades on raw/unset sampling, so we always pin these (T=0.7, top_p

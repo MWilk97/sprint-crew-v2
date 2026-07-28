@@ -10,12 +10,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
 from sprint_crew.schemas._base import STRICT
+from sprint_crew.schemas.backlog import ProductBrief
 from sprint_crew.schemas.session import AgentEvent
+
+#: Bumped when a breaking change lands, so a client can branch instead of flag-daying.
+#: 1 = everything up to M9. 2 = plan mode is asynchronous (M10): ``POST /start`` on a
+#: plan session returns 202 with ``plan_result: null`` and the result arrives later.
+CONTRACT_VERSION = 2
 
 
 def _utc_now_iso() -> str:
@@ -29,6 +36,19 @@ def _message_id() -> str:
 class ConsoleMode(str, Enum):
     PLAN = "plan"
     CODE = "code"
+
+
+class PlanDepth(str, Enum):
+    """How much analysis a plan-mode run does (roadmap M10).
+
+    ``quick`` is ScrumMaster only — a backlog of stories, tens of seconds on a warm lane.
+    ``deep`` additionally runs the TechLead read-only over each story for real
+    ``files_to_touch`` / ``acceptance_tests`` / ``steps``, which is a GPU run per story.
+    Bounded by ``MAX_BACKLOG_STORIES``, which caps the backlog before planning starts.
+    """
+
+    QUICK = "quick"
+    DEEP = "deep"
 
 
 class ConsoleSessionStatus(str, Enum):
@@ -174,10 +194,31 @@ class SprintRunRef(BaseModel):
 
 
 class PlanPreviewStory(BaseModel):
+    """One story of a plan-mode backlog.
+
+    ``title`` and ``rationale`` predate M10 and are kept so a stored result from before it
+    still validates. Everything else is model-authored: the first four fields come from the
+    ScrumMaster at either depth, the last four only from a ``deep`` run's TechLead pass —
+    empty at ``quick`` depth, which is what ``ConsolePlanResult.depth`` lets a client say
+    out loud rather than render as "no files affected".
+    """
+
     model_config = STRICT
 
     title: str = Field(..., min_length=1)
     rationale: str | None = None
+    key: str | None = None
+    description: str = ""
+    acceptance_criteria: str = ""
+    priority: int = Field(default=0, ge=0)
+    depends_on: list[str] = Field(default_factory=list)
+    estimated_complexity: Literal["trivial", "simple", "complex"] | None = None
+    files_to_touch: list[str] = Field(default_factory=list)
+    acceptance_tests: list[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)
+    # Which TechLead ladder produced the detail: template / static / tool_loop. A template
+    # plan is not repo analysis, and a UI that cannot tell says more than it knows.
+    planning_mode: str | None = None
 
 
 class ConsolePlanResult(BaseModel):
@@ -187,6 +228,11 @@ class ConsolePlanResult(BaseModel):
 
     summary: str = Field(..., min_length=1)
     stories: list[PlanPreviewStory] = Field(default_factory=list)
+    depth: PlanDepth = PlanDepth.QUICK
+    product_brief: ProductBrief | None = None
+    # Which story the ScrumMaster would start with; matches one of ``stories[*].key``.
+    recommended_first: str | None = None
+    generated_at: str = Field(default_factory=_utc_now_iso)
 
 
 class CreateConsoleSessionRequest(BaseModel):
@@ -209,6 +255,18 @@ class ClarifyRequest(BaseModel):
     model_config = STRICT
 
     answers: list[ClarifyAnswer] = Field(..., min_length=1)
+
+
+class StartRunRequest(BaseModel):
+    """Optional body for ``POST /start`` (roadmap M10).
+
+    The route took no body before, so omitting it stays valid. ``depth`` applies to plan
+    mode only; a code run's depth is the pipeline's business, not the caller's.
+    """
+
+    model_config = STRICT
+
+    depth: PlanDepth | None = None
 
 
 class AskRequest(BaseModel):
@@ -258,6 +316,12 @@ class ConsoleSession(BaseModel):
     ask_in_flight: bool = False
     sprint_ref: SprintRunRef | None = None
     plan_result: ConsolePlanResult | None = None
+    # The plan-mode run in the RunRegistry (roadmap M10). Plan mode has no backlog run to
+    # derive status from, so this is what ``queued``/``running`` is read against.
+    plan_run_id: str | None = None
+    # Set on a session created by ``POST /promote``: the plan session whose backlog this
+    # code run executes. A plan and the run it became are two sessions, not one.
+    parent_session_id: str | None = None
     error: str | None = None
     # The session's own checkout and index, prepared in the background from creation
     # (roadmap M8). A second async dimension: these advance independently of ``status``,
@@ -274,6 +338,7 @@ class ConsoleSession(BaseModel):
     # ``cancelling`` status: the pending state is additive this way, so it does not break
     # a client's state machine, and it works for polling as well as for the event stream.
     cancel_requested_at: str | None = None
+    contract_version: int = CONTRACT_VERSION
     created_at: str = Field(default_factory=_utc_now_iso)
     updated_at: str = Field(default_factory=_utc_now_iso)
 
@@ -294,6 +359,8 @@ class ConsoleSessionSummary(BaseModel):
     # First thing the user asked, truncated — what a sidebar shows as the session's name.
     title: str | None = None
     repo_url: str | None = None
+    # So a sidebar can nest a promoted code run under the plan it came from (M10).
+    parent_session_id: str | None = None
     created_at: str
     updated_at: str
 

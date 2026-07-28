@@ -7,21 +7,11 @@ from __future__ import annotations
 
 import asyncio
 
-from sprint_crew.api.console.clarify import (
-    _user_text,
-    all_clarification_lines,
-    resolve_answer_text,
-)
+from sprint_crew.api.console.clarify import _user_text, all_clarification_lines
 from sprint_crew.api.console.state import _TERMINAL_STATUSES, pending_review, touch
 from sprint_crew.orchestrator.backlog import backlog_store, get_backlog_run
 from sprint_crew.orchestrator.run_registry import run_registry
-from sprint_crew.schemas.console import (
-    ConsoleMessageRole,
-    ConsolePlanResult,
-    ConsoleSession,
-    ConsoleSessionStatus,
-    PlanPreviewStory,
-)
+from sprint_crew.schemas.console import ConsoleSession, ConsoleSessionStatus
 from sprint_crew.schemas.session import BacklogRunStatus
 
 
@@ -69,33 +59,21 @@ def build_run_prompt(session: ConsoleSession) -> str:
     return "\n\n".join(parts)
 
 
-def build_plan_result(session: ConsoleSession) -> ConsolePlanResult:
-    """Heuristic plan-mode stub: preview stories from the prompt and clarify answers."""
-    first_prompt = next(
-        (m.content for m in session.messages if m.role is ConsoleMessageRole.USER),
-        "the request",
-    )
-    stories = [
-        PlanPreviewStory(
-            title=f"Implement: {first_prompt}",
-            rationale="core change requested by the user",
-        )
-    ]
-    questions = {q.question_id: q for q in session.clarify_questions}
-    for answer in session.clarify_answers:
-        question = questions.get(answer.question_id)
-        if question is None:
-            continue
-        stories.append(
-            PlanPreviewStory(
-                title=f"Constraint: {resolve_answer_text(question, answer)}",
-                rationale=question.text,
-            )
-        )
-    return ConsolePlanResult(
-        summary=f"Plan preview for: {first_prompt}",
-        stories=stories,
-    )
+async def sync_plan_progress(session: ConsoleSession) -> None:
+    """Mirror queue position into a queued or running plan-mode session (roadmap M10).
+
+    Only the queue half is derived here. A plan run has no ``BacklogRun`` row to read a
+    terminal status from, so the run body owns that flip and writes it under the session
+    lock; re-deriving it here could only ever contradict the body.
+    """
+    if session.plan_run_id is None:
+        return
+    if session.status not in (ConsoleSessionStatus.RUNNING, ConsoleSessionStatus.QUEUED):
+        return
+    position = run_registry().position(session.plan_run_id)
+    session.queue_position = position or None
+    if not position and session.status is ConsoleSessionStatus.QUEUED:
+        session.status = ConsoleSessionStatus.RUNNING
 
 
 async def sync_sprint_progress(session: ConsoleSession) -> None:

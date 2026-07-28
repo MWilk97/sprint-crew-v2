@@ -92,6 +92,13 @@ class EventType(StrEnum):
     # M9 multi-turn clarify: the question set was replaced, so a client holding the old one
     # must refetch rather than submit answers against ids that no longer exist.
     CLARIFY_ROUND_STARTED = "clarify_round_started"
+    # M10 real plan mode. ``backlog_planned`` is reused for the ScrumMaster result — it is
+    # the same fact a code run emits — so these cover only what plan mode adds around it.
+    PLAN_STARTED = "plan_started"
+    STORY_PLANNED = "story_planned"
+    PLAN_COMPLETE = "plan_complete"
+    PLAN_FAILED = "plan_failed"
+    PROMOTED = "promoted"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]
