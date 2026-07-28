@@ -74,6 +74,22 @@ Statuses: `collecting | clarifying | ready | queued | running | awaiting_review 
 
 `queued`, `running` and `awaiting_review` are all "started" for the purposes of `POST /messages`, which returns `409` in each — mid-run steering is out of scope, and accepting a message that changes nothing would be worse than a rejection. A session may also go straight from `ready` to `running` when nothing is ahead of it; clients must handle both.
 
+## The session's repository (M8)
+
+A session owns a checkout from the moment it is created, and preparing it is a **second asynchronous dimension** — `workspace_status` and `index_status` advance independently of `status`, and either can finish first. Render them separately; folding both into one spinner will look wrong the moment one completes.
+
+- `workspace_status`: `pending → cloning → ready | failed`, plus `evicted` when the workspace LRU later reclaims a terminal session's clone. The session stays readable when evicted; only its files are gone.
+- `index_status`: `pending → indexing → ready | skipped | failed`. **`skipped` is not an error** — there was nothing worth indexing, or indexing is switched off.
+- `workspace_root` is the absolute server path, null until ready. `workspace_error` / `index_error` carry the reason on failure.
+- Progress arrives on the timeline as the `repo_*` and `index_*` events (see the `EventType` enum in the OpenAPI spec; the indexing ones are debug-level, one per embed batch). These describe the *session's* checkout and are deliberately distinct from `workspace_ready`, which is a run's planning clone.
+- **Nothing is gated on readiness in M8.** Clarify and start work with a failed or pending workspace; grounding them on the repository is M9. A failed clone has no retry route: create a new session.
+
+## Session history (M8)
+
+- `GET /v1/console/sessions?limit=&offset=` — summaries, newest first, for a history sidebar. Not full sessions: messages, clarify state and plan results are unbounded and a list renders none of them. `title` is the first user message, truncated.
+- `DELETE /v1/console/sessions/{id}` — removes the row, the clone, the diff snapshots and the timeline. Returns `409` while `queued`, `running` or `awaiting_review`: cancel first, because deleting under a running agent would leave it writing into a workspace nobody owns.
+- Automatic reclamation continues alongside this: terminal sessions older than `CONSOLE_SESSION_TTL_DAYS` are reaped, and beyond `CONSOLE_MAX_WORKSPACES` the coldest terminal clones are evicted (`workspace_status: evicted`).
+
 ## Run queue and cancel (M5)
 
 One run executes at a time. This is a hardware constraint, not a policy: loading a lane stops every other lane, so two concurrent runs would only thrash lane swaps. The queue makes the constraint visible.

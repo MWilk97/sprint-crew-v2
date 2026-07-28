@@ -11,7 +11,12 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 from sprint_crew.api.auth import require_token
-from sprint_crew.orchestrator.console_store import console_store, reap_console_sessions
+from sprint_crew.orchestrator.console_store import (
+    console_store,
+    enforce_workspace_lru,
+    purge_console_session,
+    reap_console_sessions,
+)
 from sprint_crew.orchestrator.diff_store import diff_store
 from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.orchestrator.event_log import event_log
@@ -90,10 +95,15 @@ def reset_console_store() -> None:
 
 
 def run_console_reaper() -> list[str]:
-    """Delete stale terminal sessions and evict their locks. Returns reaped ids."""
+    """Delete stale terminal sessions and evict their locks. Returns reaped ids.
+
+    The workspace LRU runs on the same sweep: TTL alone no longer bounds disk now that
+    every session is a clone (roadmap M8).
+    """
     reaped = reap_console_sessions()
     for session_id in reaped:
         _locks.pop(session_id, None)
+    enforce_workspace_lru()
     return reaped
 
 
@@ -112,6 +122,19 @@ def _utc_now_iso() -> str:
 
 async def load_session(session_id: str) -> ConsoleSession | None:
     return await asyncio.to_thread(console_store().load, session_id)
+
+
+async def list_sessions_page(*, limit: int, offset: int) -> tuple[list[ConsoleSession], int]:
+    return await asyncio.to_thread(console_store().list_page, limit=limit, offset=offset)
+
+
+async def purge_session(session: ConsoleSession) -> None:
+    await asyncio.to_thread(purge_console_session, session)
+
+
+def drop_lock(session_id: str) -> None:
+    """Evict a deleted session's lock so the table does not grow by one per delete."""
+    _locks.pop(session_id, None)
 
 
 async def require_session(session_id: str) -> ConsoleSession:
@@ -198,10 +221,16 @@ async def close_review(
 
 
 async def emit(session: ConsoleSession, event: AgentEvent) -> None:
+    await emit_for(session.session_id, event)
+
+
+async def emit_for(session_id: str, event: AgentEvent) -> None:
     """Append a console-level event to the timeline so both SSE and polling see it.
 
-    Used for events the API layer owns — cancel and review decisions. Run-level events come
-    from the context emitter inside the run instead (orchestrator/emitter.py).
+    Used for events the API layer owns — cancel, review decisions, workspace preparation.
+    Run-level events come from the context emitter inside the run instead
+    (orchestrator/emitter.py). Takes an id rather than a session because the workspace prep
+    task publishes without holding one.
 
     TODO(bus): this breaks the ``EventBus`` invariant. ``append_many`` appends *and*
     publishes, so wrapping the whole thing in ``to_thread`` runs ``publish()`` on a worker
@@ -211,4 +240,4 @@ async def emit(session: ConsoleSession, event: AgentEvent) -> None:
     flag, keep the SQLite write in the thread, and publish the returned seq-stamped events
     here on the loop.
     """
-    await asyncio.to_thread(event_log().append_many, session.session_id, None, [event])
+    await asyncio.to_thread(event_log().append_many, session_id, None, [event])

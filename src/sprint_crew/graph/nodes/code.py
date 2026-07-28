@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -17,11 +18,13 @@ from sprint_crew.graph.nodes._support import (
 )
 from sprint_crew.graph.state import (
     SprintState,
+    index_scope_from_state,
     task_plan_from_state,
     workspace_from_state,
 )
 from sprint_crew.inference.router import coder_thinking_active
 from sprint_crew.orchestrator import workspace_diff as diff_tools
+from sprint_crew.orchestrator.repo_context import maybe_index_overlay
 from sprint_crew.schemas.session import AgentEvent
 from sprint_crew.schemas.session import agent_event as _event
 
@@ -49,6 +52,11 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
         attempt=attempt,
     )
     workspace_diff = diff_tools.gather_workspace_diff(workspace, priority_paths=plan.files_to_touch)
+
+    # Refresh the run's overlay with what the Coder just wrote (roadmap M8). Until now the
+    # index was built once at session start and went stale the moment a file was edited,
+    # so every later semantic_search answered from pre-edit content.
+    await asyncio.to_thread(maybe_index_overlay, workspace, index_scope_from_state(state))
 
     await _swap_lane(Role.CODING, Role.WORK)
     change = await formatter.run_formatter(

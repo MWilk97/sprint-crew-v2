@@ -1,6 +1,6 @@
 # Backend roadmap — interactive console ("Cursor-like") for sprint-crew-v2
 
-**Status:** M0–M6 are **landed**; M7 onward is **proposed**.
+**Status:** M0–M8 are **landed**; M9 onward is **proposed**.
 Each milestone below carries its own status line — the per-milestone marker is authoritative.
 **Scope:** backend (`sprint-crew-v2`) only. Front-end work is *flagged but not planned* here; every
 contract change carries an `FE →` note for the separate front-end roadmap session.
@@ -422,6 +422,20 @@ run queue does not deadlock.
 
 ### M8 — Session-scoped workspace and a durable per-repo index
 
+**Status (2026-07-28):** Landed. Background prep in `api/console/workspace.py`, two-tier
+collections in `vector/scope.py` + `vector/manifest.py`, retention in
+`orchestrator/console_store.py`. See [ADR 0016](adr/0016-durable-repo-index.md). Five
+deliberate deviations from the plan below: the session's clone is a **reference checkout**
+and runs keep creating their own per-story workspaces, so the run path is untouched;
+uncommitted work goes to a **per-run overlay collection** rather than into the shared index,
+because one session's work-in-progress must not be visible to another; overlay membership is
+decided by **content hash against the shared manifest**, not by `git status`, which covers a
+chained workspace's commits with the same rule; the repo key comes from the **workspace's own
+git remote** rather than being threaded through the graph as a `repo_url`; and clarify is
+**not** gated on `workspace_status: ready` — M8 publishes readiness, M9 consumes it. Session
+history routes (open question 6) landed here too, since the front-end phase after this one is
+what needs them.
+
 **Goal.** A console session has a checkout and a warm index from the moment it is created — before any run.
 
 **Why.** This is the enabler for both remaining features. Grounded clarify needs repo context at clarify
@@ -648,7 +662,12 @@ Consolidated for the front-end roadmap session. Ordered by milestone; `†` mark
 | 15 | M6 | `diff_updated` event | additive |
 | 16 | M7 | **`POST .../diff/decisions`** — per-file accept/reject, reason required on reject | new endpoint |
 | 17 | M7 | New blocking status `awaiting_review`; rejection-round counter | † state machine |
-| 18 | M8 | `workspace_status`, `index_status`, `workspace_root` on the session; clarify/chat gated on ready | additive + gating |
+| 18 | M8 | `workspace_status`, `index_status`, `workspace_root`, `workspace_error`, `index_error` on the session; readiness is *published* here, *consumed* (clarify/chat gating) in M9 | additive |
+| 18a | M8 | Session creation is async in a second dimension: the 201 says `cloning` and readiness arrives later, independent of the clarify state machine | behavioural |
+| 18b | M8 | New events: `repo_cloning`, `repo_ready`, `repo_failed`, `index_progress`, `index_ready` — the session's checkout, distinct from a run's `workspace_ready` | additive |
+| 18c | M8 | **`GET /v1/console/sessions?limit=&offset=`** — paged summaries for a history sidebar | new endpoint |
+| 18d | M8 | **`DELETE /v1/console/sessions/{id}`** — 409 while a run is live, 204 otherwise | new endpoint |
+| 18e | M8 | `GET /health` reports workspace count and free disk | additive |
 | 19 | M9 | **`POST .../ask`** — codebase chat, streamed `answer_delta`/`citation`/`answer_complete` | new endpoint |
 | 20 | M9 | `POST /messages` no longer inert outside `collecting`; clarify can revise mid-conversation | behavioural |
 | 21 | M10 | `plan` mode becomes async with progress (was instant); richer `plan_result` | † semantics |

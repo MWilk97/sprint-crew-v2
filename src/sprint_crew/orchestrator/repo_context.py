@@ -24,7 +24,13 @@ from sprint_crew.schemas.session import AgentEvent
 from sprint_crew.schemas.ticket import JiraTicket
 from sprint_crew.tools import READONLY_TOOLS, build_registry
 from sprint_crew.vector.chunker import count_indexable_files
-from sprint_crew.vector.indexer import IndexResult, index_workspace
+from sprint_crew.vector.indexer import (
+    IndexResult,
+    ProgressFn,
+    enforce_collection_lru,
+    index_workspace,
+)
+from sprint_crew.vector.scope import IndexScope, overlay_hashes
 from sprint_crew.vector.search import SearchHit, format_search_hits, semantic_search
 
 log = logging.getLogger(__name__)
@@ -109,24 +115,56 @@ def should_index_workspace(
     return count_indexable_files(workspace) > 0
 
 
-def maybe_index_workspace(
+def maybe_index_shared(
     workspace: Path,
-    session_id: str,
+    scope: IndexScope,
     *,
     prompt: str | None = None,
     ticket: JiraTicket | None = None,
+    on_progress: ProgressFn | None = None,
 ) -> IndexResult | None:
-    """Build vector index when enabled and heuristics match; never raises."""
+    """Refresh the repo-wide index from a pristine checkout; never raises.
+
+    Only ever called with a workspace whose content *is* the repository's committed state —
+    a fresh clone. A chained story workspace carries the previous story's commits, which
+    belong in that run's overlay, not in what every other session reads.
+    """
     if not should_index_workspace(workspace, prompt=prompt, ticket=ticket):
         return None
     try:
-        return index_workspace(workspace, session_id)
-    except Exception:
-        log.warning(
-            "Vector index build failed for session %s",
-            session_id,
-            exc_info=True,
+        result = index_workspace(
+            workspace,
+            scope.shared,
+            repo_key=scope.repo_key,
+            on_progress=on_progress,
         )
+    except Exception:
+        log.warning("Vector index build failed for %s", scope.shared, exc_info=True)
+        return None
+    # Only the shared tier is capped: overlays are deleted wholesale when their run ends,
+    # so charging a mid-run refresh for an LRU pass would evict a real repo index to make
+    # room for something already scheduled for deletion.
+    enforce_collection_lru()
+    return result
+
+
+def maybe_index_overlay(workspace: Path, scope: IndexScope) -> IndexResult | None:
+    """Refresh a run's overlay with whatever now differs from the shared baseline.
+
+    Called at session start and again after the Coder writes, which is what stops the
+    index going stale mid-run — the failure the all-or-nothing sha check could not see.
+    """
+    if scope.overlay is None or not get_settings().vector_index_enabled:
+        return None
+    try:
+        return index_workspace(
+            workspace,
+            scope.overlay,
+            repo_key=scope.repo_key,
+            hashes=overlay_hashes(workspace, scope.shared),
+        )
+    except Exception:
+        log.warning("Vector overlay build failed for %s", scope.overlay, exc_info=True)
         return None
 
 
@@ -157,7 +195,7 @@ def _keyword_grep_block(workspace: Path, ticket: JiraTicket | None, query_text: 
 
 def enrich_repo_context_with_hits(
     workspace: Path,
-    session_id: str,
+    scope: IndexScope,
     query_text: str,
     *,
     ticket: JiraTicket | None = None,
@@ -184,7 +222,7 @@ def enrich_repo_context_with_hits(
         return "\n\n".join(parts), hits
 
     settings = get_settings()
-    hits = semantic_search(session_id, query_text, top_k=settings.vector_top_k)
+    hits = semantic_search(scope.collections, query_text, top_k=settings.vector_top_k)
     if hits:
         parts.append(
             "=== pre_search (orchestrator pre-fetched — verify with read_file/grep before planning) ===\n"
@@ -196,12 +234,12 @@ def enrich_repo_context_with_hits(
 
 def enrich_repo_context(
     workspace: Path,
-    session_id: str,
+    scope: IndexScope,
     query_text: str,
     *,
     ticket: JiraTicket | None = None,
 ) -> str:
-    text, _hits = enrich_repo_context_with_hits(workspace, session_id, query_text, ticket=ticket)
+    text, _hits = enrich_repo_context_with_hits(workspace, scope, query_text, ticket=ticket)
     return text
 
 

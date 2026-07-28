@@ -176,7 +176,7 @@ async def test_cancel_between_stories_stops_the_run_and_keeps_shipped_work(
             ),
             patch("sprint_crew.orchestrator.batch_cycle.create_and_run_cycle", new=fake_cycle),
             patch("sprint_crew.orchestrator.batch_cycle.stop_all_lanes", new=AsyncMock()),
-            patch("sprint_crew.orchestrator.batch_cycle.delete_workspace_index"),
+            patch("sprint_crew.orchestrator.batch_cycle.delete_index"),
         ):
             run = await run_backlog_batched(run_id="run-cancel", plan=plan, user_prompt="p")
     finally:
@@ -211,7 +211,7 @@ async def test_a_cancelled_story_is_not_reported_as_a_failed_run(
         patch("sprint_crew.orchestrator.batch_cycle.prepare_workspace", side_effect=fake_prepare),
         patch("sprint_crew.orchestrator.batch_cycle.create_and_run_cycle", new=fake_cycle),
         patch("sprint_crew.orchestrator.batch_cycle.stop_all_lanes", new=AsyncMock()),
-        patch("sprint_crew.orchestrator.batch_cycle.delete_workspace_index"),
+        patch("sprint_crew.orchestrator.batch_cycle.delete_index"),
     ):
         run = await run_backlog_batched(run_id="run-midcancel", plan=plan, user_prompt="p")
 
@@ -229,7 +229,7 @@ async def test_cancel_before_the_first_story_still_stops_lanes(session_db) -> No
     try:
         with (
             patch("sprint_crew.orchestrator.batch_cycle.stop_all_lanes", new=stop_lanes),
-            patch("sprint_crew.orchestrator.batch_cycle._cleanup_vector_indexes"),
+            patch("sprint_crew.orchestrator.batch_cycle._cleanup_vector_overlays"),
             patch("sprint_crew.orchestrator.batch_cycle.create_jira_tickets", return_value={}),
         ):
             run = await run_backlog_batched(
@@ -266,7 +266,7 @@ async def test_batch_run_without_cancel_is_unaffected(session_db, tmp_path: Path
         ),
         patch("sprint_crew.orchestrator.batch_cycle.create_and_run_cycle", new=fake_cycle),
         patch("sprint_crew.orchestrator.batch_cycle.stop_all_lanes", new=AsyncMock()),
-        patch("sprint_crew.orchestrator.batch_cycle.delete_workspace_index"),
+        patch("sprint_crew.orchestrator.batch_cycle.delete_index"),
     ):
         run = await run_backlog_batched(run_id="run-ok", plan=plan, user_prompt="p")
 

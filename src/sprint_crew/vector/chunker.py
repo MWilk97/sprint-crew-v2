@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,9 +140,24 @@ def chunk_file(rel: str, content: str) -> list[CodeChunk]:
     return _sliding_window_chunks(rel, content, chunk_kind=chunk_kind, language=language)
 
 
-def iter_workspace_chunks(workspace_root: Path) -> list[CodeChunk]:
+def _read_indexable(file_path: Path) -> str | None:
+    """File content when it is worth indexing, else None (unreadable, huge, binary, blank)."""
+    try:
+        data = file_path.read_bytes()
+    except OSError:
+        return None
+    if len(data) > MAX_FILE_BYTES:
+        return None
+    try:
+        content = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return content if content.strip() else None
+
+
+def iter_indexable_files(workspace_root: Path) -> Iterator[tuple[str, str]]:
+    """``(relative path, content)`` for every file the index covers, in path order."""
     root = workspace_root.resolve()
-    all_chunks: list[CodeChunk] = []
     for file_path in sorted(root.rglob("*")):
         if not file_path.is_file():
             continue
@@ -148,23 +165,36 @@ def iter_workspace_chunks(workspace_root: Path) -> list[CodeChunk]:
             rel = file_path.relative_to(root).as_posix()
         except ValueError:
             continue
-        if should_skip_path(Path(rel)):
+        if should_skip_path(Path(rel)) or file_path.suffix.lower() not in INDEXABLE_SUFFIXES:
             continue
-        suffix = file_path.suffix.lower()
-        if suffix not in INDEXABLE_SUFFIXES:
+        content = _read_indexable(file_path)
+        if content is not None:
+            yield rel, content
+
+
+def file_hashes(workspace_root: Path) -> dict[str, str]:
+    """``path -> content hash`` for the whole workspace — the input to plan_reindex."""
+    return {
+        rel: hashlib.sha256(content.encode("utf-8")).hexdigest()
+        for rel, content in iter_indexable_files(workspace_root)
+    }
+
+
+def chunks_for_paths(workspace_root: Path, paths: Sequence[str]) -> dict[str, list[CodeChunk]]:
+    """Chunk only the named files, skipping any that vanished or became unindexable."""
+    root = workspace_root.resolve()
+    result: dict[str, list[CodeChunk]] = {}
+    for rel in paths:
+        content = _read_indexable(root / rel)
+        if content is None:
             continue
-        try:
-            data = file_path.read_bytes()
-        except OSError:
-            continue
-        if len(data) > MAX_FILE_BYTES:
-            continue
-        try:
-            content = data.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
-        if not content.strip():
-            continue
+        result[rel] = chunk_file(rel, content)
+    return result
+
+
+def iter_workspace_chunks(workspace_root: Path) -> list[CodeChunk]:
+    all_chunks: list[CodeChunk] = []
+    for rel, content in iter_indexable_files(workspace_root):
         all_chunks.extend(chunk_file(rel, content))
     return all_chunks
 

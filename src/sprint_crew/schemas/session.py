@@ -74,6 +74,14 @@ class EventType(StrEnum):
     REJECTION_RECORDED = "rejection_recorded"
     DIFF_REVIEW_EXPIRED = "diff_review_expired"
     REVIEW_BUDGET_EXHAUSTED = "review_budget_exhausted"
+    # M8 session-scoped checkout and index. Deliberately not reusing ``workspace_ready``:
+    # that one is the *run's* planning clone, these are the console session's own, and a
+    # timeline that cannot tell them apart cannot render either honestly.
+    REPO_CLONING = "repo_cloning"
+    REPO_READY = "repo_ready"
+    REPO_FAILED = "repo_failed"
+    INDEX_PROGRESS = "index_progress"
+    INDEX_READY = "index_ready"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]

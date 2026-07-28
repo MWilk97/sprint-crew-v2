@@ -5,7 +5,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from sprint_crew.vector.chunker import CodeChunk
-from sprint_crew.vector.store import QdrantStore, collection_name, point_id
+from sprint_crew.vector.store import (
+    QdrantStore,
+    collection_for_repo,
+    collection_for_run,
+    normalize_repo_url,
+    point_id,
+    repo_key,
+)
 
 
 def _store_with_mock_client() -> tuple[QdrantStore, MagicMock]:
@@ -26,54 +33,53 @@ def _chunk(path: str = "src/app.py") -> CodeChunk:
     )
 
 
-def test_collection_name_sanitizes_session_id() -> None:
-    assert collection_name("sess/../weird id!") == "code_chunks_sess_weird_id_"
+def test_collection_names_sanitize_and_stay_distinct() -> None:
+    assert collection_for_run("sess/../weird id!") == "code_chunks_run_sess_weird_id_"
+    assert collection_for_repo("abc123") == "code_chunks_repo_abc123"
 
 
-def test_point_id_is_stable_uuid() -> None:
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/Owner/Repo.git",
+        "git@github.com:owner/repo.git",
+        "ssh://git@github.com/owner/repo/",
+        "https://github.com/owner/repo",
+    ],
+)
+def test_repo_key_collapses_equivalent_remotes(url: str) -> None:
+    """One repo addressed four ways must land in one collection, or nothing is shared."""
+    assert normalize_repo_url(url) == "github.com/owner/repo"
+    assert repo_key(url) == repo_key("https://github.com/owner/repo")
+
+
+def test_repo_key_separates_different_repos_and_defaults_to_fixture() -> None:
+    assert repo_key("https://github.com/owner/other") != repo_key("https://github.com/owner/repo")
+    assert repo_key(None) == repo_key("")
+
+
+def test_point_id_is_stable_per_collection() -> None:
     chunk = _chunk()
-    assert point_id("s1", chunk) == point_id("s1", chunk)
-    assert point_id("s1", chunk) != point_id("s2", chunk)
-
-
-def test_get_collection_git_sha_none_when_collection_missing() -> None:
-    store, client = _store_with_mock_client()
-    client.collection_exists.return_value = False
-    assert store.get_collection_git_sha("coll") is None
-
-
-def test_get_collection_git_sha_none_when_no_points() -> None:
-    store, client = _store_with_mock_client()
-    client.collection_exists.return_value = True
-    client.scroll.return_value = ([], None)
-    assert store.get_collection_git_sha("coll") is None
-
-
-def test_get_collection_git_sha_reads_payload() -> None:
-    store, client = _store_with_mock_client()
-    client.collection_exists.return_value = True
-    point = MagicMock()
-    point.payload = {"git_sha": "abc123"}
-    client.scroll.return_value = ([point], None)
-    assert store.get_collection_git_sha("coll") == "abc123"
+    assert point_id("coll-a", chunk) == point_id("coll-a", chunk)
+    assert point_id("coll-a", chunk) != point_id("coll-b", chunk)
 
 
 def test_upsert_chunks_rejects_length_mismatch() -> None:
     store, _client = _store_with_mock_client()
     with pytest.raises(ValueError, match="length mismatch"):
-        store.upsert_chunks("coll", "s1", [_chunk()], [])
+        store.upsert_chunks("coll", [_chunk()], [])
 
 
 def test_upsert_chunks_noop_on_empty() -> None:
     store, client = _store_with_mock_client()
-    store.upsert_chunks("coll", "s1", [], [])
+    store.upsert_chunks("coll", [], [])
     client.upsert.assert_not_called()
 
 
 def test_upsert_chunks_creates_collection_and_writes_payload() -> None:
     store, client = _store_with_mock_client()
     client.collection_exists.return_value = False
-    store.upsert_chunks("coll", "s1", [_chunk()], [[0.1, 0.2]], git_sha="sha1")
+    store.upsert_chunks("coll", [_chunk()], [[0.1, 0.2]], git_sha="sha1")
 
     client.create_collection.assert_called_once()
     assert client.create_collection.call_args.kwargs["collection_name"] == "coll"
@@ -82,4 +88,31 @@ def test_upsert_chunks_creates_collection_and_writes_payload() -> None:
     payload = points[0].payload
     assert payload["path"] == "src/app.py"
     assert payload["git_sha"] == "sha1"
-    assert payload["session_id"] == "s1"
+
+
+def test_delete_by_paths_noop_without_paths_or_collection() -> None:
+    store, client = _store_with_mock_client()
+    store.delete_by_paths("coll", [])
+    client.collection_exists.return_value = False
+    store.delete_by_paths("coll", ["a.py"])
+    client.delete.assert_not_called()
+
+
+def test_delete_by_paths_filters_on_path() -> None:
+    store, client = _store_with_mock_client()
+    client.collection_exists.return_value = True
+    store.delete_by_paths("coll", ["a.py", "b.py"])
+
+    selector = client.delete.call_args.kwargs["points_selector"]
+    condition = selector.filter.must[0]
+    assert condition.key == "path"
+    assert condition.match.any == ["a.py", "b.py"]
+
+
+def test_list_collections_filters_by_prefix() -> None:
+    store, client = _store_with_mock_client()
+    mine, theirs = MagicMock(), MagicMock()
+    mine.name = "code_chunks_repo_a"
+    theirs.name = "other_thing"
+    client.get_collections.return_value = MagicMock(collections=[mine, theirs])
+    assert store.list_collections("code_chunks") == ["code_chunks_repo_a"]

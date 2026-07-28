@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -25,8 +26,8 @@ class SemanticSearchTool:
     )
     args_schema = SemanticSearchArgs
 
-    def __init__(self, *, session_id: str | None = None) -> None:
-        self._session_id = session_id
+    def __init__(self, *, collections: Sequence[str]) -> None:
+        self._collections = tuple(collections)
 
     def execute(self, args: BaseModel, *, workspace_root: Path) -> ToolResult:
         assert isinstance(args, SemanticSearchArgs)
@@ -40,9 +41,8 @@ class SemanticSearchTool:
             except UnsafePathError as exc:
                 return ToolResult(ok=False, output=str(exc), error="unsafe path")
 
-        session_id = self._session_id or workspace_root.name
         hits = semantic_search(
-            session_id,
+            self._collections,
             args.query,
             top_k=args.top_k,
             path_prefix=args.path_prefix,
@@ -56,5 +56,5 @@ class SemanticSearchTool:
         return ToolResult(ok=True, output=body, data={"hits": len(hits)})
 
 
-def semantic_search_tool(session_id: str | None = None) -> SemanticSearchTool:
-    return SemanticSearchTool(session_id=session_id)
+def semantic_search_tool(collections: Sequence[str]) -> SemanticSearchTool:
+    return SemanticSearchTool(collections=collections)

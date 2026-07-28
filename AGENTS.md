@@ -161,6 +161,8 @@ Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 
 ### 8.5 Vector index (Qdrant)
 
 - **Default on** (`VECTOR_INDEX_ENABLED=true`); **TRIVIAL** tickets skip indexing and retrieval.
+- **Two tiers, since M8** ([ADR 0016](docs/adr/0016-durable-repo-index.md)). A collection keyed by *repository* holds committed state and is shared by every session on that repo; a collection keyed by *run* holds the files that differ from it, and is deleted when the run ends. Search reads overlay-then-shared, and an overlay hit for a path suppresses the shared one. Only a pristine checkout may write the shared tier — a chained story workspace carries commits that are not the repository's.
+- Re-indexing is incremental: per-file content hashes in `vector/manifest.py` decide what to re-embed, so an edit costs one file, not a rebuild.
 - Retrieval never overrides ground truth: merge gate and plan coverage stay deterministic (git diff + `snapshot_baseline_paths`).
 - Dev stack: `./scripts/lane-ctl.sh start vector` (Qdrant :6333 + embed sidecar :8080).
 

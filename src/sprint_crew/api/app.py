@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -16,6 +17,7 @@ from sprint_crew.config import get_settings
 from sprint_crew.graph.lanes import lane_health, stop_all_lanes
 from sprint_crew.integrations.jira_client import get_jira_client
 from sprint_crew.orchestrator.backlog import BacklogRunStore, get_backlog_run
+from sprint_crew.orchestrator.console_store import sweep_interrupted_workspace_prep
 from sprint_crew.orchestrator.event_log import event_log
 from sprint_crew.orchestrator.prompt_run import run_from_prompt
 from sprint_crew.orchestrator.run_recovery import sweep_interrupted_runs
@@ -40,6 +42,7 @@ from sprint_crew.schemas.sprint import (
     FromTicketRequest,
     SessionCreatedResponse,
 )
+from sprint_crew.vector.indexer import sweep_orphan_collections
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         sweep_interrupted_runs()
     except Exception:
         logger.exception("startup interrupted-run sweep failed")
+    # Workspace prep runs in an asyncio task too, so it dies with the process the same way.
+    try:
+        sweep_interrupted_workspace_prep()
+    except Exception:
+        logger.exception("startup workspace-prep sweep failed")
     # Sweep stale terminal console sessions (and their workspaces) once at startup;
     # the per-completion sweep in console.py keeps it current afterward.
     try:
@@ -60,6 +68,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.info("startup: reaped %d stale console session(s)", len(reaped))
     except Exception:
         logger.exception("startup console reaper failed")
+    # Collections from before the M8 re-key are unreferenced and nothing else would ever
+    # collect them. to_thread because this one talks to Qdrant over the network — a slow
+    # or unreachable service must not hold the event loop before the app can serve.
+    try:
+        await asyncio.to_thread(sweep_orphan_collections)
+    except Exception:
+        logger.exception("startup orphan-collection sweep failed")
     yield
 
 
@@ -94,7 +109,25 @@ async def root() -> dict[str, str]:
 
 @app.get("/health")
 async def health() -> dict[str, object]:
-    return {"status": "ok", "lanes": await asyncio.to_thread(lane_health)}
+    return {
+        "status": "ok",
+        "lanes": await asyncio.to_thread(lane_health),
+        "workspaces": await asyncio.to_thread(workspace_usage),
+    }
+
+
+def workspace_usage() -> dict[str, object]:
+    """Clone count and free disk. Every console session is a checkout now, so disk is the
+    constraint worth watching; ``disk_usage`` is O(1) where walking the tree would not be."""
+    base = get_settings().workspace_base
+    if not base.exists():
+        return {"count": 0}
+    usage = shutil.disk_usage(base)
+    return {
+        "count": sum(1 for child in base.iterdir() if child.is_dir()),
+        "disk_free_bytes": usage.free,
+        "disk_total_bytes": usage.total,
+    }
 
 
 async def start_from_prompt_run(

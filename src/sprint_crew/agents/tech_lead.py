@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic_ai.settings import ModelSettings
@@ -20,6 +21,7 @@ from sprint_crew.orchestrator.complexity import tech_lead_mode
 from sprint_crew.orchestrator.repo_context import gather_repo_context
 from sprint_crew.schemas.ticket import JiraTicket, TaskPlan
 from sprint_crew.tools.pydantic_ai import build_readonly_toolset, workspace_deps
+from sprint_crew.vector.scope import index_scope_for
 
 
 def _repo_context_for_ticket(
@@ -36,7 +38,7 @@ def _repo_context_for_ticket(
 
     sid = session_id or root.name
     query = f"{ticket.summary}\n{ticket.description}"
-    return enrich_repo_context(root, sid, query, ticket=ticket)
+    return enrich_repo_context(root, index_scope_for(root, run_scope_id=sid), query, ticket=ticket)
 
 
 async def run_tech_lead_loop(
@@ -129,14 +131,14 @@ def _semantic_retrieval_satisfied(
 def _append_programmatic_semantic_search(
     handoff: str,
     *,
-    session_id: str,
+    collections: Sequence[str],
     ticket: JiraTicket,
     tool_log: ToolCallLog,
 ) -> str:
     from sprint_crew.vector.search import format_search_hits, semantic_search
 
     query = f"{ticket.summary}\n{ticket.description}"
-    hits = semantic_search(session_id, query)
+    hits = semantic_search(collections, query)
     body = format_search_hits(hits)
     tool_log.append(
         {
@@ -223,7 +225,7 @@ async def run_tech_lead(
         ):
             handoff = _append_programmatic_semantic_search(
                 handoff,
-                session_id=sid,
+                collections=index_scope_for(root, run_scope_id=sid).collections,
                 ticket=ticket,
                 tool_log=log,
             )
