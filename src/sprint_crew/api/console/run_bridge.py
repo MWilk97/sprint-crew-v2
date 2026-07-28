@@ -12,7 +12,7 @@ from sprint_crew.api.console.clarify import (
     clarification_lines,
     resolve_answer_text,
 )
-from sprint_crew.api.console.state import _TERMINAL_STATUSES, touch
+from sprint_crew.api.console.state import _TERMINAL_STATUSES, pending_review, touch
 from sprint_crew.orchestrator.backlog import backlog_store, get_backlog_run
 from sprint_crew.orchestrator.run_registry import run_registry
 from sprint_crew.schemas.console import (
@@ -80,8 +80,12 @@ def build_plan_result(session: ConsoleSession) -> ConsolePlanResult:
 
 
 async def sync_sprint_progress(session: ConsoleSession) -> None:
-    """Mirror run progress into a queued or running code-mode session."""
-    if session.status not in (ConsoleSessionStatus.RUNNING, ConsoleSessionStatus.QUEUED):
+    """Mirror run progress into a queued, running, or parked code-mode session."""
+    if session.status not in (
+        ConsoleSessionStatus.RUNNING,
+        ConsoleSessionStatus.QUEUED,
+        ConsoleSessionStatus.AWAITING_REVIEW,
+    ):
         return
     if session.sprint_ref is None or session.sprint_ref.backlog_run_id is None:
         return
@@ -104,6 +108,13 @@ async def sync_sprint_progress(session: ConsoleSession) -> None:
         session.error = run.error or "backlog run failed"
     elif run.status is BacklogRunStatus.CANCELLED:
         session.status = ConsoleSessionStatus.CANCELLED
+    if session.status in (ConsoleSessionStatus.RUNNING, ConsoleSessionStatus.AWAITING_REVIEW):
+        # Derived from the open review row rather than owned, like every other status here:
+        # the run parks and unparks inside the graph, and only the store sees both (M7).
+        parked = await pending_review(session.session_id) is not None
+        session.status = (
+            ConsoleSessionStatus.AWAITING_REVIEW if parked else ConsoleSessionStatus.RUNNING
+        )
     if session.status in _TERMINAL_STATUSES:
         session.queue_position = None
     await touch(session)

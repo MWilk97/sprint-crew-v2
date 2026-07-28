@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sprint_crew.schemas._base import STRICT
 from sprint_crew.schemas.change import FileAction
@@ -129,6 +129,68 @@ class DiffSnapshotRef(BaseModel):
     total_deletions: int = Field(default=0, ge=0)
 
 
+class FileDecision(BaseModel):
+    """One file's verdict in a human review pass (roadmap M7).
+
+    A reject carries the reason into the Coder's next prompt — that is the whole feature,
+    which is why an empty one is a validation error rather than a nudge in the UI.
+    """
+
+    model_config = STRICT
+
+    path: str = Field(..., min_length=1)
+    decision: Literal["accept", "reject"]
+    reason: str | None = None
+    # Server-stamped on record; a client-supplied value is overwritten.
+    decided_at: str = Field(default_factory=utc_now_iso)
+
+    @model_validator(mode="after")
+    def _rejection_states_why(self) -> FileDecision:
+        if self.decision == "reject" and not (self.reason or "").strip():
+            raise ValueError("a rejected file needs a reason — the retry is built from it")
+        return self
+
+
+class DiffReviewState(BaseModel):
+    """The open (or last) human review of one snapshot.
+
+    ``undecided_paths`` is what a client shows next to its submit control: submitting
+    accepts them, so hiding the count would ship files nobody looked at.
+    """
+
+    model_config = STRICT
+
+    sprint_session_id: str = Field(..., min_length=1)
+    attempt: int = Field(default=0, ge=0)
+    # How many rejection rounds this run had already spent when the review opened.
+    rejection_round: int = Field(default=0, ge=0)
+    # "expired" is closed *without* a decision — the timeout lapsed, or the run was stopped.
+    status: Literal["pending", "decided", "expired"] = "pending"
+    requested_at: str = ""
+    expires_at: str = ""
+    decided_at: str | None = None
+    decisions: list[FileDecision] = Field(default_factory=list)
+    undecided_paths: list[str] = Field(default_factory=list)
+
+
+class DiffDecisionsRequest(BaseModel):
+    """``POST /v1/console/sessions/{id}/diff/decisions``.
+
+    Decisions accumulate across calls (idempotent per path, last write wins) so partial
+    review survives a reload; ``submit`` is what releases the run. Undecided files are
+    accepted at submit — an explicit user action, which is why the count is published.
+    """
+
+    model_config = STRICT
+
+    decisions: list[FileDecision] = Field(default_factory=list)
+    # Which snapshot these decisions are for. Null means the open review, which is what a
+    # client following ``ConsoleDiffPage.review`` always wants.
+    sprint_session_id: str | None = None
+    attempt: int | None = None
+    submit: bool = False
+
+
 class ConsoleDiffPage(BaseModel):
     """``GET /v1/console/sessions/{id}/diff``.
 
@@ -140,3 +202,6 @@ class ConsoleDiffPage(BaseModel):
 
     snapshot: WorkspaceDiffSnapshot | None = None
     available: list[DiffSnapshotRef] = Field(default_factory=list)
+    # The review blocking the run, if one is open (M7). Null for a run that is not parked;
+    # a client polling this reads it as "no action needed from me".
+    review: DiffReviewState | None = None

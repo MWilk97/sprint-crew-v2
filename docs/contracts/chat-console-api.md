@@ -1,6 +1,6 @@
 # Chat console API contract
 
-**Status: Implemented (durable sessions, SSE timeline, queued + cancellable runs, structured diffs).** The `/v1/console/*` routes are live in [api/console/](../../src/sprint_crew/api/console/), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
+**Status: Implemented (durable sessions, SSE timeline, queued + cancellable runs, structured diffs, per-file review).** The `/v1/console/*` routes are live in [api/console/](../../src/sprint_crew/api/console/), mounted alongside the existing `/sprint/*` and `/health` API (see [app.py](../../src/sprint_crew/api/app.py)). A separate off-GX UI repo (see [archive/HISTORY.md](../archive/HISTORY.md)) can target these routes directly. Machine-readable spec: [chat-console.openapi.yaml](chat-console.openapi.yaml). Pydantic models: `src/sprint_crew/schemas/console.py`.
 
 Implementation status / MVP limitations:
 
@@ -12,8 +12,9 @@ Implementation status / MVP limitations:
 - **Start is non-blocking (M5).** `POST /start` returns `202` as soon as the run is queued. Workspace clone, vector indexing, context enrichment, the Work-lane load and the ScrumMaster call all happen after the response and report on the event stream. Previously the request blocked for the whole planning phase.
 - **One run at a time (M5).** The GPU serialises runs, so a second start lands in `queued` with a `queue_position`. See [Run queue and cancel](#run-queue-and-cancel-m5).
 - **`POST /cancel` really cancels (M5).** A queued run is dropped; a running run is asked to stop at its next checkpoint. See [Cancel](#post-v1consolesessionsidcancel).
-- **Structured diffs are read-only (M6).** `GET /sessions/{id}/diff` and `.../diff/{path}` serve a per-file, per-hunk view of what the agent changed, captured at each review pass. Per-file accept/reject is not in this contract version.
-- Progress mirroring: `GET /sessions/{id}` refreshes a queued or running code-mode session from the run registry and the backlog run (`sprint_ref.sprint_session_ids`, `queue_position`, completed/failed/cancelled status); clients may also poll `GET /sprint/backlog/{run_id}` directly.
+- **Structured diffs (M6).** `GET /sessions/{id}/diff` and `.../diff/{path}` serve a per-file, per-hunk view of what the agent changed, captured at each review pass.
+- **Per-file review blocks the run (M7).** A change that passes the merge gate parks in `awaiting_review` until the user accepts or rejects each file; `POST .../diff/decisions` releases it. See [Per-file review](#per-file-review-m7) and [ADR 0015](../adr/0015-human-review-gate.md).
+- Progress mirroring: `GET /sessions/{id}` refreshes a queued, running, or parked code-mode session from the run registry and the backlog run (`sprint_ref.sprint_session_ids`, `queue_position`, completed/failed/cancelled status); clients may also poll `GET /sprint/backlog/{run_id}` directly.
 
 Notes:
 
@@ -54,6 +55,11 @@ stateDiagram-v2
   ready --> running: POST /start when the run slot is free
   queued --> running: run admitted
   queued --> cancelled: POST /cancel
+  running --> awaiting_review: change passed the merge gate (M7)
+  awaiting_review --> running: decisions submitted with a rejection
+  awaiting_review --> completed: everything accepted, run ships
+  awaiting_review --> failed: budget spent or review expired
+  awaiting_review --> cancelled: POST /cancel
   running --> completed
   running --> failed
   running --> cancelled: POST /cancel, once the run unwinds
@@ -62,9 +68,11 @@ stateDiagram-v2
   ready --> cancelled: POST /cancel
 ```
 
-Statuses: `collecting | clarifying | ready | queued | running | completed | failed | cancelled`. A session can reach `ready` without ever passing through `clarifying` — clients must drive off `status`, not off having seen questions. Confirmation is a separate boolean (`confirmed`) set by `POST /confirm` while `ready`; `POST /start` is rejected until `status == "ready"` and `confirmed == true`. Per [ADR 0012](../adr/0012-plan-code-modes-and-clarify.md), no sprint run ever starts from a raw prompt alone.
+Statuses: `collecting | clarifying | ready | queued | running | awaiting_review | completed | failed | cancelled`. A session can reach `ready` without ever passing through `clarifying` — clients must drive off `status`, not off having seen questions. Confirmation is a separate boolean (`confirmed`) set by `POST /confirm` while `ready`; `POST /start` is rejected until `status == "ready"` and `confirmed == true`. Per [ADR 0012](../adr/0012-plan-code-modes-and-clarify.md), no sprint run ever starts from a raw prompt alone.
 
-`queued` and `running` are both "started" for the purposes of `POST /messages`, which returns `409` in either — mid-run steering is out of scope, and accepting a message that changes nothing would be worse than a rejection. A session may also go straight from `ready` to `running` when nothing is ahead of it; clients must handle both.
+`awaiting_review` (M7) is the one non-terminal status that blocks on the **user** rather than on the backend: the run is alive and parked on a per-file verdict. Treat it as "your move", not as progress — and do not treat the status list as closed, since a newer backend may add more.
+
+`queued`, `running` and `awaiting_review` are all "started" for the purposes of `POST /messages`, which returns `409` in each — mid-run steering is out of scope, and accepting a message that changes nothing would be worse than a rejection. A session may also go straight from `ready` to `running` when nothing is ahead of it; clients must handle both.
 
 ## Run queue and cancel (M5)
 
@@ -74,7 +82,8 @@ One run executes at a time. This is a hardware constraint, not a policy: loading
 - **Cancel is asynchronous for a running run.** `POST /cancel` sets `cancel_requested_at`, emits a `cancel_requested` event, and returns `200` with `status` still `running`. The Stop button needs a pending state. The status becomes `cancelled` once the run actually unwinds.
 - **Cancel is immediate otherwise.** A session that never started, or whose run is still queued, goes straight to `cancelled`.
 - **How long "stopping" takes.** The run stops at its next checkpoint: between backlog stories, at a graph node boundary, or between Coder turns. A checkpoint is invisible while a subprocess is mid-call, so the honest worst case is bounded by `ACCEPTANCE_TEST_TIMEOUT_S` (900 s) and `run_command`'s own timeout (300 s). After `CANCEL_GRACE_S` (default 30 s) the run's task is hard-cancelled; lane teardown still completes, because it runs outside the cancelled task.
-- **Restart.** Runs live in `asyncio` tasks, so a restart kills them. On startup every `pending`/`running` backlog run, `running` sprint session, and `queued`/`running` console session is marked `failed` with `interrupted by restart`. Nothing resumes.
+- **Restart.** Runs live in `asyncio` tasks, so a restart kills them. On startup every `pending`/`running` backlog run, `running` sprint session, and `queued`/`running`/`awaiting_review` console session is marked `failed` with `interrupted by restart`. Nothing resumes.
+- **A parked review holds the slot.** A run waiting on per-file review (M7) still occupies the single run slot, so another session's `/start` queues behind it until the user decides or the review expires.
 
 Modes: `plan` (analysis/backlog preview only — never ships, no branch/PR) and `code` (after start, maps to today's ship-to-PR pipeline ending at `awaiting_human` per ADR 0010).
 
@@ -368,9 +377,74 @@ Full hunks for one file, from the same snapshot the bare route serves (or the on
 - **`truncated: true`** means the file exceeded `DIFF_MAX_FILE_BYTES` and was shortened; its hunk counts are rescoped to the lines it actually carries. Say so in the UI. The snapshot-level `truncated` is a different and worse thing: whole files omitted past `DIFF_MAX_FILES`.
 - **Renames arrive as a delete plus a create.** Deliberate for this contract version — do not try to re-pair them. `old_path` carries the previous name where git supplied one.
 - `header_lines` is the `diff --git` preamble verbatim, kept so the original bytes can be reconstructed. A diff view can ignore it.
-- **Read-only.** Per-file accept/reject is a later milestone; nothing here changes run state.
+- **Read-only.** Verdicts go to `POST .../diff/decisions`; `GET` never changes run state.
 
 A `diff_updated` event goes out on the timeline whenever a snapshot is captured, carrying `files_changed`, `additions` and `deletions` — refresh off that rather than polling.
+
+## Per-file review (M7)
+
+A change that passes the deterministic merge gate does **not** ship. The run parks, the session
+reports `awaiting_review`, and `ConsoleDiffPage.review` says which snapshot is waiting. The user
+accepts or rejects each file; `POST .../diff/decisions` with `submit: true` releases the run.
+
+**Reject means feedback, not surgery.** Rejected files go back through the normal retry loop with
+the user's reason in the agent's prompt, and the whole tree is re-gated. Nothing is ever partially
+committed — [ADR 0015](../adr/0015-human-review-gate.md) has the reasoning. [ADR 0010](../adr/0010-manual-merge-gate.md) still holds: this is a gate *before* the PR, it never merges.
+
+### POST /v1/console/sessions/{id}/diff/decisions
+
+```json
+{
+  "decisions": [
+    {"path": "src/app.py", "decision": "accept"},
+    {"path": "src/util.py", "decision": "reject", "reason": "this belongs in the service layer"}
+  ],
+  "submit": true
+}
+```
+
+Returns the `DiffReviewState` after recording: `status`, `decisions`, `undecided_paths`,
+`rejection_round`, `expires_at`.
+
+- **Decisions accumulate.** Idempotent per path, last write wins, so a half-finished review
+  survives a reload and a user can change their mind before submitting.
+- **Only `submit: true` releases the run**, and it **accepts every still-undecided file**. Show
+  `undecided_paths.length` on the submit control — submitting ships files nobody looked at.
+- **A reject needs a non-empty `reason`** (`422` otherwise). It is injected verbatim into the next
+  Coder/TechLead prompt; that is the entire value of the feature.
+- **Follow `review.sprint_session_id` + `attempt`, not "the newest snapshot".** Each story of a
+  backlog run parks separately. Addressing a snapshot that is not the open review is a `409`, as is
+  posting when no review is open.
+- A path outside the snapshot is a `400`.
+
+### While parked
+
+- `POST /messages` is a `409` — the way to speak to a parked run is a decision.
+- `POST /cancel` works normally and is the escape hatch; the run unwinds within a second or so.
+- The lanes are stopped for the duration, so the retry or next story pays a model reload.
+- The run still holds the single run slot: another session's `/start` stays `queued` behind it.
+- **An API restart does not survive a park.** The session is swept to `failed` with
+  `interrupted by restart`, like any other in-flight run.
+
+### How a review ends
+
+| Outcome | What happens |
+|---|---|
+| All accepted | Ships as before — PR opened, session ends `awaiting_human` |
+| Any rejected | One retry round; `attempt` advances, the session returns to `running` |
+| Budget spent | Run ends `failed`, terminal event `reason: review_budget_exhausted` |
+| Nobody decided | Run ends `failed` at `expires_at`, terminal event `reason: review_timeout` |
+
+`MAX_USER_REJECTION_ROUNDS` (default 3) is budgeted **separately** from `MAX_REVIEW_RETRIES`, so
+rejecting does not consume the agent's own retries.
+
+Every terminal `failed` event carries a machine-readable `reason` in `detail` — branch on the slug,
+never on the error prose. Two of the six mean the run was stopped by review, not by a defect:
+`plan_aborted`, `review_timeout`, `review_budget_exhausted`, `deadline_exceeded`,
+`coverage_stalled`, `review_retries_exhausted`.
+
+Events: `awaiting_diff_review` (parked), `review_decisions_recorded` (per POST),
+`rejection_recorded` (a retry round starting), `diff_review_expired`, `review_budget_exhausted`.
 
 ## Mapping to the current /sprint/* API
 

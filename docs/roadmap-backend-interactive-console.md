@@ -368,6 +368,20 @@ a file tree, hunk view, syntax highlighting. Worth the FE roadmap treating it as
 
 ### M7 — Per-file review: accept / reject
 
+**Status (2026-07-28):** Landed. Gate node `awaitDiffReview` in `graph/nodes/review.py`, wakeup in
+`orchestrator/review_gate.py`, decisions in `api/console/diffs.py`, rejection retry in
+`graph/nodes/retry.py`. See [ADR 0015](adr/0015-human-review-gate.md). Five deliberate
+deviations from the plan below: the run **parks in place** rather than ending and resuming (the
+node awaits an `asyncio.Event` the decisions handler sets, so the run keeps the single admission
+slot and does not survive a restart); decisions **accumulate** across calls and a `submit` flag
+releases the gate, with undecided files accepted, rather than one all-or-nothing POST; the review
+state is served on the existing `GET .../diff` as `review` instead of a new endpoint;
+`awaiting_review` is derived from an open review row rather than owned, like every other console
+status; and rejection scope reuses the Reviewer's `_PLAN_KEYWORDS` scan over the user's reasons
+instead of a rejected-path rule. `rejection_recorded` is emitted by the retry node (the round
+actually starting) and `review_decisions_recorded` by the endpoint (what the user did) — two
+facts, not one event in two places.
+
 **Goal.** The user approves or rejects individual files before anything ships.
 
 **The important design decision.** The obvious implementation — stage only accepted paths and commit a

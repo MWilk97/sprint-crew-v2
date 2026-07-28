@@ -15,8 +15,15 @@ from sprint_crew.orchestrator.console_store import console_store, reap_console_s
 from sprint_crew.orchestrator.diff_store import diff_store
 from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.orchestrator.event_log import event_log
+from sprint_crew.orchestrator.review_gate import reset_review_gate
 from sprint_crew.schemas.console import ConsoleSession, ConsoleSessionStatus
-from sprint_crew.schemas.diff import DiffSnapshotRef, FileDiff, WorkspaceDiffSnapshot
+from sprint_crew.schemas.diff import (
+    DiffReviewState,
+    DiffSnapshotRef,
+    FileDecision,
+    FileDiff,
+    WorkspaceDiffSnapshot,
+)
 from sprint_crew.schemas.session import AgentEvent
 
 router = APIRouter(
@@ -36,7 +43,15 @@ _TERMINAL_STATUSES = frozenset(
 # A run has been handed to the registry — the prompt is fixed and further messages are
 # meaningless until it ends. ``queued`` counts: mid-run steering is out of scope, and
 # accepting a message that silently changes nothing is worse than a 409.
-_STARTED_STATUSES = frozenset({ConsoleSessionStatus.QUEUED, ConsoleSessionStatus.RUNNING})
+_STARTED_STATUSES = frozenset(
+    {
+        ConsoleSessionStatus.QUEUED,
+        ConsoleSessionStatus.RUNNING,
+        # Parked on a diff review is still a started run — the way to speak to it is the
+        # decisions endpoint, not another message.
+        ConsoleSessionStatus.AWAITING_REVIEW,
+    }
+)
 
 # One asyncio.Lock per session id, held across each handler's read-modify-write; a
 # threading.Lock does not protect across await points, so clarify + start could interleave.
@@ -70,6 +85,7 @@ def reset_console_store() -> None:
     event_log().clear()
     diff_store().clear()
     event_bus().clear()
+    reset_review_gate()
     _locks.clear()
 
 
@@ -150,10 +166,49 @@ async def diff_file(
     )
 
 
+async def pending_review(session_id: str) -> DiffReviewState | None:
+    return await asyncio.to_thread(diff_store().pending_review, session_id)
+
+
+async def review_state(
+    session_id: str, sprint_session_id: str, attempt: int
+) -> DiffReviewState | None:
+    return await asyncio.to_thread(diff_store().get_review, session_id, sprint_session_id, attempt)
+
+
+async def record_review_decisions(
+    session_id: str, sprint_session_id: str, attempt: int, decisions: list[FileDecision]
+) -> None:
+    await asyncio.to_thread(
+        diff_store().record_decisions, session_id, sprint_session_id, attempt, decisions
+    )
+
+
+async def close_review(
+    session_id: str, sprint_session_id: str, attempt: int, *, status: str, decided_at: str
+) -> None:
+    await asyncio.to_thread(
+        diff_store().close_review,
+        session_id,
+        sprint_session_id,
+        attempt,
+        status=status,
+        decided_at=decided_at,
+    )
+
+
 async def emit(session: ConsoleSession, event: AgentEvent) -> None:
     """Append a console-level event to the timeline so both SSE and polling see it.
 
-    Used for events the API layer owns — cancel, in particular. Run-level events come from
-    the context emitter inside the run instead (orchestrator/emitter.py).
+    Used for events the API layer owns — cancel and review decisions. Run-level events come
+    from the context emitter inside the run instead (orchestrator/emitter.py).
+
+    TODO(bus): this breaks the ``EventBus`` invariant. ``append_many`` appends *and*
+    publishes, so wrapping the whole thing in ``to_thread`` runs ``publish()`` on a worker
+    thread — and ``asyncio.Queue`` is loop-bound, so a live SSE subscriber can miss the
+    wakeup. Present since M5 (the cancel events). The events table is unaffected, so a
+    reconnect always replays what was missed. Fix: give ``append_many`` a ``publish=False``
+    flag, keep the SQLite write in the thread, and publish the returned seq-stamped events
+    here on the loop.
     """
     await asyncio.to_thread(event_log().append_many, session.session_id, None, [event])

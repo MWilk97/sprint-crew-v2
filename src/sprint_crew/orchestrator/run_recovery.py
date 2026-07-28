@@ -25,7 +25,13 @@ INTERRUPTED_ERROR = "interrupted by restart"
 
 _INTERRUPTED_RUN_STATUSES = frozenset({BacklogRunStatus.PENDING, BacklogRunStatus.RUNNING})
 _INTERRUPTED_CONSOLE_STATUSES = frozenset(
-    {ConsoleSessionStatus.QUEUED, ConsoleSessionStatus.RUNNING}
+    {
+        ConsoleSessionStatus.QUEUED,
+        ConsoleSessionStatus.RUNNING,
+        # A run parked on a human review is an ordinary live task holding a workspace and
+        # the admission slot; the restart killed it like any other (M7, ADR 0015).
+        ConsoleSessionStatus.AWAITING_REVIEW,
+    }
 )
 
 
