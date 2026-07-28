@@ -39,8 +39,14 @@ async def run_from_prompt(
     repo_url: str | None,
     use_real_ship: bool,
     console_session_id: str | None = None,
+    plan: BacklogPlan | None = None,
 ) -> BacklogRun:
-    """Plan then execute a from-prompt run. Long-running; call from the RunRegistry."""
+    """Plan then execute a from-prompt run. Long-running; call from the RunRegistry.
+
+    ``plan`` short-circuits the planning phase with an already-reviewed backlog (Promote,
+    roadmap M10). The point is fidelity, not speed: re-running the ScrumMaster could return
+    a different backlog from the one the user read and approved.
+    """
     workspace_id = f"backlog-{run_id}"
     # No sprint session exists yet — planning happens before the first story's cycle — so the
     # emitter is bound with sprint_session_id=None. create_and_run_cycle installs its own
@@ -56,7 +62,20 @@ async def run_from_prompt(
     )
     token = set_emitter(emitter)
     try:
-        plan = await _plan(workspace_id, prompt, repo_url)
+        if plan is None:
+            plan = await _plan(workspace_id, prompt, repo_url)
+        else:
+            emit_live(
+                agent_event(
+                    "orchestrator",
+                    "backlog_planned",
+                    f"Reusing reviewed backlog: {len(plan.stories)} story/ies",
+                    story_count=len(plan.stories),
+                    story_keys=[s.key for s in plan.stories],
+                    recommended_first=plan.recommended_first,
+                    promoted=True,
+                )
+            )
         return await run_backlog_batched(
             run_id=run_id,
             plan=plan,

@@ -16,11 +16,12 @@ from sprint_crew.api.console.clarify import (
     apply_clarify_answers,
     enter_clarifying,
 )
+from sprint_crew.api.console.plan import resolve_depth, submit_plan_run
 from sprint_crew.api.console.run_bridge import (
-    build_plan_result,
     build_run_prompt,
     cancel_backlog_run,
     sync_ask_state,
+    sync_plan_progress,
     sync_sprint_progress,
 )
 from sprint_crew.api.console.state import (
@@ -53,6 +54,7 @@ from sprint_crew.schemas.console import (
     CreateConsoleSessionRequest,
     PostMessageRequest,
     SprintRunRef,
+    StartRunRequest,
 )
 from sprint_crew.schemas.session import agent_event
 
@@ -107,6 +109,7 @@ def _summarize(session: ConsoleSession) -> ConsoleSessionSummary:
         workspace_status=session.workspace_status,
         title=first_user[:_TITLE_CHARS] if first_user else None,
         repo_url=session.repo_url,
+        parent_session_id=session.parent_session_id,
         created_at=session.created_at,
         updated_at=session.updated_at,
     )
@@ -144,6 +147,7 @@ async def get_console_session(id: str) -> ConsoleSession:
     async with _lock_for(id):
         session = await require_session(id)
         await sync_sprint_progress(session)
+        await sync_plan_progress(session)
         await sync_ask_state(session)
         if session.status in _TERMINAL_STATUSES:
             await arun_console_reaper()
@@ -229,9 +233,13 @@ async def confirm_console_session(id: str) -> ConsoleSession:
 
 
 @router.post("/sessions/{id}/start", response_model=ConsoleSession, status_code=202)
-async def start_console_run(id: str) -> ConsoleSession:
+async def start_console_run(id: str, body: StartRunRequest | None = None) -> ConsoleSession:
     """Queue the run and return 202 — accepted, not performed. Planning progress arrives
-    on the event stream; the run becomes ``running`` when it wins the single slot."""
+    on the event stream; the run becomes ``running`` when it wins the single slot.
+
+    Both modes are asynchronous since M10: plan mode used to finish inside this handler,
+    and now queues a real ScrumMaster/TechLead run whose result arrives on the stream.
+    """
     await require_session(id)
     async with _lock_for(id):
         session = await require_session(id)
@@ -245,10 +253,12 @@ async def start_console_run(id: str) -> ConsoleSession:
 
         if session.mode is ConsoleMode.PLAN:
             # Plan mode never ships: no from-prompt run, no Jira, no git writes (ADR 0012).
-            session.plan_result = build_plan_result(session)
-            session.status = ConsoleSessionStatus.COMPLETED
+            submit_plan_run(
+                session,
+                depth=resolve_depth(body.depth if body else None),
+                prompt=build_run_prompt(session),
+            )
             await touch(session)
-            await arun_console_reaper()
             return session
 
         # Lazy import: app.py imports this router at module load.
@@ -299,10 +309,17 @@ async def cancel_console_session(id: str) -> ConsoleSession:
             # Ending the session ends the question asked inside it: otherwise the Explainer
             # keeps the lane and appends an answer to a session nobody is watching.
             registry.cancel(session.active_ask_id, reason="session cancelled")
-        live = run_id is not None and registry.get(run_id) is not None
-        was_queued = live and registry.position(run_id) is not None
+        # A plan run is the session's run in plan mode, so it answers Stop the same way a
+        # code run does. Liveness is read *before* cancelling: cancel dequeues a queued
+        # entry, and asking afterwards would report it as executing.
+        live_id = next(
+            (rid for rid in (run_id, session.plan_run_id) if rid and registry.get(rid) is not None),
+            None,
+        )
+        live = live_id is not None
+        was_queued = live and registry.position(live_id) is not None
         if live:
-            registry.cancel(run_id, reason="cancelled by user")
+            registry.cancel(live_id, reason="cancelled by user")
         # A hard cancel interrupts the parked node's own cleanup, so close the review here
         # too or a stopped session keeps advertising one nobody waits on. Idempotent
         # through the store's pending-only guard.
@@ -324,7 +341,7 @@ async def cancel_console_session(id: str) -> ConsoleSession:
                     "cancel_requested",
                     "Stopping run at the next checkpoint",
                     level="warning",
-                    run_id=run_id,
+                    run_id=live_id,
                 ),
             )
             await touch(session)
@@ -334,8 +351,10 @@ async def cancel_console_session(id: str) -> ConsoleSession:
         session.queue_position = None
         if live:
             # A queued run's body never executes, so nothing else will update its row.
+            # Plan mode has no backlog row at all, hence the guard rather than the flag.
             session.cancel_requested_at = _utc_now_iso()
-            await asyncio.to_thread(cancel_backlog_run, run_id)
+            if run_id is not None:
+                await asyncio.to_thread(cancel_backlog_run, run_id)
         await emit(
             session,
             agent_event("orchestrator", "cancelled", "Session cancelled", level="warning"),

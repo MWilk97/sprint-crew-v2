@@ -6,6 +6,7 @@ from __future__ import annotations
 from sprint_crew.api.console import ask as _ask  # noqa: F401
 from sprint_crew.api.console import diffs as _diffs  # noqa: F401
 from sprint_crew.api.console import events as _events  # noqa: F401
+from sprint_crew.api.console import plan as _plan  # noqa: F401
 from sprint_crew.api.console import routes as _routes  # noqa: F401
 from sprint_crew.api.console.state import (
     lock_count,

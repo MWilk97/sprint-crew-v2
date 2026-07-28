@@ -22,6 +22,7 @@ from sprint_crew.schemas.console import (
 from sprint_crew.schemas.session import BacklogRun, BacklogRunStatus
 
 START_RUN_PATCH = "sprint_crew.api.app.start_from_prompt_run"
+PLAN_BODY_PATCH = "sprint_crew.api.console.plan._plan_body"
 
 
 def _create(client: TestClient, mode: str = "plan", prompt: str | None = "Add a hello() helper"):
@@ -138,9 +139,11 @@ def test_get_after_reap_returns_404(client: TestClient, monkeypatch) -> None:
     session = _make_ready_confirmed(client, mode="plan")
     sid = session["session_id"]
 
-    resp = client.post(f"/v1/console/sessions/{sid}/start")
-    assert resp.status_code == 202
-    assert resp.json()["status"] == "completed"
+    # Cancel rather than start: since M10 no route reaches a terminal status inside the
+    # request, and this test is about the reaper, not about how the session ended.
+    resp = client.post(f"/v1/console/sessions/{sid}/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
 
     # TTL=0: the completion sweep reaps the just-finished session immediately.
     assert client.get(f"/v1/console/sessions/{sid}").status_code == 404
@@ -345,20 +348,23 @@ def test_start_guards(client: TestClient) -> None:
     assert resp.json()["detail"] == "session must be confirmed before start"
 
 
-def test_plan_start_completes_with_plan_result(client: TestClient) -> None:
+def test_plan_start_queues_a_run_instead_of_answering_inline(client: TestClient) -> None:
+    """M10: plan mode is a real ScrumMaster run, so start accepts rather than completes.
+
+    The result arrives on the event stream; see test_console_plan.py for the run itself.
+    """
     session = _make_ready_confirmed(client, mode="plan")
     sid = session["session_id"]
-    resp = client.post(f"/v1/console/sessions/{sid}/start")
-    # 202 even though plan mode finishes inside the request: one status code per route
-    # keeps the generated client simple, and plan mode goes async in M10 anyway.
-    assert resp.status_code == 202
-    body = resp.json()
-    assert body["status"] == "completed"
-    assert body["sprint_ref"] is None
-    assert body["plan_result"]["summary"]
-    assert body["plan_result"]["stories"]
-    # terminal: second start rejected
-    assert client.post(f"/v1/console/sessions/{sid}/start").status_code == 409
+    with patch(PLAN_BODY_PATCH, new=AsyncMock()):
+        resp = client.post(f"/v1/console/sessions/{sid}/start")
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["status"] in ("queued", "running")
+        assert body["plan_result"] is None
+        assert body["plan_run_id"]
+        assert body["sprint_ref"] is None
+        # started, so a second start is rejected exactly as it is for code mode
+        assert client.post(f"/v1/console/sessions/{sid}/start").status_code == 409
 
 
 def test_code_start_sets_sprint_ref_with_mocked_orchestration(client: TestClient) -> None:

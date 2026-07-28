@@ -22,6 +22,7 @@ from pathlib import Path
 from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.diff_store import diff_store
 from sprint_crew.orchestrator.event_log import event_log
+from sprint_crew.orchestrator.plan_store import plan_store
 from sprint_crew.orchestrator.store import TypedJsonStore, _cached_store
 from sprint_crew.schemas.console import (
     ConsoleSession,
@@ -127,6 +128,7 @@ def purge_console_session(session: ConsoleSession) -> None:
     _delete_session_workspaces(session)
     diff_store().delete_for_console_session(session.session_id)
     event_log().delete_for_session(session.session_id)
+    plan_store().delete(session.session_id)
     console_store().delete(session.session_id)
 
 
@@ -150,6 +152,7 @@ def reap_console_sessions(now: datetime | None = None) -> list[str]:
         # Diff snapshots are the one piece of session state large enough to be worth
         # reclaiming explicitly; the events table is left alone, as it always has been.
         diff_store().delete_for_console_session(session.session_id)
+        plan_store().delete(session.session_id)
         store.delete(session.session_id)
         reaped.append(session.session_id)
     if reaped:

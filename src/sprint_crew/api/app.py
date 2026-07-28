@@ -29,6 +29,7 @@ from sprint_crew.orchestrator.session import (
     get_session,
     prepare_workspace,
 )
+from sprint_crew.schemas.backlog import BacklogPlan
 from sprint_crew.schemas.session import (
     BacklogRun,
     BacklogRunStatus,
@@ -134,6 +135,7 @@ async def start_from_prompt_run(
     prompt: str,
     repo_url: str | None,
     console_session_id: str | None = None,
+    plan: BacklogPlan | None = None,
 ) -> str:
     """Queue a from-prompt run and return its id. Returns in milliseconds.
 
@@ -162,6 +164,7 @@ async def start_from_prompt_run(
             repo_url=repo_url,
             use_real_ship=use_real_ship,
             console_session_id=console_session_id,
+            plan=plan,
         )
 
     async def _on_admit() -> None:

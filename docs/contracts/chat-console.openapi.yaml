@@ -267,12 +267,25 @@ paths:
         (backlog_run_id for GET /sprint/backlog/{run_id}; its session_ids feed
         GET /sprint/session/{session_id}). Status is "queued" with queue_position
         when another run holds the single run slot, otherwise "running".
-        mode=plan: analysis only; completes with plan_result and never ships.
+
+        mode=plan: analysis only, never ships (ADR 0012). BREAKING in M10 — this
+        used to complete inside the request and return plan_result. It is now a real
+        ScrumMaster (and, at depth=deep, TechLead) run taking the same run slot as a
+        code run, so it returns "queued"/"running" with plan_result still null. Watch
+        for the plan_complete event and re-read the session, or read plan_run_id.
       parameters:
         - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        description: |
+          Optional; the route took no body before M10, so omitting it stays valid.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRunRequest"
       responses:
         "202":
-          description: Run queued or running (code); completed with plan_result (plan)
+          description: Run queued or running (both modes)
           content:
             application/json:
               schema:
@@ -325,12 +338,12 @@ paths:
                     cancel_requested_at: null
                     created_at: "2026-07-16T09:06:00+00:00"
                     updated_at: "2026-07-16T09:06:00+00:00"
-                planModeCompleted:
-                  summary: mode=plan — analysis only, never ships
+                planModeQueued:
+                  summary: mode=plan — accepted; the plan arrives on the stream
                   value:
                     session_id: cs-plan1
                     mode: plan
-                    status: completed
+                    status: running
                     confirmed: true
                     repo_url: null
                     target_language: null
@@ -342,13 +355,9 @@ paths:
                     clarify_questions: []
                     clarify_answers: []
                     sprint_ref: null
-                    plan_result:
-                      summary: "Two stories: metrics endpoint, backlog counters"
-                      stories:
-                        - title: Expose /metrics with request counters
-                          rationale: observability baseline
-                        - title: Count backlog endpoint hits
-                          rationale: null
+                    plan_result: null
+                    plan_run_id: plan-3c8e
+                    parent_session_id: null
                     error: null
                     queue_position: null
                     cancel_requested_at: null
@@ -364,6 +373,52 @@ paths:
                 $ref: "#/components/schemas/ConsoleError"
               example:
                 detail: session must be confirmed before start
+  /v1/console/sessions/{id}/promote:
+    post:
+      operationId: promoteConsoleSession
+      summary: Turn a completed plan into a code run (M10)
+      description: |
+        Runs the backlog the user just read, without re-clarifying and without
+        re-planning: the stored BacklogPlan is handed straight to the pipeline, so
+        what executes is what was reviewed.
+
+        Returns a NEW session — a different session_id, mode=code, already confirmed
+        and queued, carrying parent_session_id back to the plan. The plan session
+        stays "completed" and readable. Navigate to the child; do not keep polling
+        the parent expecting it to start running.
+
+        The click is the confirmation, so there is no separate confirm/start step.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "202":
+          description: Code session created and its run queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleSession"
+              example:
+                session_id: cs-4b71
+                mode: code
+                status: running
+                confirmed: true
+                parent_session_id: cs-plan1
+                sprint_ref:
+                  backlog_run_id: run-91c2
+                  sprint_session_ids: []
+                plan_result: null
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Not a plan session, not completed, or the stored backlog is gone (reaped
+            or deleted) — plan again before promoting.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+              example:
+                detail: session is running; promote needs a completed plan
   /v1/console/sessions/{id}/cancel:
     post:
       operationId: cancelConsoleSession
@@ -1014,6 +1069,14 @@ components:
           type: array
           items:
             type: string
+    PlanDepth:
+      type: string
+      description: |
+        How much analysis a plan run does (M10). "quick" is the ScrumMaster only —
+        a backlog, tens of seconds on a warm lane. "deep" adds a read-only TechLead
+        pass per story for real files_to_touch/steps/acceptance_tests, which is a
+        model run each (bounded by the server's backlog story cap).
+      enum: [quick, deep]
     PlanPreviewStory:
       type: object
       additionalProperties: false
@@ -1024,6 +1087,47 @@ components:
           minLength: 1
         rationale:
           type: [string, "null"]
+        key:
+          type: [string, "null"]
+          description: Story key; what `depends_on` and `recommended_first` refer to.
+        description:
+          type: string
+          default: ""
+        acceptance_criteria:
+          type: string
+          default: ""
+        priority:
+          type: integer
+          minimum: 0
+          default: 0
+        depends_on:
+          type: array
+          items:
+            type: string
+        estimated_complexity:
+          type: [string, "null"]
+          enum: [trivial, simple, complex, null]
+        files_to_touch:
+          type: array
+          items:
+            type: string
+          description: |
+            Empty at "quick" depth — no TechLead ran. Check `ConsolePlanResult.depth`
+            before rendering an empty list as "no files affected".
+        acceptance_tests:
+          type: array
+          items:
+            type: string
+        steps:
+          type: array
+          items:
+            type: string
+        planning_mode:
+          type: [string, "null"]
+          description: |
+            Which TechLead ladder produced the detail: template, static or tool_loop.
+            A "template" plan is not repo analysis — say so rather than presenting it
+            as one.
     ConsolePlanResult:
       type: object
       additionalProperties: false
@@ -1037,6 +1141,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PlanPreviewStory"
+        depth:
+          allOf:
+            - $ref: "#/components/schemas/PlanDepth"
+          description: Which depth produced this result — i.e. whether a TechLead ran.
+        product_brief:
+          oneOf:
+            - $ref: "#/components/schemas/ProductBrief"
+            - type: "null"
+        recommended_first:
+          type: [string, "null"]
+          description: Story key the ScrumMaster would start with.
+        generated_at:
+          type: string
+    ProductBrief:
+      type: object
+      additionalProperties: false
+      required: [title, summary]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        summary:
+          type: string
+          minLength: 1
+        goals:
+          type: array
+          items:
+            type: string
+        constraints:
+          type: array
+          items:
+            type: string
+        out_of_scope:
+          type: array
+          items:
+            type: string
     CreateConsoleSessionRequest:
       type: object
       additionalProperties: false
@@ -1051,6 +1191,18 @@ components:
         target_language:
           type: [string, "null"]
           description: Phase 3 language-specialized lanes; pass null for now.
+    StartRunRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        Optional body for POST /start (M10). depth applies to plan mode only; a code
+        run's depth is the pipeline's business, not the caller's. Omit for the
+        server default (CONSOLE_PLAN_DEFAULT_DEPTH, "quick" out of the box).
+      properties:
+        depth:
+          oneOf:
+            - $ref: "#/components/schemas/PlanDepth"
+            - type: "null"
     PostMessageRequest:
       type: object
       additionalProperties: false
@@ -1151,6 +1303,20 @@ components:
           oneOf:
             - $ref: "#/components/schemas/ConsolePlanResult"
             - type: "null"
+          description: |
+            Null until a plan run finishes (M10). Plan mode is asynchronous: `POST
+            /start` returns 202 with this still null, and the result arrives with the
+            `plan_complete` event. Do not read it off the start response.
+        plan_run_id:
+          type: [string, "null"]
+          description: |
+            The plan-mode run in the server's registry (M10). Plan mode has no backlog
+            run, so this is what "queued"/"running" refers to for a plan session.
+        parent_session_id:
+          type: [string, "null"]
+          description: |
+            Set on a session created by `POST /promote` (M10): the plan session whose
+            backlog this code run executes. A sidebar can nest the two.
         error:
           type: [string, "null"]
         queue_position:
@@ -1185,6 +1351,12 @@ components:
             was nothing worth indexing, or indexing is switched off.
         index_error:
           type: [string, "null"]
+        contract_version:
+          type: integer
+          default: 2
+          description: |
+            Bumped when a breaking change lands, so a client can branch instead of
+            flag-daying. 1 = everything up to M9. 2 = plan mode is asynchronous (M10).
         created_at:
           type: string
         updated_at:
@@ -1217,6 +1389,9 @@ components:
           description: First user message, truncated — the session's name in a history list.
         repo_url:
           type: [string, "null"]
+        parent_session_id:
+          type: [string, "null"]
+          description: Set on a promoted code run (M10) — nest it under its plan.
         created_at:
           type: string
         updated_at:
@@ -1290,6 +1465,11 @@ components:
         - answer_complete
         - ask_failed
         - clarify_round_started
+        - plan_started
+        - story_planned
+        - plan_complete
+        - plan_failed
+        - promoted
     AgentEvent:
       type: object
       additionalProperties: false

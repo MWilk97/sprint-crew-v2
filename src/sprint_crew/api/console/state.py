@@ -20,6 +20,7 @@ from sprint_crew.orchestrator.console_store import (
 from sprint_crew.orchestrator.diff_store import diff_store
 from sprint_crew.orchestrator.event_bus import event_bus
 from sprint_crew.orchestrator.event_log import event_log
+from sprint_crew.orchestrator.plan_store import plan_store
 from sprint_crew.orchestrator.review_gate import reset_review_gate
 from sprint_crew.schemas.console import ConsoleSession, ConsoleSessionStatus
 from sprint_crew.schemas.diff import (
@@ -89,6 +90,7 @@ def reset_console_store() -> None:
     console_store().clear()
     event_log().clear()
     diff_store().clear()
+    plan_store().clear()
     event_bus().clear()
     reset_review_gate()
     _locks.clear()

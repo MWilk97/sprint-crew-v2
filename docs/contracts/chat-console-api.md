@@ -294,21 +294,33 @@ Queue the run. Empty body. Allowed only when `status == "ready"` and `confirmed 
 }
 ```
 
-- **mode = plan**: analysis only; on completion `status: "completed"` and `plan_result` is set — nothing is shipped:
+- **mode = plan**: analysis only, never shipped. **Changed in M10** — this used to complete inside the request. It is now a real ScrumMaster run (plus a TechLead pass per story at `depth: "deep"`) holding the same run slot as a code run, so the response looks like a queued run and `plan_result` is null:
 
 ```json
 {
-  "plan_result": {
-    "summary": "Two stories: metrics endpoint, backlog counters",
-    "stories": [
-      {"title": "Expose /metrics with request counters", "rationale": "observability baseline"},
-      {"title": "Count backlog endpoint hits", "rationale": null}
-    ]
-  }
+  "status": "running",
+  "plan_run_id": "plan-3c8e",
+  "plan_result": null
 }
 ```
 
+The result arrives with the `plan_complete` event; re-read the session to get it. Optional request body, ignored in code mode:
+
+```json
+{"depth": "quick"}
+```
+
+`quick` (the default) is the ScrumMaster alone — titles, dependencies, complexity. `deep` adds real `files_to_touch`, `steps` and `acceptance_tests` per story and costs a model run each. `plan_result.depth` echoes which ran, so an empty `files_to_touch` can be rendered as "not analysed" rather than "no files affected".
+
 Errors: `404`; `409` not ready or not confirmed (e.g. `{"detail": "session must be confirmed before start"}`).
+
+### POST /v1/console/sessions/{id}/promote
+
+Turn a completed plan into a code run, skipping clarify. Empty body. Response `202`.
+
+Returns a **new** session — different `session_id`, `mode: "code"`, already confirmed and queued, with `parent_session_id` pointing back at the plan. Navigate to the child; the plan session stays `completed` and readable. The backlog that runs is the stored one the user reviewed, not a re-plan.
+
+Errors: `404`; `409` if the session is not a completed plan, or if its stored backlog is gone (reaped or deleted) — plan again before promoting.
 
 ### POST /v1/console/sessions/{id}/cancel
 

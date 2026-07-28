@@ -53,7 +53,7 @@ Two paths execute strings the model wrote — the `run_command` tool and `accept
 
 ### 4.2 Console package layout
 
-[`api/console/`](src/sprint_crew/api/console/) is layered so the import graph stays acyclic: `state` (router, per-session locks, the persistence seam) ← `clarify` (Interpreter + answer validation) and `run_bridge` (console↔backlog-run translation) ← `routes` (session lifecycle) and `events` (polling + SSE). Importing the package registers every route.
+[`api/console/`](src/sprint_crew/api/console/) is layered so the import graph stays acyclic: `state` (router, per-session locks, the persistence seam) ← `clarify` (Interpreter + answer validation) and `run_bridge` (console↔backlog-run translation) ← `routes` (session lifecycle), `events` (polling + SSE), `plan` (plan-mode runs + promote), `ask` (codebase chat) and `diffs` (snapshots + review decisions). Importing the package registers every route.
 
 - **Single-worker assumption.** The per-session `asyncio.Lock`s in `state` are process-local; this is not safe across multiple API workers.
 - **All blocking I/O goes through `state`.** Handlers have no other way to reach a store, which keeps SQLite off the event loop by construction rather than by review. The two `to_thread` calls in `events.py` are composites and say so.

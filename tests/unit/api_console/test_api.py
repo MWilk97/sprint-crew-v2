@@ -235,5 +235,6 @@ def test_console_routes_registered() -> None:
         "/v1/console/sessions/{id}/ask",
         "/v1/console/sessions/{id}/ask/cancel",
         "/v1/console/sessions/{id}/files/{path}",
+        "/v1/console/sessions/{id}/promote",
     }
     assert expected <= paths

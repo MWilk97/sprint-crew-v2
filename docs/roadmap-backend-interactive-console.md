@@ -1,6 +1,6 @@
 # Backend roadmap — interactive console ("Cursor-like") for sprint-crew-v2
 
-**Status:** M0–M9 are **landed**; M10 onward is **proposed**.
+**Status:** M0–M10 are **landed**; M11 onward is **proposed**.
 Each milestone below carries its own status line — the per-milestone marker is authoritative.
 **Scope:** backend (`sprint-crew-v2`) only. Front-end work is *flagged but not planned* here; every
 contract change carries an `FE →` note for the separate front-end roadmap session.
@@ -510,6 +510,23 @@ clarify that can revise questions mid-conversation. Message-send is no longer in
 
 ### M10 — Real plan mode
 
+**Status (2026-07-28):** Landed. Plan body in `orchestrator/plan_run.py`, reviewed-backlog
+persistence in `orchestrator/plan_store.py`, routes in `api/console/plan.py`. See
+[ADR 0018](adr/0018-real-plan-mode.md). Five deliberate deviations from the plan below:
+depth is a **user choice** (`{"depth": "quick"|"deep"}` on start) rather than always running
+the TechLead — the cost difference is an order of magnitude and which one is wanted depends
+on intent, which story count cannot predict; **Promote creates a child session** rather than
+converting the plan session, because a completed session is terminal and the reaper,
+`complete: true`, and every client that stops polling on a terminal status all rely on that;
+the promoted run executes the **stored `BacklogPlan`** via a new `plan=` parameter on
+`run_from_prompt` instead of re-planning, so what runs is what was reviewed; plan mode builds
+its tickets with `ticket_from_story` because `create_jira_tickets` really does POST to Jira,
+which the plan below did not flag; and a story whose TechLead pass fails keeps its
+ScrumMaster-level detail rather than failing the whole plan, with `planning_mode` reported
+per story so a template plan is not presented as repo analysis. `contract_version` landed
+here too (2 = plan mode is asynchronous), since this is the first breaking change since the
+roadmap recommended it.
+
 **Goal.** Replace the stub with genuine analysis that never ships.
 
 **Backend changes.**
@@ -693,8 +710,14 @@ Consolidated for the front-end roadmap session. Ordered by milestone; `†` mark
 | 19e | M9 | A cold Work lane means minutes of `lane_loading` before the first token. Render it as a state, not a spinner — there is deliberately no warm lane (ADR 0017) | behavioural |
 | 20 | M9 | `POST /messages` no longer inert outside `collecting`; it re-interprets and **replaces** the question set | † state machine |
 | 20a | M9 | Round-scoped ids (`q-{round}-{n}`) + `clarify_round` + `prior_clarifications`. `clarify_questions` is not append-only, an answered question can stop being answered, `ready` can go **back** to `clarifying`, and `confirmed` is revoked. Answering a retired round is **409**, not 400 | † state machine |
-| 21 | M10 | `plan` mode becomes async with progress (was instant); richer `plan_result` | † semantics |
-| 22 | M10 | **`POST .../promote`** — plan → code without re-clarifying | new endpoint |
+| 21 | M10 | `plan` mode becomes async with progress (was instant): `/start` returns `queued`/`running` with `plan_result: null`, and the result arrives with `plan_complete` | † semantics |
+| 21a | M10 | **New pre-Start control**: optional `{"depth": "quick"\|"deep"}` on `/start`. `quick` is the ScrumMaster alone; `deep` costs a model run per story | new control |
+| 21b | M10 | Richer `plan_result`: per-story `files_to_touch`, `acceptance_tests`, `steps`, `estimated_complexity`, `depends_on`, plus `product_brief` and `recommended_first`. Read `plan_result.depth` before rendering an empty `files_to_touch` as "no files affected" | additive |
+| 21c | M10 | New events `plan_started` / `story_planned` / `plan_complete` / `plan_failed` / `promoted`. Plan mode also emits `lane_loading` and TechLead `tool_call`s now — the run-controls and timeline components apply to it unchanged | additive |
+| 21d | M10 | A live plan run holds the run slot, so `ask` and `POST /messages` on that session are 409 until it ends. New for a mode that never held anything | behavioural |
+| 22 | M10 | **`POST .../promote`** — plan → code without re-clarifying. Returns a **new session id**; navigate to the child rather than re-polling the parent, which stays `completed` | new endpoint |
+| 22a | M10 | `plan_run_id` and `parent_session_id` on the session; `parent_session_id` on the history summary, so a sidebar can nest a promoted run under its plan | additive |
+| 22b | M10 | `contract_version` on `ConsoleSession` (2 = plan mode is async), so #21 can be branched on rather than flag-dayed | additive |
 | 23 | M11 | **`POST .../attachments`** + `attachment_ids` on message/create | new endpoint |
 
 **Contract versioning recommendation.** Keep `/v1/console/*` and stay additive through Phase B — the route
