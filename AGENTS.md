@@ -138,11 +138,12 @@ Implemented in `sprint_crew.orchestrator.merge_gate.review_accepted`.
 - Work tree preserved between retries.
 - `prior_review_feedback` injected into Coder and TechLead prompts. A source-build failure whose source package name shadows a Python stdlib module (e.g. `src/platform/`) surfaces an explicit `STDLIB SHADOW DETECTED` hint (`retry._stdlib_shadow_packages`).
 - Smart routing: `retry_scope=code` → `codeImplement` only; `retry_scope=plan` → `techLeadPlan` (Reviewer sets scope; Python keyword fallback in `resolve_retry_scope`).
+- **User rejections have their own budget.** `MAX_USER_REJECTION_ROUNDS=3` is separate from `MAX_REVIEW_RETRIES`, or a picky human exhausts the machine's retries; `route_after_gate` discounts the human's rounds from `attempt`, which keeps counting every pass because it keys the diff snapshot ([ADR 0015](docs/adr/0015-human-review-gate.md)).
 - **Reasoning escalation:** Coder attempts `0..N` run thinking-OFF; from `CODER_THINKING_ESCALATION_ATTEMPT=2` onward the Coder enables per-request `enable_thinking` and swaps to `CODER_THINKING_TIMEOUT_S=1800` (vs `CODER_REQUEST_TIMEOUT_S=600`). Cheap deterministic-ish attempts first, expensive reasoning only when they stall.
 
 ### 8.3 Manual merge
 
-Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 0010).
+Human merges PR after `awaiting_human` — agents never auto-merge to main (ADR 0010). A console-backed run additionally parks for per-file accept/reject **before** the PR exists ([ADR 0015](docs/adr/0015-human-review-gate.md)); a rejection is feedback into the retry loop, never a partial commit.
 
 ### 8.4 Producer vs reporter (vLLM)
 

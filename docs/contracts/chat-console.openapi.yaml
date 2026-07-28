@@ -456,6 +456,57 @@ paths:
                 $ref: "#/components/schemas/ConsoleDiffPage"
         "404":
           $ref: "#/components/responses/NotFound"
+  /v1/console/sessions/{id}/diff/decisions:
+    post:
+      operationId: submitDiffDecisions
+      summary: Accept or reject files, and release the parked run
+      description: |
+        The only endpoint that unblocks a running graph (ADR 0015). A run that reached the
+        merge gate parks on a human verdict before anything ships; this answers it.
+
+        Decisions accumulate across calls — idempotent per path, last write wins — so a
+        half-finished review survives a reload. Only submit: true closes the review, and
+        it accepts whatever is still undecided (see review.undecided_paths).
+
+        Reject means feedback, not surgery: the reasons are fed into the existing retry
+        loop and the agent redoes those files with the whole tree re-gated. Nothing is
+        ever partially committed, and ADR 0010 still holds — this gate sits before the
+        PR, it never merges.
+
+        Rejection rounds are budgeted apart from MAX_REVIEW_RETRIES
+        (MAX_USER_REJECTION_ROUNDS, default 3); the next rejection after the last round
+        ends the run with reason review_budget_exhausted.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiffDecisionsRequest"
+      responses:
+        "200":
+          description: The review after recording, including what is still undecided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiffReviewState"
+        "400":
+          description: A decision names a path that is not in the snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: No review is open, or the snapshot addressed is not the open one
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "422":
+          $ref: "#/components/responses/ValidationError"
   /v1/console/sessions/{id}/diff/{path}:
     get:
       operationId: getConsoleFileDiff
@@ -567,8 +618,23 @@ components:
         "queued" (M5) means started but waiting for the single run slot; see
         queue_position. A session may also go straight from ready to running when
         nothing is ahead of it, so clients must handle both.
+
+        "awaiting_review" (M7) is non-terminal and blocks on the *user*: the run is alive
+        and parked on a per-file verdict. Read ConsoleDiffPage.review for what it wants
+        and POST .../diff/decisions to release it. It expires (see review.expires_at),
+        after which the run fails; Stop also works while parked.
       enum:
-        [collecting, clarifying, ready, queued, running, completed, failed, cancelled]
+        [
+          collecting,
+          clarifying,
+          ready,
+          queued,
+          running,
+          awaiting_review,
+          completed,
+          failed,
+          cancelled,
+        ]
     ConsoleMessage:
       type: object
       additionalProperties: false
@@ -840,6 +906,11 @@ components:
         - cancel_requested
         - cancelled
         - diff_updated
+        - awaiting_diff_review
+        - review_decisions_recorded
+        - rejection_recorded
+        - diff_review_expired
+        - review_budget_exhausted
     AgentEvent:
       type: object
       additionalProperties: false
@@ -1078,6 +1149,101 @@ components:
         total_deletions:
           type: integer
           minimum: 0
+    FileDecision:
+      type: object
+      additionalProperties: false
+      required: [path, decision]
+      description: |
+        One file's verdict in a human review pass (M7). A reject must carry a reason —
+        it is injected verbatim into the next Coder/TechLead prompt, so an empty one is
+        a 422 rather than a UI nudge.
+      properties:
+        path:
+          type: string
+          minLength: 1
+        decision:
+          type: string
+          enum: [accept, reject]
+        reason:
+          type: string
+          nullable: true
+          description: Required when decision is "reject". Ignored (but allowed) on accept.
+        decided_at:
+          type: string
+          description: Server-stamped; a value sent by the client is overwritten.
+    DiffReviewState:
+      type: object
+      additionalProperties: false
+      required: [sprint_session_id, attempt, status]
+      description: |
+        The review blocking a run, or the last one on that snapshot. Follow
+        sprint_session_id + attempt rather than "the latest snapshot": on a multi-story
+        backlog run each story parks separately, and the two coincide only by luck.
+      properties:
+        sprint_session_id:
+          type: string
+          minLength: 1
+        attempt:
+          type: integer
+          minimum: 0
+        rejection_round:
+          type: integer
+          minimum: 0
+          description: |
+            Rounds already spent when this review opened, against
+            MAX_USER_REJECTION_ROUNDS (default 3). The next rejection after the last
+            round ends the run with reason review_budget_exhausted.
+        status:
+          type: string
+          description: |
+            "expired" means closed without a decision — the timeout lapsed, or the run
+            was stopped.
+          enum: [pending, decided, expired]
+        requested_at:
+          type: string
+        expires_at:
+          type: string
+          description: |
+            When the park lapses (DIFF_REVIEW_TIMEOUT_S, default 1h). On expiry the run
+            fails with reason review_timeout — worth a visible countdown.
+        decided_at:
+          type: string
+          nullable: true
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileDecision"
+        undecided_paths:
+          type: array
+          description: |
+            Files in the snapshot with no verdict yet. Submitting accepts them, so show
+            this count on the submit control rather than burying it.
+          items:
+            type: string
+    DiffDecisionsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileDecision"
+        sprint_session_id:
+          type: string
+          nullable: true
+          description: |
+            Which snapshot these are for. Omit for the open review, which is what a
+            client following ConsoleDiffPage.review always wants. A mismatch is a 409.
+        attempt:
+          type: integer
+          minimum: 0
+          nullable: true
+        submit:
+          type: boolean
+          default: false
+          description: |
+            Release the run. Without it, decisions are merely saved — which is how a
+            half-finished review survives a page reload.
     ConsoleDiffPage:
       type: object
       additionalProperties: false
@@ -1093,6 +1259,13 @@ components:
           description: Every snapshot this console session has, oldest capture first.
           items:
             $ref: "#/components/schemas/DiffSnapshotRef"
+        review:
+          allOf:
+            - $ref: "#/components/schemas/DiffReviewState"
+          nullable: true
+          description: |
+            The review blocking the run, if one is open (M7). Null means no action is
+            needed from the user — the normal state for most of a run.
     ConsoleError:
       type: object
       additionalProperties: false

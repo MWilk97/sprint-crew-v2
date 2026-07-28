@@ -111,7 +111,7 @@ def test_missing_snapshot_is_an_empty_page_not_an_error(client: TestClient) -> N
     resp = client.get("/v1/console/sessions/cs-1/diff")
 
     assert resp.status_code == 200
-    assert resp.json() == {"snapshot": None, "available": []}
+    assert resp.json() == {"snapshot": None, "available": [], "review": None}
     assert client.get("/v1/console/sessions/cs-missing/diff").status_code == 404
 
 
@@ -154,7 +154,7 @@ def test_another_sessions_snapshot_is_not_reachable(client: TestClient, workspac
 
     body = client.get("/v1/console/sessions/cs-1/diff?sprint_session_id=sp-2&attempt=0").json()
 
-    assert body == {"snapshot": None, "available": []}
+    assert body == {"snapshot": None, "available": [], "review": None}
 
 
 async def test_record_publishes_a_diff_updated_event(workspace: Path) -> None:

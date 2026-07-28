@@ -24,7 +24,9 @@ from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.store import _cached_store
 from sprint_crew.schemas.diff import (
     DiffFileSummary,
+    DiffReviewState,
     DiffSnapshotRef,
+    FileDecision,
     FileDiff,
     WorkspaceDiffSnapshot,
 )
@@ -60,10 +62,38 @@ _CREATE_FILES_SQL = """
         PRIMARY KEY (sprint_session_id, attempt, path)
     )
 """
+_CREATE_REVIEWS_SQL = """
+    CREATE TABLE IF NOT EXISTS diff_reviews (
+        sprint_session_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        console_session_id TEXT,
+        status TEXT NOT NULL,
+        rejection_round INTEGER NOT NULL DEFAULT 0,
+        requested_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL DEFAULT '',
+        decided_at TEXT,
+        PRIMARY KEY (sprint_session_id, attempt)
+    )
+"""
+_CREATE_DECISIONS_SQL = """
+    CREATE TABLE IF NOT EXISTS diff_decisions (
+        sprint_session_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        console_session_id TEXT,
+        decision TEXT NOT NULL,
+        reason TEXT,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (sprint_session_id, attempt, path)
+    )
+"""
 _INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS idx_diff_snapshots_console "
     "ON diff_snapshots(console_session_id, captured_at)",
     "CREATE INDEX IF NOT EXISTS idx_diff_files_console ON diff_files(console_session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_diff_reviews_console "
+    "ON diff_reviews(console_session_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_diff_decisions_console ON diff_decisions(console_session_id)",
 )
 
 _SUMMARY_COLUMNS = "path, old_path, action, additions, deletions, binary, truncated"
@@ -81,6 +111,8 @@ class DiffStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_SNAPSHOTS_SQL)
             conn.execute(_CREATE_FILES_SQL)
+            conn.execute(_CREATE_REVIEWS_SQL)
+            conn.execute(_CREATE_DECISIONS_SQL)
             for statement in _INDEX_SQL:
                 conn.execute(statement)
 
@@ -219,19 +251,127 @@ class DiffStore:
             hunks=json.loads(row["hunks_json"]),
         )
 
-    def delete_for_console_session(self, console_session_id: str) -> None:
+    # --- human review (M7) ---------------------------------------------------------
+    # Decisions live beside the snapshot rather than on it: a snapshot describes one
+    # immutable capture of the tree, and the same capture can be re-read after the review
+    # closed. Joining on read keeps the file rows write-once.
+
+    def open_review(
+        self,
+        console_session_id: str,
+        sprint_session_id: str,
+        attempt: int,
+        *,
+        rejection_round: int,
+        requested_at: str,
+        expires_at: str,
+    ) -> None:
+        """Park a snapshot on a human decision. Replaces any previous review of that attempt.
+
+        Replace rather than fail: a re-entered gate for the same attempt (a resumed graph,
+        a retried capture) describes the same tree, and two open reviews for one snapshot
+        would leave the release condition ambiguous.
+        """
         with closing(self._connect()) as conn, conn:
             conn.execute(
-                "DELETE FROM diff_files WHERE console_session_id = ?", (console_session_id,)
+                "INSERT OR REPLACE INTO diff_reviews (sprint_session_id, attempt, "
+                "console_session_id, status, rejection_round, requested_at, expires_at, "
+                "decided_at) VALUES (?, ?, ?, 'pending', ?, ?, ?, NULL)",
+                (
+                    sprint_session_id,
+                    attempt,
+                    console_session_id,
+                    rejection_round,
+                    requested_at,
+                    expires_at,
+                ),
             )
+
+    def get_review(
+        self, console_session_id: str, sprint_session_id: str, attempt: int
+    ) -> DiffReviewState | None:
+        with closing(self._connect()) as conn, conn:
+            row = conn.execute(
+                "SELECT * FROM diff_reviews WHERE console_session_id = ? "
+                "AND sprint_session_id = ? AND attempt = ?",
+                (console_session_id, sprint_session_id, attempt),
+            ).fetchone()
+            return self._review_from_row(conn, row) if row is not None else None
+
+    def pending_review(self, console_session_id: str) -> DiffReviewState | None:
+        """The review blocking this console session, if any.
+
+        At most one can be open — a console session runs one story at a time and a story
+        parks once per attempt — but the ordering makes the "newest wins" tie-break
+        explicit rather than leaving it to SQLite's row order.
+        """
+        with closing(self._connect()) as conn, conn:
+            row = conn.execute(
+                "SELECT * FROM diff_reviews WHERE console_session_id = ? AND status = 'pending' "
+                "ORDER BY requested_at DESC, sprint_session_id DESC, attempt DESC LIMIT 1",
+                (console_session_id,),
+            ).fetchone()
+            return self._review_from_row(conn, row) if row is not None else None
+
+    def record_decisions(
+        self,
+        console_session_id: str,
+        sprint_session_id: str,
+        attempt: int,
+        decisions: list[FileDecision],
+    ) -> None:
+        """Upsert one verdict per path. Last write wins, so a user can change their mind."""
+        with closing(self._connect()) as conn, conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO diff_decisions (sprint_session_id, attempt, path, "
+                "console_session_id, decision, reason, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        sprint_session_id,
+                        attempt,
+                        d.path,
+                        console_session_id,
+                        d.decision,
+                        d.reason,
+                        d.decided_at,
+                    )
+                    for d in decisions
+                ],
+            )
+
+    def close_review(
+        self,
+        console_session_id: str,
+        sprint_session_id: str,
+        attempt: int,
+        *,
+        status: str,
+        decided_at: str,
+    ) -> None:
+        """Close a review, but only while it is still pending.
+
+        The guard is what lets the gate node abandon a review in its ``finally`` without
+        having to know whether the API already decided it — an abandoned run and a decided
+        one race otherwise, and the loser would overwrite the real outcome.
+        """
+        with closing(self._connect()) as conn, conn:
             conn.execute(
-                "DELETE FROM diff_snapshots WHERE console_session_id = ?", (console_session_id,)
+                "UPDATE diff_reviews SET status = ?, decided_at = ? WHERE console_session_id = ? "
+                "AND sprint_session_id = ? AND attempt = ? AND status = 'pending'",
+                (status, decided_at, console_session_id, sprint_session_id, attempt),
             )
+
+    def delete_for_console_session(self, console_session_id: str) -> None:
+        with closing(self._connect()) as conn, conn:
+            for table in ("diff_files", "diff_snapshots", "diff_reviews", "diff_decisions"):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE console_session_id = ?", (console_session_id,)
+                )
 
     def clear(self) -> None:
         with closing(self._connect()) as conn, conn:
-            conn.execute("DELETE FROM diff_files")
-            conn.execute("DELETE FROM diff_snapshots")
+            for table in ("diff_files", "diff_snapshots", "diff_reviews", "diff_decisions"):
+                conn.execute(f"DELETE FROM {table}")
 
     def _snapshot_from_row(
         self, conn: sqlite3.Connection, row: sqlite3.Row
@@ -254,6 +394,45 @@ class DiffStore:
             total_additions=int(row["total_additions"]),
             total_deletions=int(row["total_deletions"]),
             truncated=bool(row["truncated"]),
+        )
+
+    def _review_from_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> DiffReviewState:
+        """Takes the caller's connection, like ``_snapshot_from_row``: the decisions and the
+        snapshot's file list belong to the same logical read."""
+        key = (row["sprint_session_id"], row["attempt"])
+        decisions = [
+            FileDecision(
+                path=d["path"],
+                decision=d["decision"],
+                reason=d["reason"],
+                decided_at=d["decided_at"],
+            )
+            for d in conn.execute(
+                "SELECT path, decision, reason, decided_at FROM diff_decisions "
+                "WHERE sprint_session_id = ? AND attempt = ? ORDER BY path ASC",
+                key,
+            ).fetchall()
+        ]
+        decided = {d.path for d in decisions}
+        undecided = [
+            f["path"]
+            for f in conn.execute(
+                "SELECT path FROM diff_files WHERE sprint_session_id = ? AND attempt = ? "
+                "ORDER BY path ASC",
+                key,
+            ).fetchall()
+            if f["path"] not in decided
+        ]
+        return DiffReviewState(
+            sprint_session_id=row["sprint_session_id"],
+            attempt=int(row["attempt"]),
+            rejection_round=int(row["rejection_round"]),
+            status=row["status"],
+            requested_at=row["requested_at"],
+            expires_at=row["expires_at"],
+            decided_at=row["decided_at"],
+            decisions=decisions,
+            undecided_paths=undecided,
         )
 
 

@@ -7,10 +7,14 @@ events off its queue — the table and the bus never disagree, and a dropped not
 costs a reconnect-and-replay, never a lost event.
 
 Invariant: ``asyncio.Queue`` is loop-bound and not thread-safe, so ``publish()`` must run on
-the event-loop thread. Every ``append_many`` caller runs on the loop today (the graph's
-``_persist_progress`` and the console handlers). If ``append_many`` is ever moved onto a worker
-thread, ``publish()`` must switch to ``loop.call_soon_threadsafe`` — keeping publish here,
-best-effort and loop-local, is what makes that constraint reviewable in one place.
+the event-loop thread. Keeping publish here, best-effort and loop-local, is what makes that
+constraint reviewable in one place.
+
+TODO(bus): the invariant is currently violated on one path. ``api/console/state.emit`` wraps
+``append_many`` in ``asyncio.to_thread`` to keep SQLite off the loop, which drags ``publish``
+onto the worker with it — so a live subscriber can miss the wakeup for the events the API
+layer owns (cancel since M5, review decisions since M7). The in-run emitter is unaffected;
+it publishes on the loop by design. See the fix sketched at that call site.
 """
 
 from __future__ import annotations

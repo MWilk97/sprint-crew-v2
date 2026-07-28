@@ -39,6 +39,14 @@ class SprintState(TypedDict, total=False):
     acceptance_test_output: str
     backlog_run_id: str | None
     template_fast_path: bool
+    # M7 human review gate. ``review_decisions`` holds one pass's verdicts and is cleared
+    # by the rejection retry, so a later attempt never routes on a stale rejection.
+    # ``user_rejection_rounds`` is a budget separate from ``attempt``: the human's rounds
+    # must not consume MAX_REVIEW_RETRIES.
+    review_decisions: list[dict[str, Any]]
+    user_rejection_rounds: int
+    # Why the run is heading for the failed node, when it is not a review/coverage failure.
+    failure_reason: str
 
 
 def ticket_from_state(state: SprintState) -> JiraTicket:

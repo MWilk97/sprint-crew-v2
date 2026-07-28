@@ -70,6 +70,8 @@ cp .env.example .env          # set HF_TOKEN for model download
 | `POST /v1/console/sessions` (+ `messages`/`clarify`/`confirm`/`start`/`cancel`) | Interactive console — see [contract](docs/contracts/chat-console-api.md) |
 | `GET /v1/console/sessions/{id}/events` | Durable, monotonically sequenced run timeline (polling) |
 | `GET /v1/console/sessions/{id}/stream` | Same timeline over SSE, resumable via `Last-Event-ID` |
+| `GET /v1/console/sessions/{id}/diff` (+ `/{path}`) | Structured per-file, per-hunk diff of what the agent changed |
+| `POST /v1/console/sessions/{id}/diff/decisions` | Accept/reject files and release the parked run ([ADR 0015](docs/adr/0015-human-review-gate.md)) |
 | `GET /health` | API health + vLLM lane status |
 
 Start the API:

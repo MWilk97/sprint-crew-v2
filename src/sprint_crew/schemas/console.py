@@ -34,6 +34,10 @@ class ConsoleSessionStatus(str, Enum):
     # constraint, not a policy — see orchestrator/run_registry.py.
     QUEUED = "queued"
     RUNNING = "running"
+    # The run is alive but parked on a per-file human verdict (roadmap M7). The first
+    # non-terminal state that blocks on the *user* rather than on the backend: a client
+    # must treat it as "your move", not as progress.
+    AWAITING_REVIEW = "awaiting_review"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

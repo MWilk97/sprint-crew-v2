@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     diff_max_files: int = Field(default=500, alias="DIFF_MAX_FILES")
     diff_max_file_bytes: int = Field(default=200_000, alias="DIFF_MAX_FILE_BYTES")
 
+    # Human review gate before ship (roadmap M7). A parked run holds the single admission
+    # slot and its workspace, so the timeout is what stops an abandoned review from
+    # wedging the queue — see ADR 0015. Rejection rounds are a budget separate from
+    # MAX_REVIEW_RETRIES: a picky human must not exhaust the machine's own retries.
+    console_review_gate_enabled: bool = Field(default=True, alias="CONSOLE_REVIEW_GATE_ENABLED")
+    diff_review_timeout_s: float = Field(default=3600.0, alias="DIFF_REVIEW_TIMEOUT_S")
+    # How many times the user may send the work back. The next rejection after the last
+    # round ends the run rather than looping.
+    max_user_rejection_rounds: int = Field(default=3, alias="MAX_USER_REJECTION_ROUNDS")
+
     # Interpreter / clarify (ADR 0013). The console generates questions with an LLM; when
     # the Work lane is cold we fall back to the deterministic stub rather than making an
     # interactive caller wait out a lane load. Set autostart when latency does not matter.

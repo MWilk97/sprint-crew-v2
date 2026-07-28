@@ -21,7 +21,7 @@ Everything else links to the owner instead of restating it.
 |----------|----------|----------|
 | [agent-orchestration.md](agent-orchestration.md) | Engineers | Pipeline flow, planning modes, coverage gates, vector index |
 | [model-evaluation.md](model-evaluation.md) | ML ops | Live model matrix, probe legend, rollback notes |
-| [roadmap-backend-interactive-console.md](roadmap-backend-interactive-console.md) | Engineers, UI repo devs | Phased backend plan for streaming, diff review, and codebase chat (M0–M5 landed; M6+ proposed) |
+| [roadmap-backend-interactive-console.md](roadmap-backend-interactive-console.md) | Engineers, UI repo devs | Phased backend plan for streaming, diff review, and codebase chat (M0–M7 landed; M8+ proposed) |
 | [portfolio-blurb.md](portfolio-blurb.md) | Recruiters | Copy-paste project description |
 | [adr/0010-manual-merge-gate.md](adr/0010-manual-merge-gate.md) | Architects | Why agents never auto-merge |
 | [adr/0012-plan-code-modes-and-clarify.md](adr/0012-plan-code-modes-and-clarify.md) | Architects | Plan/Code user modes, clarify-before-run (backend MVP live; UI proposed) |

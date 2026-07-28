@@ -68,6 +68,12 @@ class EventType(StrEnum):
     CANCELLED = "cancelled"
     # M6 structured diffs
     DIFF_UPDATED = "diff_updated"
+    # M7 human review gate
+    AWAITING_DIFF_REVIEW = "awaiting_diff_review"
+    REVIEW_DECISIONS_RECORDED = "review_decisions_recorded"
+    REJECTION_RECORDED = "rejection_recorded"
+    DIFF_REVIEW_EXPIRED = "diff_review_expired"
+    REVIEW_BUDGET_EXHAUSTED = "review_budget_exhausted"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]

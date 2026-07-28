@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from sprint_crew.orchestrator.acceptance_failure import (
@@ -9,6 +10,7 @@ from sprint_crew.orchestrator.acceptance_failure import (
 )
 from sprint_crew.orchestrator.plan_coverage import PlanCoverageResult
 from sprint_crew.schemas.change import ReviewOutcome
+from sprint_crew.schemas.diff import FileDecision
 
 _PLAN_KEYWORDS = (
     "out of scope",
@@ -74,6 +76,42 @@ def resolve_retry_scope(
     if any(keyword in text for keyword in _PLAN_KEYWORDS):
         return "plan"
     return "code"
+
+
+def resolve_rejection_scope(rejected: Sequence[FileDecision]) -> str:
+    """Return 'plan' or 'code' for a retry the *user* asked for.
+
+    The same keyword scan the Reviewer's own feedback goes through, run over the reasons a
+    human typed: "wrong file", "out of scope" and friends describe a planning problem the
+    Coder cannot fix by editing the file it was pointed at. Defaults to 'code', and
+    ``route_after_retry``'s plan-retry cap still applies, so a false positive costs one
+    replan rather than a loop.
+    """
+    text = " ".join((d.reason or "").lower() for d in rejected)
+    return "plan" if any(keyword in text for keyword in _PLAN_KEYWORDS) else "code"
+
+
+def format_user_rejection_feedback(
+    rejected: Sequence[FileDecision], *, accepted_paths: Sequence[str] = ()
+) -> str:
+    """Build the ``prior_review_feedback`` text for a human rejection.
+
+    Labelled distinctly from the Reviewer's feedback because the two are read by the same
+    prompt slot and mean different things: this one is not a finding to be argued with,
+    and the accepted files are named so the next attempt does not undo work the user kept.
+    """
+    lines = [
+        "USER REVIEW: a human reviewed the diff and sent these files back.",
+        "Address every reason below. The change was otherwise accepted.",
+    ]
+    for decision in rejected:
+        lines.append(f"[rejected] {decision.path} — {(decision.reason or '').strip()}")
+    if accepted_paths:
+        lines.append(
+            "Accepted by the user — keep these changes unless a rejection requires "
+            "touching them: " + ", ".join(accepted_paths)
+        )
+    return "\n".join(lines)
 
 
 def _failure_analysis_from_state(

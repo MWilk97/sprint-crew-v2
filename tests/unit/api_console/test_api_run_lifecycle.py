@@ -299,6 +299,9 @@ def test_sweep_marks_interrupted_rows_failed() -> None:
     for sid, status in (
         ("cs-running", ConsoleSessionStatus.RUNNING),
         ("cs-queued", ConsoleSessionStatus.QUEUED),
+        # Parked on a human diff review (M7) is an ordinary live task holding a workspace
+        # and the run slot; the restart killed it like any other.
+        ("cs-review", ConsoleSessionStatus.AWAITING_REVIEW),
         ("cs-ready", ConsoleSessionStatus.READY),
     ):
         console.save(
@@ -315,7 +318,7 @@ def test_sweep_marks_interrupted_rows_failed() -> None:
 
     assert sorted(swept["backlog_runs"]) == ["r-pending", "r-running"]
     assert swept["sprint_sessions"] == ["s-running"]
-    assert sorted(swept["console_sessions"]) == ["cs-queued", "cs-running"]
+    assert sorted(swept["console_sessions"]) == ["cs-queued", "cs-review", "cs-running"]
 
     assert runs.load("r-running").error == INTERRUPTED_ERROR
     assert runs.load("r-done").status is BacklogRunStatus.COMPLETED

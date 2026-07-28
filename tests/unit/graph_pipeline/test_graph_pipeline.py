@@ -254,8 +254,10 @@ def test_route_after_retry_uses_state_retry_scope(passing_review: ReviewOutcome)
 
 
 def test_route_after_gate_branches(passing_review: ReviewOutcome) -> None:
+    # "review", not "ship": an accepted change goes to the human review gate first (M7).
+    # That node is a pass-through when no console session is behind the run.
     accepted = {"review_outcome": passing_review.model_dump(), "attempt": 0}
-    assert route_after_gate(accepted) == "ship"  # type: ignore[arg-type]
+    assert route_after_gate(accepted) == "review"  # type: ignore[arg-type]
 
     rejected = {
         "review_outcome": passing_review.model_copy(update={"passed": False}).model_dump(),

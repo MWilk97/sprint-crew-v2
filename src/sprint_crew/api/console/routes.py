@@ -24,7 +24,9 @@ from sprint_crew.api.console.state import (
     _lock_for,
     _utc_now_iso,
     arun_console_reaper,
+    close_review,
     emit,
+    pending_review,
     require_session,
     router,
     touch,
@@ -194,6 +196,17 @@ async def cancel_console_session(id: str) -> ConsoleSession:
         was_queued = live and registry.position(run_id) is not None
         if live:
             registry.cancel(run_id, reason="cancelled by user")
+        # A hard cancel interrupts the parked node's own cleanup, so close the review here
+        # too or a stopped session keeps advertising one nobody waits on. Idempotent
+        # through the store's pending-only guard.
+        if (review := await pending_review(session.session_id)) is not None:
+            await close_review(
+                session.session_id,
+                review.sprint_session_id,
+                review.attempt,
+                status="expired",
+                decided_at=_utc_now_iso(),
+            )
 
         if live and not was_queued:
             session.cancel_requested_at = _utc_now_iso()
