@@ -5,10 +5,11 @@ Three things this checks that the JSON probe does not:
   * the model returns useful clarify questions with a defensible recommendation
   * a clear request yields ZERO questions (the model does not interrogate the user)
   * the lane accepts image content parts at all (vision tower actually loaded)
+  * an image survives strict guided JSON, which is what clarify actually sends (M11)
 
 Usage:
   scripts/probe_interpreter.py                  # text probes + latency
-  scripts/probe_interpreter.py --image PATH     # also probe vision
+  scripts/probe_interpreter.py --image PATH     # also probe vision, raw and via clarify
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from openai import OpenAI
 from sprint_crew.agents.interpreter import run_interpreter, to_clarify_questions
 from sprint_crew.config import Role, lane_for_role
 from sprint_crew.inference.router import thinking_chat_template_kwargs
+from sprint_crew.schemas.attachment import AttachmentKind, AttachmentPayload
 
 VAGUE = "make the backlog endpoints faster"
 CLEAR = (
@@ -107,6 +109,43 @@ def _probe_image(image_path: Path) -> bool:
     return True
 
 
+async def _probe_image_clarify(image_path: Path) -> bool:
+    """The combination M11 actually ships: an image *and* strict guided JSON.
+
+    ``_probe_image`` above deliberately uses a raw client and free text, so it says nothing
+    about whether the vision path survives ``response_format: json_schema, strict: true``.
+    That is the question the milestone turns on — if this fails, images have to be a
+    separate free-text describe call whose output feeds the normal text-only IntentAnalysis.
+    """
+    mime = mimetypes.guess_type(image_path.name)[0] or "image/png"
+    encoded = base64.b64encode(image_path.read_bytes()).decode()
+    payload = AttachmentPayload(
+        filename=image_path.name,
+        media_type=mime,
+        kind=AttachmentKind.IMAGE,
+        data_url=f"data:{mime};base64,{encoded}",
+    )
+    started = time.monotonic()
+    try:
+        analysis = await run_interpreter(
+            user_prompt="This screenshot shows the bug I hit. What do you need to know?",
+            attachments=[payload],
+        )
+    except Exception as exc:
+        # Broad on purpose: reporting how this fails *is* the probe. A guided-JSON refusal
+        # and a timeout are different answers to the open question, and both matter.
+        print(f"E vision+json: FAIL — {type(exc).__name__}: {exc}")
+        return False
+    elapsed = time.monotonic() - started
+    print(f"\n--- vision + guided JSON ({elapsed:.1f}s) ---")
+    print(f"goal:       {analysis.restated_goal}")
+    print(f"confidence: {analysis.confidence}")
+    for question in analysis.questions[:3]:
+        print(f"  Q: {question.text}")
+    print(f"E vision+json: PASS ({elapsed:.1f}s)")
+    return True
+
+
 async def _main_async(image: Path | None, compare_thinking: bool) -> int:
     if compare_thinking:
         # Same prompt both ways: clarify is interactive, so the reasoning trace is paid
@@ -119,6 +158,7 @@ async def _main_async(image: Path | None, compare_thinking: bool) -> int:
     ok = await _probe("clear", CLEAR, expect_questions=False) and ok
     if image is not None:
         ok = _probe_image(image) and ok
+        ok = await _probe_image_clarify(image) and ok
     return 0 if ok else 1
 
 

@@ -38,6 +38,22 @@ class UnsupportedAttachmentError(ValueError):
     """The upload is not something the Interpreter may be shown."""
 
 
+def excerpt_text(data: bytes, limit: int) -> str:
+    """Head and tail of a text attachment, with an honest marker for what was dropped.
+
+    Both ends matter for the thing people actually attach: a log's head carries the command
+    and the environment, its tail carries the traceback. Taking only one of them is how an
+    excerpt looks complete while omitting the reason it was attached.
+    """
+    text = data.decode("utf-8", errors="replace")
+    if limit <= 0 or len(text) <= limit:
+        return text
+    head = limit // 3
+    tail = limit - head
+    dropped = len(text) - limit
+    return f"{text[:head]}\n… [{dropped} characters omitted] …\n{text[-tail:]}"
+
+
 def classify(media_type: str) -> AttachmentKind | None:
     normalized = media_type.split(";")[0].strip().lower()
     if normalized in _IMAGE_MEDIA_TYPES:

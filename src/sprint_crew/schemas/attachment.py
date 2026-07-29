@@ -59,3 +59,23 @@ class AttachmentList(BaseModel):
     model_config = STRICT
 
     attachments: list[Attachment] = Field(default_factory=list)
+
+
+class AttachmentPayload(BaseModel):
+    """An attachment resolved to what a prompt can actually carry.
+
+    The split exists so the agent layer never reads a blob: the orchestrator loads the
+    bytes and turns them into either a data URL or a bounded excerpt, and the prompt
+    builder only ever sees one of those two. Which one is decided by ``kind``, not by
+    which field happens to be populated.
+    """
+
+    model_config = STRICT
+
+    filename: str = Field(..., min_length=1)
+    media_type: str = Field(..., min_length=1)
+    kind: AttachmentKind
+    #: ``data:<media_type>;base64,…`` for an image; empty for text.
+    data_url: str = ""
+    #: The excerpt for text; empty for an image.
+    text: str = ""

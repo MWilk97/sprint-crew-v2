@@ -27,7 +27,10 @@ from pathlib import Path
 from sprint_crew.agents.interpreter import run_interpreter, to_clarify_questions
 from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.lanes import ensure_lane, lane_status
+from sprint_crew.orchestrator.attachment_prompt import load_payloads
+from sprint_crew.orchestrator.attachment_store import attachment_store
 from sprint_crew.orchestrator.repo_context import enrich_repo_context
+from sprint_crew.schemas.attachment import AttachmentPayload
 from sprint_crew.schemas.console import (
     ClarifyAnswer,
     ClarifyQuestion,
@@ -161,6 +164,40 @@ async def repo_context_for(session: ConsoleSession, query: str) -> str:
     return text
 
 
+def _latest_attachment_ids(session: ConsoleSession) -> list[str]:
+    """Attachments on the newest user turn, which is the only round they are new in.
+
+    Earlier turns' attachments were already interpreted, and what the Interpreter concluded
+    from them survives in ``prior_clarifications`` and the conversation text. Re-sending
+    every image on every round would multiply the cost of a long conversation by its whole
+    history.
+    """
+    for message in reversed(session.messages):
+        if message.role is ConsoleMessageRole.USER:
+            return list(message.attachment_ids)
+    return []
+
+
+async def attachments_for(session: ConsoleSession) -> list[AttachmentPayload]:
+    """Load the newest turn's attachments, or nothing at all if that fails.
+
+    Same rule as repo context: an attachment that cannot be read must not take the clarify
+    round down with it (ADR 0013).
+    """
+    attachment_ids = _latest_attachment_ids(session)
+    if not attachment_ids:
+        return []
+    try:
+        # to_thread: a SQLite read plus one file read per attachment, from an async handler.
+        attachments = await asyncio.to_thread(
+            attachment_store().get_many, session.session_id, attachment_ids
+        )
+        return await asyncio.to_thread(load_payloads, attachments)
+    except Exception:
+        logger.warning("console clarify: attachments unavailable", exc_info=True)
+        return []
+
+
 async def _work_lane_available() -> bool:
     """True when the Interpreter can run now without making the caller wait on a load."""
     if get_settings().clarify_autostart_lane:
@@ -185,6 +222,7 @@ async def _analyze(session: ConsoleSession, prompt: str) -> IntentAnalysis | Non
             repo_context=repo_context,
             conversation=_conversation_text(session),
             project_hint=session.repo_url or "",
+            attachments=await attachments_for(session),
         )
     except Exception:
         logger.exception("console clarify: interpreter failed, using deterministic questions")

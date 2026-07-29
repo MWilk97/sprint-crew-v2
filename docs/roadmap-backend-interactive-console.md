@@ -1,6 +1,6 @@
 # Backend roadmap — interactive console ("Cursor-like") for sprint-crew-v2
 
-**Status:** M0–M10 are **landed**; M11 onward is **proposed**.
+**Status:** M0–M11 are **landed**; M12 is a **sketch** awaiting a shape decision.
 Each milestone below carries its own status line — the per-milestone marker is authoritative.
 **Scope:** backend (`sprint-crew-v2`) only. Front-end work is *flagged but not planned* here; every
 contract change carries an `FE →` note for the separate front-end roadmap session.
@@ -551,6 +551,22 @@ plan rendering; a new Promote action.
 
 ### M11 — Attachments (images and files)
 
+**Status (2026-07-29):** Landed. Storage in `orchestrator/attachment_store.py`, validation in
+`orchestrator/attachment_media.py`, prompt rendering in `orchestrator/attachment_prompt.py`,
+routes in `api/console/attachments.py`, fence in `agents/prompts_interpreter.py`. See
+[ADR 0019](adr/0019-attachments.md). Four deliberate deviations from the plan below:
+`CreateConsoleSessionRequest` does **not** gain `attachment_ids` (uploads are session-scoped,
+so nothing could populate it — a client creates the session first, which is one fast
+round-trip); blobs live under a **new root** rather than the session directory, because that
+directory is the git checkout and an upload inside it would surface in `git status` as a
+change the agent made; only the **newest user turn's** attachments are sent, since earlier
+ones survive as `prior_clarifications` and re-sending every image each round would multiply a
+long conversation's cost by its own history; and the injection guard is **three structural
+tests plus a probe** rather than one behavioural test — whether a model resists is not
+testable without a GPU, but "attachment content never reaches a non-Interpreter prompt" is,
+and it is what a regression breaks first. The open question below was **stale**: the docs do
+not disagree, and the deployed Work lane has its vision tower loaded.
+
 **Goal.** Paste a screenshot of a bug or attach a log; the Interpreter uses it.
 
 Designed in ADR 0013, explicitly not built. The multimodal boundary is already decided and must be respected:
@@ -718,7 +734,10 @@ Consolidated for the front-end roadmap session. Ordered by milestone; `†` mark
 | 22 | M10 | **`POST .../promote`** — plan → code without re-clarifying. Returns a **new session id**; navigate to the child rather than re-polling the parent, which stays `completed` | new endpoint |
 | 22a | M10 | `plan_run_id` and `parent_session_id` on the session; `parent_session_id` on the history summary, so a sidebar can nest a promoted run under its plan | additive |
 | 22b | M10 | `contract_version` on `ConsoleSession` (2 = plan mode is async), so #21 can be branched on rather than flag-dayed | additive |
-| 23 | M11 | **`POST .../attachments`** + `attachment_ids` on message/create | new endpoint |
+| 23 | M11 | **`POST .../attachments`** (multipart, one `file`), **`GET .../attachments`**, **`GET .../attachments/{attachment_id}`** (raw bytes) | new endpoint |
+| 23a | M11 | `attachment_ids` on `PostMessageRequest` and `ConsoleMessage`. **Not** on `CreateConsoleSessionRequest` — uploads are session-scoped, so paste-before-typing means create the session first | additive |
+| 23b | M11 | New events `attachment_uploaded` / `attachment_rejected`; a rejection carries its reason, so an upload that vanished is explainable | additive |
+| 23c | M11 | Distinct rejection codes worth surfacing differently: 413 too large, 415 wrong or disallowed type, 409 session terminal or at the per-session cap, 503 disabled | behavioural |
 
 **Contract versioning recommendation.** Keep `/v1/console/*` and stay additive through Phase B — the route
 test at `tests/unit/test_api.py:214` asserts a *subset*, so new routes are safe. The genuinely breaking items
@@ -735,7 +754,7 @@ against polling costs nothing and de-risks the streaming milestone.
 
 # Appendix — Open questions to settle before the milestones that need them
 
-1. **Which Work-lane model is actually deployed?** `AGENTS.md` §8.4 says `Qwen3-30B-A3B-Thinking-2507` (text-only); ADR 0013 and `docs/model-evaluation.md` say `Qwen3.6-35B-A3B-NVFP4` (vision). `infra/docker-compose.yml` is the tiebreaker for what runs, but the docs need reconciling regardless. **Blocks M11.** Cheap to settle: `probe_interpreter.py --image`.
+1. ~~**Which Work-lane model is actually deployed?**~~ **Settled in M11: there was no disagreement.** `infra/docker-compose.yml` deploys `RedHatAI/Qwen3.6-35B-A3B-NVFP4` and deliberately omits `--language-model-only`; `infra/models.yaml` sets `supports_vision: true`; `AGENTS.md` §8.4, ADR 0013 and `docs/model-evaluation.md` all name the same model and all call it multimodal. The question was written against a `Qwen3-30B-A3B-Thinking-2507` claim that had since been updated — the rollback lane, not the deployed one. `run_interpreter` degrades to a named-but-unseen attachment when `supports_vision` is false, so the rollback stays safe. See [ADR 0019 §5](adr/0019-attachments.md).
 2. **Warm-lane policy for chat.** ~~Is an idle-timeout warm Work lane acceptable, or must every chat turn pay a load?~~ **Settled in M9: no warm lane.** Every chat turn pays the load, and `lane_loading`/`lane_ready` make the wait visible rather than hiding it. Amending AGENTS.md §4.1 is a real decision about a shared box and deserves its own session with measurements — how often a second question lands inside the timeout, and what a resident 23 GB costs concurrent GPU work — rather than riding along with the milestone that first makes chat exist. See [ADR 0017 §5](adr/0017-codebase-chat.md). **Revisit if first-ask latency is what stops the feature being used.**
 3. **Rejection budget.** Is 3 user-rejection rounds right, and should they consume review retries or not? Recommendation: separate budget. **Blocks M7.**
 4. **Workspace retention.** How many clones may accumulate, and is a 14-day TTL right for terminal sessions? **Blocks M8's eviction policy.**

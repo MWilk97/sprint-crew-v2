@@ -36,7 +36,7 @@ Two paths execute strings the model wrote — the `run_command` tool and `accept
 
 - **Single pipeline:** LangGraph `build_sprint_graph` / `run_sprint_cycle` is the only sprint-cycle engine (from-ticket and backlog). [`batch_cycle.py`](src/sprint_crew/orchestrator/batch_cycle.py) is a thin Jira/workspace orchestrator that calls `create_and_run_cycle` per ticket (no dual CrewAI flows).
 - **Inference:** two vLLM lanes — Coder :8001, Work :8002 (Work hosts Interpreter clarify, ScrumMaster prep, TechLead, Formatter, and Reviewer; the separate Nemotron prep lane was merged into Work).
-- **Multimodal boundary:** the Work model (Qwen3.6) accepts images, but **only the Interpreter may send them** ([ADR 0013](docs/adr/0013-interpreter-clarify.md)). Every other role is text-only and consumes the Interpreter's derived text. Do not add image content parts to ScrumMaster, TechLead, Coder, Tester, or Reviewer prompts.
+- **Multimodal boundary:** the Work model (Qwen3.6) accepts images, but **only the Interpreter may send them** ([ADR 0013](docs/adr/0013-interpreter-clarify.md)). Every other role is text-only and consumes the Interpreter's derived text. Do not add image content parts to ScrumMaster, TechLead, Coder, Tester, or Reviewer prompts. Attachments (M11, [ADR 0019](docs/adr/0019-attachments.md)) reach the Interpreter fenced as data, and only its *derived* text crosses into a run — three grep-shaped tests in `tests/unit/api_console/test_attachment_boundary.py` fail the moment another module imports `AttachmentPayload` or calls `read_blob`.
 - **Lane lifecycle:** do not keep all lanes loaded 24/7 on 128 GB unified memory; start lanes on demand.
 
 ### 4.1 GX10 unified memory (128 GB)
