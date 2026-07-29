@@ -131,6 +131,26 @@ class Settings(BaseSettings):
         default=120.0, alias="CONSOLE_PLAN_WORKSPACE_WAIT_S"
     )
 
+    # Attachments (roadmap M11, ADR 0019). Blobs live under their own root, deliberately
+    # not under ``workspace_base``: that directory is the session's checkout, and an
+    # upload written into it would surface in ``git status`` as a change the agent made.
+    console_attachments_enabled: bool = Field(default=True, alias="CONSOLE_ATTACHMENTS_ENABLED")
+    console_attachment_base: Path = Field(
+        default=Path.home() / ".sprint-crew" / "attachments",
+        alias="CONSOLE_ATTACHMENT_BASE",
+    )
+    console_attachment_max_bytes: int = Field(
+        default=5_242_880, alias="CONSOLE_ATTACHMENT_MAX_BYTES"
+    )
+    console_max_attachments_per_session: int = Field(
+        default=20, alias="CONSOLE_MAX_ATTACHMENTS_PER_SESSION"
+    )
+    # How much of a text attachment reaches the prompt. A 200 MB log is a legitimate thing
+    # to attach and an illegitimate thing to send to a model.
+    console_attachment_excerpt_bytes: int = Field(
+        default=32_768, alias="CONSOLE_ATTACHMENT_EXCERPT_BYTES"
+    )
+
     # Coder (Laguna S 2.1) sampling — Poolside-recommended defaults. The NVFP4
     # quant degrades on raw/unset sampling, so we always pin these (T=0.7, top_p
     # 0.95, top_k 20 are the eval-certified values from the model card / vLLM recipe).

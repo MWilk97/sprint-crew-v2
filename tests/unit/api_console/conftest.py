@@ -27,6 +27,7 @@ def fresh_stores(tmp_path, monkeypatch):
     tree so the suite stays hermetic."""
     monkeypatch.setenv("SPRINT_SESSION_DB", str(tmp_path / "console.db"))
     monkeypatch.setenv("SPRINT_WORKSPACE_BASE", str(tmp_path / "workspaces"))
+    monkeypatch.setenv("CONSOLE_ATTACHMENT_BASE", str(tmp_path / "attachments"))
     get_settings.cache_clear()
     console_module.reset_console_store()
     yield

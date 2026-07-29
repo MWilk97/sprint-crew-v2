@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 from sprint_crew.api.auth import require_token
+from sprint_crew.orchestrator.attachment_store import attachment_store
 from sprint_crew.orchestrator.console_store import (
     console_store,
     enforce_workspace_lru,
@@ -90,6 +91,7 @@ def reset_console_store() -> None:
     console_store().clear()
     event_log().clear()
     diff_store().clear()
+    attachment_store().clear()
     plan_store().clear()
     event_bus().clear()
     reset_review_gate()

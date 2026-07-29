@@ -16,6 +16,9 @@ classifiers = [
 ]
 dependencies = [
     "fastapi",
+    # Declared, not relied on transitively: FastAPI's UploadFile silently 500s without it,
+    # and attachments (M11) are the first multipart route.
+    "python-multipart",
     "uvicorn[standard]",
     "pydantic>=2.13",
     "pydantic-settings",

@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from sprint_crew.api.console.attachments import resolve_attachments
 from sprint_crew.api.console.clarify import (
     StaleClarifyRoundError,
     apply_clarify_answers,
@@ -154,6 +155,25 @@ async def get_console_session(id: str) -> ConsoleSession:
         return session
 
 
+async def _verified_attachment_ids(session_id: str, requested: list[str]) -> list[str]:
+    """Keep the caller's order, and 400 on an id this session does not own.
+
+    Silently dropping an unknown id would let a user send a screenshot the Interpreter
+    never sees and get no indication of it.
+    """
+    if not requested:
+        return []
+    resolved = await resolve_attachments(session_id, requested)
+    known = {a.attachment_id for a in resolved}
+    missing = [aid for aid in requested if aid not in known]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown attachment id(s) for this session: {', '.join(missing)}",
+        )
+    return [a.attachment_id for a in resolved]
+
+
 @router.post("/sessions/{id}/messages", response_model=ConsoleSession)
 async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSession:
     """Add a message and re-interpret. No longer inert outside ``collecting`` (roadmap M9).
@@ -178,7 +198,14 @@ async def post_console_message(id: str, body: PostMessageRequest) -> ConsoleSess
                 status_code=409,
                 detail="an answer is being generated; wait for it or cancel the ask",
             )
-        session.messages.append(ConsoleMessage(role=ConsoleMessageRole.USER, content=body.content))
+        attachment_ids = await _verified_attachment_ids(id, body.attachment_ids)
+        session.messages.append(
+            ConsoleMessage(
+                role=ConsoleMessageRole.USER,
+                content=body.content,
+                attachment_ids=attachment_ids,
+            )
+        )
         rolled = await enter_clarifying(session)
         if rolled:
             await emit(
