@@ -54,8 +54,12 @@ def route_after_diff_review(state: SprintState) -> str:
 
     The gate node has already decided the terminal cases (timeout, exhausted budget) and
     said so in ``failure_reason``; this stays a pure read of state, like its neighbours.
+
+    The wall-clock budget is deliberately *not* consulted here. By this point the merge
+    gate has accepted and a human has signed off, so the work is done — a budget exists to
+    stop new work starting, and failing here only throws away a finished story.
     """
-    if state.get("failure_reason") or _deadline_exceeded(state):
+    if state.get("failure_reason"):
         return "failed"
     decisions = state.get("review_decisions") or []
     rejected = any(d.get("decision") == "reject" for d in decisions)

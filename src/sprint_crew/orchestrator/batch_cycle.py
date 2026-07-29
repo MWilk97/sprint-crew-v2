@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 from uuid import uuid4
 
+from sprint_crew.config import get_settings
 from sprint_crew.graph.lanes import stop_all_lanes
 from sprint_crew.orchestrator.backlog import (
     backlog_store,
@@ -76,12 +77,17 @@ async def run_backlog_batched(
                 workspace = prepare_chained_workspace(parent_workspace, session_id)
 
             session_ids.append(session_id)
+            # A batch is the one place a wedged story is not just its own problem: the
+            # stories after it never run, and the ones before it are already green. Arming
+            # the per-cycle budget here is what stops that (roadmap M0's deadline_epoch,
+            # threaded through the graph but never set until now).
             session = await create_and_run_cycle(
                 ticket=ticket,
                 workspace=workspace,
                 session_id=session_id,
                 user_prompt=user_prompt,
                 use_real_ship=use_real_ship,
+                max_wall_seconds=get_settings().story_wall_seconds,
                 backlog_run_id=run_id,
                 console_session_id=console_session_id,
             )

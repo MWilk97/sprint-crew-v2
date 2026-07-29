@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic_ai.exceptions import ModelAPIError
 from tests.helpers.ticket_fixtures import complex_api_ticket, greeter_ticket
 
 from sprint_crew.agents import tech_lead as tech_lead_module
@@ -328,3 +330,73 @@ async def test_run_tech_lead_complex_uses_tool_loop(tmp_path) -> None:
     assert call_kwargs["planning_handoff"] == "handoff text"
     assert mode == "tool_loop"
     assert plan.ticket_key == "DEMO-2"
+
+
+def _fallback_ticket() -> JiraTicket:
+    """Ticket the deterministic template plan can cover, so the fallback path is reachable."""
+    return JiraTicket(
+        key="DEMO-1",
+        summary="Add hello() to greeter.py",
+        description="Implement hello() returning 'hello'.",
+        status="To Do",
+        issue_type="Story",
+        acceptance_criteria="- Unit tests pass\n- hello() returns 'hello'",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_tech_lead_validated_falls_back_when_lane_keeps_timing_out(tmp_path) -> None:
+    run_mock = AsyncMock(side_effect=ModelAPIError(model_name="work", message="Request timed out."))
+
+    with patch("sprint_crew.agents.tech_lead_planning.run_tech_lead", new=run_mock):
+        plan, mode, _tool_log = await run_tech_lead_validated(_fallback_ticket(), tmp_path)
+
+    assert mode == "template_fallback"
+    assert plan.ticket_key == "DEMO-1"
+    # One retry for a transient blip, then the deterministic plan — not the whole ladder.
+    assert run_mock.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_tech_lead_validated_recovers_from_one_lane_timeout(tmp_path) -> None:
+    (tmp_path / "greeter.py").write_text("pass\n", encoding="utf-8")
+    good_plan = TaskPlan(
+        ticket_key="DEMO-1",
+        summary="Add hello()",
+        steps=[PlanStep(description="edit", files=["greeter.py"])],
+        acceptance_tests=["pytest -q"],
+    )
+    run_mock = AsyncMock(
+        side_effect=[
+            ModelAPIError(model_name="work", message="Request timed out."),
+            (good_plan, "static"),
+        ],
+    )
+
+    with patch("sprint_crew.agents.tech_lead_planning.run_tech_lead", new=run_mock):
+        plan, mode, _tool_log = await run_tech_lead_validated(_fallback_ticket(), tmp_path)
+
+    assert mode == "static"
+    assert plan.acceptance_tests == ["pytest -q"]
+    assert run_mock.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_tech_lead_validated_stops_ladder_once_deadline_passes(tmp_path) -> None:
+    bad_plan = TaskPlan(
+        ticket_key="DEMO-1",
+        summary="Add hello()",
+        steps=[PlanStep(description="edit", files=["greeter.py"])],
+        acceptance_tests=["pytest -q passes"],
+    )
+    run_mock = AsyncMock(return_value=(bad_plan, "static"))
+
+    with patch("sprint_crew.agents.tech_lead_planning.run_tech_lead", new=run_mock):
+        plan, mode, _tool_log = await run_tech_lead_validated(
+            _fallback_ticket(), tmp_path, deadline_epoch=time.time() - 1
+        )
+
+    assert mode == "template_fallback"
+    assert plan.ticket_key == "DEMO-1"
+    # The elapsed budget is only consulted between attempts, so exactly one pass runs.
+    assert run_mock.await_count == 1

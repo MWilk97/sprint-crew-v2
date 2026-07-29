@@ -159,3 +159,27 @@ async def run_acceptance_tests(workspace_root: Path, commands: list[str]) -> tup
             lines.append("stderr: " + result.stderr.strip()[-1000:])
         lines.append("")
     return "\n".join(lines), all_passed
+
+
+def tool_log_shows_passing_acceptance(
+    tool_log: list[dict], commands: list[str], workspace_root: Path
+) -> bool:
+    """True when the agent's own tool log contains a successful acceptance-test run.
+
+    The orchestrator records every ``run_command`` with its ok flag, so a claim of green
+    tests is checkable against what the agent actually observed. A model that reports
+    ``tests_passed=True`` while its own last test run errored is not making a judgement
+    call — it is stating something its tools contradict.
+    """
+    if not commands:
+        return False
+    wanted = {normalize_test_command(cmd.strip(), workspace_root) for cmd in commands}
+    for entry in tool_log:
+        if entry.get("tool") != "run_command" or not entry.get("ok"):
+            continue
+        raw = (entry.get("args") or {}).get("command")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        if normalize_test_command(raw.strip(), workspace_root) in wanted:
+            return True
+    return False

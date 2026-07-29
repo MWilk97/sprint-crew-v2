@@ -64,7 +64,11 @@ async def review(state: SprintState) -> dict[str, Any]:
             f"missing={coverage.get('missing', [])}; unexpected={coverage.get('unexpected', [])}"
         )
 
-    tests_already_run = bool(state.get("tests_run_this_cycle", False) and change.tests_passed)
+    # ``change.tests_passed`` is the Coder's own word and deliberately not consulted here:
+    # a re-run costs seconds, and skipping one on an unverified claim is what let a broken
+    # cycle reach the merge gate green.
+    prior_tests_verified = bool(state.get("tests_run_this_cycle", False))
+    prior_test_output = str(state.get("acceptance_test_output") or "")
     outcome = await reviewer.run_reviewer(
         plan,
         change,
@@ -72,7 +76,8 @@ async def review(state: SprintState) -> dict[str, Any]:
         workspace_diff=workspace_diff,
         test_additions_json=test_additions_json,
         ticket_acceptance_criteria=ticket_from_state(state).acceptance_criteria,
-        tests_already_run=tests_already_run,
+        prior_test_output=prior_test_output,
+        prior_tests_verified=prior_tests_verified,
         coverage_summary=coverage_summary,
         files_to_touch=plan.files_to_touch,
     )

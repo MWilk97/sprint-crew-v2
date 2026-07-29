@@ -6,11 +6,14 @@ import asyncio
 import time
 from typing import Any
 
+from pydantic_ai.exceptions import ModelAPIError
+
 from sprint_crew.agents import tech_lead_planning
 from sprint_crew.agents.tool_events import tool_call_events
-from sprint_crew.config import Role
+from sprint_crew.config import Role, get_settings
 from sprint_crew.graph import lanes
 from sprint_crew.graph.nodes._support import (
+    _deadline_epoch,
     _timed_detail,
 )
 from sprint_crew.graph.state import (
@@ -90,6 +93,31 @@ async def init_session(state: SprintState) -> dict[str, Any]:
     }
 
 
+def _planning_deadline(state: SprintState) -> float:
+    """Earliest of the story's remaining budget and this node's own share of it."""
+    settings = get_settings()
+    candidates = []
+    story_deadline = _deadline_epoch(state)
+    if story_deadline > 0.0:
+        candidates.append(story_deadline)
+    if settings.plan_wall_seconds > 0:
+        candidates.append(time.time() + settings.plan_wall_seconds)
+    return min(candidates) if candidates else 0.0
+
+
+def _planning_failure_class(exc: BaseException) -> str | None:
+    """Separate "the lane died" from "this ticket cannot be planned".
+
+    The ladder re-raises its last error as a RuntimeError, so the original model error
+    survives only as ``__cause__`` — without this both arrive as an opaque string and a
+    trap report cannot tell an infrastructure blip from a real planning failure.
+    """
+    for candidate in (exc, exc.__cause__):
+        if isinstance(candidate, ModelAPIError):
+            return "infra_timeout"
+    return None
+
+
 async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
     started = time.monotonic()
     ticket = ticket_from_state(state)
@@ -121,6 +149,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
             baseline_paths=baseline,
             pre_search_hit_count=len(pre_hits),
             repo_context=context_text,
+            deadline_epoch=_planning_deadline(state),
         )
     except RuntimeError as exc:
         events.append(
@@ -130,6 +159,7 @@ async def tech_lead_plan(state: SprintState) -> dict[str, Any]:
                 f"TechLead planning failed for {ticket.key}",
                 level="error",
                 error=str(exc),
+                failure_class=_planning_failure_class(exc),
             ),
         )
         return {

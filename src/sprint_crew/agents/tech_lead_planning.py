@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic_ai.exceptions import ModelAPIError
+
+from sprint_crew.agents.coder import _deadline_reached
 from sprint_crew.agents.tech_lead import run_tech_lead
 from sprint_crew.agents.tool_events import ToolCallLog
 from sprint_crew.config import get_settings
@@ -30,6 +33,7 @@ async def run_tech_lead_validated(
     baseline_paths: frozenset[str] | None = None,
     pre_search_hit_count: int = 0,
     repo_context: str | None = None,
+    deadline_epoch: float = 0.0,
 ) -> tuple[TaskPlan, str, ToolCallLog]:
     """Run TechLead and validate acceptance_tests, structure, and path existence.
 
@@ -38,6 +42,10 @@ async def run_tech_lead_validated(
     as targeted feedback; on exhaustion fall back to the deterministic template plan.
     ``repo_context`` (gathered once by the graph node) is reused across every retry
     since the workspace is unchanged within a single planning attempt.
+
+    A lane that times out is an infrastructure failure, not an unplannable ticket, so it
+    lands on the same deterministic fallback rather than propagating — and ``deadline_epoch``
+    stops the ladder spending its whole budget on a wedged lane.
     """
     settings = get_settings()
     max_attempts = max(3, settings.max_plan_retries + 2)
@@ -46,17 +54,33 @@ async def run_tech_lead_validated(
     planning_mode = "static"
     tool_log: ToolCallLog = []
     baseline = baseline_paths
+    infra_failures = 0
 
     for attempt in range(max_attempts):
-        plan, planning_mode = await run_tech_lead(
-            ticket,
-            workspace_root,
-            session_id=session_id,
-            prior_review_feedback=feedback,
-            tool_call_log=tool_log,
-            pre_search_hit_count=pre_search_hit_count,
-            repo_context=repo_context,
-        )
+        # Checked between attempts only: abandoning a plan mid-flight buys nothing, and
+        # the request deadline already bounds the attempt itself.
+        if attempt > 0 and _deadline_reached(deadline_epoch):
+            break
+        try:
+            plan, planning_mode = await run_tech_lead(
+                ticket,
+                workspace_root,
+                session_id=session_id,
+                prior_review_feedback=feedback,
+                tool_call_log=tool_log,
+                pre_search_hit_count=pre_search_hit_count,
+                repo_context=repo_context,
+            )
+        except ModelAPIError as exc:
+            # The lane failed, not the plan. The SDK has already retried inside its own
+            # deadline, so allow one more pass for a genuinely transient blip and then take
+            # the deterministic plan — spending the rest of the ladder on a wedged lane is
+            # what cost a 3-story trap run 1h53m in this node.
+            last_error = exc
+            infra_failures += 1
+            if infra_failures > 1:
+                break
+            continue
         if baseline is None:
             from sprint_crew.orchestrator.plan_validation import snapshot_baseline_paths
 

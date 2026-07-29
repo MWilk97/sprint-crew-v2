@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from openai import AsyncOpenAI
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -7,9 +8,24 @@ from sprint_crew.config import Role, get_settings, lane_for_role
 
 
 def pydantic_ai_model(role: Role) -> OpenAIChatModel:
+    """Lane-bound model with an explicit request deadline.
+
+    The provider's own default is a 600 s read with 2 SDK retries, which is both invisible
+    and a 30-minute worst case per logical request. The Coder overrides the deadline per
+    request (see ``coder_model_settings``); this is what every other role gets.
+    """
     lane = lane_for_role(role)
-    provider = OpenAIProvider(base_url=lane.base_url, api_key="local")
-    return OpenAIChatModel(lane.served_name, provider=provider)
+    settings = get_settings()
+    timeout = (
+        settings.coder_request_timeout_s if role is Role.CODING else settings.work_request_timeout_s
+    )
+    client = AsyncOpenAI(
+        base_url=lane.base_url,
+        api_key="local",
+        timeout=timeout,
+        max_retries=settings.model_max_retries,
+    )
+    return OpenAIChatModel(lane.served_name, provider=OpenAIProvider(openai_client=client))
 
 
 def thinking_chat_template_kwargs(enabled: bool) -> dict[str, object]:

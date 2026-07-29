@@ -1427,6 +1427,7 @@ components:
         - tool_call
         - code_change
         - plan_coverage_incomplete
+        - unverified_tests_claim
         - skipped
         - tests_added
         - review_complete

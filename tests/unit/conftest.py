@@ -67,8 +67,18 @@ def _patched_settings(overrides: dict):
         raise AssertionError(f"settings_overrides names no such Settings field: {sorted(unknown)}")
 
     real = get_settings()
+    # Computed properties are not in model_fields but callers read them the same way, so
+    # the stub has to carry them or it fails as an incomplete Settings rather than a
+    # configured one.
+    computed = {
+        name
+        for name, attr in vars(Settings).items()
+        if isinstance(attr, property) and not name.startswith("_")
+    }
     stub = SimpleNamespace(
-        **{field: getattr(real, field) for field in Settings.model_fields} | overrides
+        **{field: getattr(real, field) for field in Settings.model_fields}
+        | {name: getattr(real, name) for name in computed}
+        | overrides
     )
     settings_mock = MagicMock(return_value=stub)
 

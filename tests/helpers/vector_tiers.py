@@ -55,6 +55,10 @@ def start_vector_stack() -> None:
 def failure_class_from_session(session: SprintSession) -> str | None:
     for event in reversed(session.events):
         detail = event.detail or {}
+        if event.event_type == "plan_aborted":
+            planning = detail.get("failure_class")
+            if isinstance(planning, str) and planning:
+                return planning
         if event.agent == "merge_gate" and event.event_type == "gate_result":
             block = detail.get("block_reason")
             if isinstance(block, str) and block:

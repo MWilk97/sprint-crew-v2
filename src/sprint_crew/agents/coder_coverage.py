@@ -90,11 +90,15 @@ async def run_coder_with_coverage(
 
     acceptance_output = ""
     acceptance_verified = False
-    if coverage.satisfied and not _deadline_reached(deadline_epoch) and not cancel_requested():
+    if coverage.satisfied and not cancel_requested():
         # Cancel is checked before starting: launching a 900 s child after Stop is what
         # makes a cancel feel broken. Once running, the child dies with the task — both
         # here and in the run_command tool, which spawns through the same executor
         # (sprint_crew.proc) rather than outliving the run.
+        #
+        # The wall-clock budget deliberately does NOT gate this. Verification is the only
+        # ground truth the cycle has, and skipping it past the deadline demoted the whole
+        # merge gate to the Coder's self-report — a budget must end work, never launder it.
         acceptance_output, acceptance_green = await acceptance_tests.run_acceptance_tests(
             workspace_root, task_plan.acceptance_tests
         )

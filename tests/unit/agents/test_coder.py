@@ -6,9 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
 
-from sprint_crew.agents.coder import _tool_log_has_repeated_call
-from sprint_crew.config import get_settings
-from sprint_crew.inference.router import coder_model_settings, coder_thinking_active
+from sprint_crew.agents.coder import (
+    _tool_log_has_repeated_call,
+    _tool_log_is_stuck_on_refusals,
+)
+from sprint_crew.config import Role, get_settings
+from sprint_crew.inference.router import (
+    coder_model_settings,
+    coder_thinking_active,
+    pydantic_ai_model,
+)
 from sprint_crew.orchestrator.plan_coverage import PlanCoverageResult
 from sprint_crew.schemas.ticket import PlanStep, TaskPlan
 from sprint_crew.tools.pydantic_ai import (
@@ -450,3 +457,53 @@ def test_thinking_disabled_by_flag(monkeypatch) -> None:
         assert "chat_template_kwargs" not in settings.get("extra_body", {})
     finally:
         get_settings.cache_clear()
+
+
+def test_pydantic_ai_model_applies_explicit_work_deadline(monkeypatch) -> None:
+    monkeypatch.setenv("WORK_REQUEST_TIMEOUT_S", "123")
+    monkeypatch.setenv("MODEL_MAX_RETRIES", "1")
+    _reset_settings()
+    try:
+        client = pydantic_ai_model(Role.WORK).client
+        assert client.timeout == 123
+        assert client.max_retries == 1
+    finally:
+        get_settings.cache_clear()
+
+
+def test_pydantic_ai_model_gives_coder_lane_its_own_deadline(monkeypatch) -> None:
+    monkeypatch.setenv("WORK_REQUEST_TIMEOUT_S", "123")
+    monkeypatch.setenv("CODER_REQUEST_TIMEOUT_S", "456")
+    _reset_settings()
+    try:
+        assert pydantic_ai_model(Role.CODING).client.timeout == 456
+    finally:
+        get_settings.cache_clear()
+
+
+def test_refusal_loop_stops_even_when_the_calls_are_not_identical() -> None:
+    """Varying a refused call slightly is the common shape, and it used to run forever.
+
+    One run spent ~30 minutes cycling `cd X && pytest`, `pytest 2>&1 | head`, `ls`, `cp`
+    against the shell-operator and allowlist rules — never three identical in a row, so
+    the identical-call detector never fired.
+    """
+    refusals = [
+        {"tool": "run_command", "args": {"command": cmd}, "ok": False}
+        for cmd in (
+            "cd /w && pytest -q",
+            "cd /w && pytest -q 2>&1",
+            "pytest -q 2>&1 | head -40",
+            "ls -la /w",
+            "cp overlays/clean/conftest.py tests/",
+            "PYTHONPATH=src python -c 'import platform'",
+        )
+    ]
+    assert _tool_log_has_repeated_call(refusals) is False
+    assert _tool_log_is_stuck_on_refusals(refusals) is True
+
+
+def test_productive_tool_log_is_not_mistaken_for_a_refusal_loop() -> None:
+    log = [{"tool": "read_file", "args": {"path": f"a{i}.py"}, "ok": True} for i in range(8)]
+    log.append({"tool": "run_command", "args": {"command": "ls"}, "ok": False})
+    assert _tool_log_is_stuck_on_refusals(log) is False

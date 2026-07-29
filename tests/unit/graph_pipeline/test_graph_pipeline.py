@@ -4,11 +4,13 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic_ai.exceptions import ModelAPIError
 from tests.helpers.acceptance_output import SCRUM3_COLLECTION
 from tests.helpers.ticket_fixtures import greeter_ticket
 
-from sprint_crew.config import Role
+from sprint_crew.config import Role, get_settings
 from sprint_crew.graph.nodes.flow import failed
+from sprint_crew.graph.nodes.plan import _planning_deadline, _planning_failure_class
 from sprint_crew.graph.pipeline import (
     build_sprint_graph,
     code_implement,
@@ -698,3 +700,35 @@ async def test_prepare_retry_wires_test_output_into_feedback(base_retry_state: d
     assert result["prior_review_feedback"]
     assert result["retry_scope"] == "code"
     assert result["attempt"] == 1
+
+
+def test_planning_failure_class_separates_lane_death_from_unplannable_ticket() -> None:
+    timed_out = ModelAPIError(model_name="work", message="Request timed out.")
+    # The ladder re-raises its last error as a RuntimeError, so the model error is a cause.
+    assert _planning_failure_class(RuntimeError("boom")) is None
+    assert _planning_failure_class(timed_out) == "infra_timeout"
+    wrapped = RuntimeError(str(timed_out))
+    wrapped.__cause__ = timed_out
+    assert _planning_failure_class(wrapped) == "infra_timeout"
+
+
+def test_planning_deadline_takes_the_earlier_of_story_and_node_budgets(monkeypatch) -> None:
+    monkeypatch.setenv("PLAN_WALL_SECONDS", "900")
+    get_settings.cache_clear()
+    try:
+        story_deadline = time.time() + 60
+        assert _planning_deadline({"deadline_epoch": story_deadline}) == story_deadline
+        # No story budget: the node still caps itself.
+        node_only = _planning_deadline({})
+        assert 0 < node_only <= time.time() + 900
+    finally:
+        get_settings.cache_clear()
+
+
+def test_planning_deadline_is_unset_when_both_budgets_are_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("PLAN_WALL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        assert _planning_deadline({}) == 0.0
+    finally:
+        get_settings.cache_clear()

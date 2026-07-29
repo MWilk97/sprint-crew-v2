@@ -25,16 +25,21 @@ async def run_reviewer(
     workspace_diff: str = "",
     test_additions_json: str = "",
     ticket_acceptance_criteria: str = "",
-    tests_already_run: bool = False,
+    prior_test_output: str = "",
+    prior_tests_verified: bool = False,
     coverage_summary: str = "",
     files_to_touch: list[str] | None = None,
 ) -> ReviewOutcome:
+    """Review the change; ``prior_test_output`` skips a re-run only when it is real.
+
+    The Reviewer is shown the acceptance run's actual output, never a sentence asserting
+    what that output was. Telling it "trust exit_code=0" is how a Coder's unverified
+    self-report used to become a Reviewer's confident "tests passed" — the model was
+    faithfully echoing a fact the orchestrator had invented for it.
+    """
     root = workspace_root.resolve()
-    if tests_already_run and code_change.tests_passed:
-        test_results = (
-            "Acceptance tests were already run earlier in this cycle and passed. "
-            "Trust exit_code=0 from the prior run."
-        )
+    if prior_tests_verified and prior_test_output.strip():
+        test_results = prior_test_output
         tests_passed = True
     else:
         # Natively async (sprint_crew.proc): keeps the loop free during a run bounded by

@@ -5,8 +5,10 @@ from pathlib import Path
 from tests.helpers.acceptance_output import SCRUM3_COLLECTION
 
 from sprint_crew.orchestrator.acceptance_failure import analyze_acceptance_output
+from sprint_crew.orchestrator.acceptance_tests import tool_log_shows_passing_acceptance
 from sprint_crew.orchestrator.plan_coverage import PlanCoverageResult
 from sprint_crew.orchestrator.retry import (
+    escalate_scope_for_build_failure,
     format_review_feedback,
     resolve_retry_scope,
     resolve_retry_scope_from_coverage,
@@ -342,7 +344,7 @@ def test_stdlib_shadow_named_in_build_failure_feedback() -> None:
         test_output=test_output,
         failure_analysis=analysis,
     )
-    assert "STDLIB SHADOW DETECTED" in feedback
+    assert "POSSIBLE STDLIB SHADOW" in feedback
     assert "'platform'" in feedback
 
 
@@ -367,3 +369,82 @@ def test_no_shadow_hint_when_no_stdlib_collision() -> None:
         failure_analysis=analysis,
     )
     assert "STDLIB SHADOW DETECTED" not in feedback
+
+
+def test_stdlib_paths_never_reach_the_shadow_hint() -> None:
+    """A traceback frame from the interpreter is not a local package.
+
+    This is the shape that told a Coder its "local package 'importlib'" was the problem
+    while the real collision (``src/platform/``) went unmentioned for two hours.
+    """
+    test_output = (
+        "exit_code=2\n"
+        "ERROR collecting tests/test_notify_routes.py\n"
+        'File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module\n'
+        'File "src/api/routes.py", line 12, in <module>\n'
+        "ModuleNotFoundError: No module named 'platform.config'; 'platform' is not a package\n"
+    )
+    analysis = analyze_acceptance_output(test_output)
+    assert "src/api/routes.py" in analysis.source_paths
+    assert not any("importlib" in path for path in analysis.source_paths)
+
+    outcome = ReviewOutcome(
+        ticket_key="SCRUM-3", passed=False, summary="build failure", tests_passed=False
+    )
+    feedback = format_review_feedback(outcome, test_output=test_output, failure_analysis=analysis)
+    assert "'importlib'" not in feedback
+    # The interpreter's own message names the real culprit, so it must lead the feedback.
+    assert feedback.index("Error output (authoritative") < feedback.index("Review summary")
+    assert "'platform' is not a package" in feedback
+
+
+def test_build_failure_escalates_a_code_retry_to_replanning() -> None:
+    build_failure = analyze_acceptance_output(
+        "exit_code=2\n"
+        "ERROR collecting tests/test_x.py\n"
+        'File "src/api/routes.py", line 12, in <module>\n'
+        "ModuleNotFoundError: No module named 'platform.config'\n"
+    )
+    assert build_failure.tester_can_help is False
+    assert escalate_scope_for_build_failure("code", build_failure) == "plan"
+    # A plan-scoped retry and a tester-fixable failure are both left alone.
+    assert escalate_scope_for_build_failure("plan", build_failure) == "plan"
+    assert escalate_scope_for_build_failure("code", None) == "code"
+
+
+def test_unverified_green_claim_is_not_supported_by_an_empty_tool_log(tmp_path) -> None:
+    """A Coder claiming green must have a passing run somewhere on record.
+
+    The orchestrator logs every run_command with its ok flag, so the claim is checkable
+    against what the agent actually observed rather than taken on trust.
+    """
+    commands = ["pytest -q tests/test_notify_routes.py"]
+    assert tool_log_shows_passing_acceptance([], commands, tmp_path) is False
+
+    only_errors = [
+        {
+            "tool": "run_command",
+            "args": {"command": "pytest -q tests/test_notify_routes.py"},
+            "ok": False,
+        }
+    ]
+    assert tool_log_shows_passing_acceptance(only_errors, commands, tmp_path) is False
+
+    passed = [
+        {
+            "tool": "run_command",
+            "args": {"command": "pytest -q tests/test_notify_routes.py"},
+            "ok": True,
+        }
+    ]
+    assert tool_log_shows_passing_acceptance(passed, commands, tmp_path) is True
+
+
+def test_a_passing_unrelated_command_does_not_vouch_for_the_acceptance_tests(tmp_path) -> None:
+    log = [
+        {"tool": "run_command", "args": {"command": "pytest -q tests/test_other.py"}, "ok": True}
+    ]
+    assert (
+        tool_log_shows_passing_acceptance(log, ["pytest -q tests/test_notify.py"], tmp_path)
+        is False
+    )

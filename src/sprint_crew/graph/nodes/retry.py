@@ -24,6 +24,7 @@ from sprint_crew.graph.state import (
 )
 from sprint_crew.orchestrator import acceptance_tests, plan_coverage
 from sprint_crew.orchestrator.retry import (
+    escalate_scope_for_build_failure,
     format_review_feedback,
     format_user_rejection_feedback,
     resolve_failure_feedback,
@@ -61,10 +62,6 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
         workspace_root=workspace_from_state(state),
     )
 
-    plan_retries = state.get("plan_retries", 0)
-    if scope == "plan":
-        plan_retries += 1
-
     stall_count = state.get("coverage_stall_count", 0)
     prev_raw = state.get("plan_coverage_prev")
     if coverage is not None:
@@ -74,10 +71,10 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
         else:
             stall_count = 0
 
-    skip_tester = _skip_tester(state, scope)
-
+    # Provisional: only decides whether the acceptance output has to be re-read below. The
+    # binding value is recomputed once the analysis may have moved scope to "plan".
     test_output = ""
-    if not skip_tester:
+    if not _skip_tester(state, scope):
         cached = state.get("acceptance_test_output", "")
         if state.get("tests_run_this_cycle") and cached:
             test_output = str(cached)
@@ -93,6 +90,12 @@ async def prepare_retry(state: SprintState) -> dict[str, Any]:
         if isinstance(state.get("test_additions"), dict)
         else None,
     )
+
+    # Only now is it known *why* the tests failed, and a source/build failure changes who
+    # can fix it — so scope is settled here, after the analysis, not before it.
+    scope = escalate_scope_for_build_failure(scope, failure_analysis)
+    plan_retries = state.get("plan_retries", 0) + (1 if scope == "plan" else 0)
+    skip_tester = _skip_tester(state, scope)
 
     feedback = format_review_feedback(
         outcome,

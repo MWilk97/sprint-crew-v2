@@ -43,6 +43,7 @@ class EventType(StrEnum):
     TOOL_CALL = "tool_call"
     CODE_CHANGE = "code_change"
     PLAN_COVERAGE_INCOMPLETE = "plan_coverage_incomplete"
+    UNVERIFIED_TESTS_CLAIM = "unverified_tests_claim"
     SKIPPED = "skipped"
     TESTS_ADDED = "tests_added"
     REVIEW_COMPLETE = "review_complete"

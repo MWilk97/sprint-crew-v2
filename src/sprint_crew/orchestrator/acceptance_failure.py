@@ -65,25 +65,36 @@ def _is_test_path(path: str) -> bool:
     return _shared_is_test_path(_normalize_repo_path(path))
 
 
+# Interpreter and dependency frames. A traceback names them constantly and they are never
+# something the repo can fix — but they used to reach `source_paths` and from there the
+# stdlib-shadow hint, which then told a Coder its "local package 'importlib'" was the
+# problem while the real collision went unmentioned.
+_FOREIGN_PATH_MARKERS: tuple[str, ...] = (
+    "site-packages/",
+    "dist-packages/",
+    "lib/python3",
+    "usr/lib/",
+    "usr/local/lib/",
+)
+
+
+def _is_foreign_path(path: str) -> bool:
+    normalized = _normalize_repo_path(path)
+    return any(marker in normalized for marker in _FOREIGN_PATH_MARKERS)
+
+
 def _extract_paths(output: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     source: set[str] = set()
     tests: set[str] = set()
-    for match in _FILE_PATH_RE.finditer(output):
-        normalized = _normalize_repo_path(match.group(1))
-        if not normalized.endswith(".py"):
-            continue
-        if _is_test_path(normalized):
-            tests.add(normalized)
-        else:
-            source.add(normalized)
-    for match in _PATH_LINE_RE.finditer(output):
-        normalized = _normalize_repo_path(match.group(1))
-        if not normalized.endswith(".py"):
-            continue
-        if _is_test_path(normalized):
-            tests.add(normalized)
-        else:
-            source.add(normalized)
+    for pattern in (_FILE_PATH_RE, _PATH_LINE_RE):
+        for match in pattern.finditer(output):
+            normalized = _normalize_repo_path(match.group(1))
+            if not normalized.endswith(".py") or _is_foreign_path(normalized):
+                continue
+            if _is_test_path(normalized):
+                tests.add(normalized)
+            else:
+                source.add(normalized)
     return tuple(sorted(source)), tuple(sorted(tests))
 
 

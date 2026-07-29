@@ -24,6 +24,7 @@ from sprint_crew.graph.state import (
 )
 from sprint_crew.inference.router import coder_thinking_active
 from sprint_crew.orchestrator import workspace_diff as diff_tools
+from sprint_crew.orchestrator.acceptance_tests import tool_log_shows_passing_acceptance
 from sprint_crew.orchestrator.repo_context import maybe_index_overlay
 from sprint_crew.schemas.session import AgentEvent
 from sprint_crew.schemas.session import agent_event as _event
@@ -66,6 +67,19 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
     )
     change = normalize_change(change, plan)
 
+    # A green claim the evidence does not support is corrected here rather than carried:
+    # acceptance_verified is the orchestrator's own run, and the tool log is the agent's.
+    # If neither shows a passing acceptance command, tests_passed is not a judgement call
+    # the Coder gets to make.
+    unverified_claim = (
+        change.tests_passed
+        and not acceptance_verified
+        and bool(plan.acceptance_tests)
+        and not tool_log_shows_passing_acceptance(tool_log, plan.acceptance_tests, workspace)
+    )
+    if unverified_claim:
+        change = change.model_copy(update={"tests_passed": False})
+
     events: list[AgentEvent] = [
         *tool_call_events("coder", tool_log),
         _event(
@@ -80,6 +94,16 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
             ),
         ),
     ]
+    if unverified_claim:
+        events.append(
+            _event(
+                "orchestrator",
+                "unverified_tests_claim",
+                "Coder reported tests_passed with no passing acceptance run on record",
+                level="warning",
+                acceptance_tests=plan.acceptance_tests,
+            ),
+        )
     if not coverage.satisfied:
         events.append(
             _event(
@@ -94,7 +118,9 @@ async def code_implement(state: SprintState) -> dict[str, Any]:
             ),
         )
 
-    tests_run = acceptance_verified or change.tests_passed
+    # Only the orchestrator's own run counts. "Not verified" is not a synonym for "green",
+    # and this flag is what lets the Reviewer skip its re-run.
+    tests_run = acceptance_verified
     result: dict[str, Any] = {
         "code_change": change.model_dump(),
         "workspace_diff": workspace_diff,

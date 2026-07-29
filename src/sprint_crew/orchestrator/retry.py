@@ -78,6 +78,22 @@ def resolve_retry_scope(
     return "code"
 
 
+def escalate_scope_for_build_failure(scope: str, analysis: AcceptanceFailureAnalysis | None) -> str:
+    """Route a source/build failure to re-planning instead of another Coder pass.
+
+    The Coder may only write paths the TaskPlan named, so when the fix lives outside that
+    set it has no legal move and spends its attempts rediscovering that. Re-planning is the
+    widening mechanism the graph already has: TechLead sees the same failure feedback and
+    can name whatever file is needed. Nothing here knows what the fix is — it only stops
+    the system asking the one agent that cannot make it.
+    """
+    if scope != "code" or analysis is None:
+        return scope
+    if analysis.kind == "none" or analysis.tester_can_help:
+        return scope
+    return "plan"
+
+
 def resolve_rejection_scope(rejected: Sequence[FileDecision]) -> str:
     """Return 'plan' or 'code' for a retry the *user* asked for.
 
@@ -155,16 +171,23 @@ def _format_failure_feedback(analysis: AcceptanceFailureAnalysis) -> list[str]:
         label = analysis.kind.upper().replace("_", " ")
         lines.append(f"SOURCE_BUILD_FAILURE ({label}):")
         lines.append(analysis.summary)
+        # The raw error leads. Everything below it is derived from pattern-matching the
+        # same text and can be wrong; the interpreter's own message cannot.
+        if analysis.detail_excerpt.strip():
+            lines.append("Error output (authoritative — read this first):")
+            lines.append(analysis.detail_excerpt.strip())
         if analysis.source_paths:
             lines.append("Affected source files: " + ", ".join(analysis.source_paths))
         shadows = _stdlib_shadow_packages(analysis.source_paths)
         if shadows:
             named = ", ".join(f"'{name}'" for name in shadows)
             lines.append(
-                f"STDLIB SHADOW DETECTED: local package(s) {named} shadow a Python "
-                "stdlib module of the same name, so imports resolve to the wrong module. "
-                "Fix import resolution (absolute/relative imports, package __init__, or "
-                "sys.path) — do NOT rename the stdlib usage."
+                f"POSSIBLE STDLIB SHADOW (heuristic — confirm against the error output "
+                f"above): local package(s) {named} share a name with a Python stdlib "
+                "module, which can make imports resolve to the wrong one. If the error "
+                "names a different module, trust the error. Fix import resolution "
+                "(absolute/relative imports, package __init__, or sys.path) — do NOT "
+                "rename the stdlib usage."
             )
         lines.append(
             "The Tester agent cannot modify src/ — fix imports/syntax in source files first."
@@ -172,7 +195,8 @@ def _format_failure_feedback(analysis: AcceptanceFailureAnalysis) -> list[str]:
         lines.append(
             "Suggested focus: check import paths, stdlib name collisions, missing modules."
         )
-    elif analysis.kind == "assertion_failure" and analysis.test_paths:
+        return lines
+    if analysis.kind == "assertion_failure" and analysis.test_paths:
         lines.append("Assertion failures in: " + ", ".join(analysis.test_paths))
     if analysis.detail_excerpt.strip():
         lines.append("Error excerpt:")

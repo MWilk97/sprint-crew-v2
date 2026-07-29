@@ -10,6 +10,7 @@ from tests.helpers.batch_cycle_fakes import (
     trivial_ticket,
 )
 
+from sprint_crew.config import get_settings
 from sprint_crew.orchestrator.batch_cycle import run_backlog_batched
 from sprint_crew.schemas.session import BacklogRunStatus, SessionStatus, SprintSession
 
@@ -128,3 +129,41 @@ async def test_run_backlog_batched_stops_on_failed_session(tmp_path: Path) -> No
     assert result.failed_ticket_key == "DEMO-2"
     assert "grep" in (result.error or "")
     assert len(result.completed_session_ids) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_backlog_batched_arms_the_per_story_wall_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("STORY_WALL_SECONDS", "1234")
+    get_settings.cache_clear()
+    plan = trivial_plan("S1")
+    tickets = {"S1": trivial_ticket("DEMO-1")}
+    seen: list[float | None] = []
+
+    def fake_prepare(_session_id: str, *, repo_url: str | None = None) -> Path:
+        ws = tmp_path / "ws-1"
+        ws.mkdir()
+        return ws
+
+    async def fake_create_and_run_cycle(**kwargs) -> SprintSession:
+        seen.append(kwargs.get("max_wall_seconds"))
+        return awaiting_session(kwargs["session_id"], kwargs["ticket"], kwargs["workspace"])
+
+    try:
+        with (
+            patch("sprint_crew.orchestrator.batch_cycle.create_jira_tickets", return_value=tickets),
+            patch(
+                "sprint_crew.orchestrator.batch_cycle.prepare_workspace", side_effect=fake_prepare
+            ),
+            patch(
+                "sprint_crew.orchestrator.batch_cycle.create_and_run_cycle",
+                side_effect=fake_create_and_run_cycle,
+            ),
+            patch("sprint_crew.orchestrator.batch_cycle.stop_all_lanes", new=AsyncMock()),
+        ):
+            await run_backlog_batched(run_id="run-1", plan=plan, user_prompt="p")
+    finally:
+        get_settings.cache_clear()
+
+    assert seen == [1234]

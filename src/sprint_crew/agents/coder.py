@@ -55,6 +55,28 @@ def _tool_log_has_repeated_call(tool_log: list[dict], *, threshold: int = 3) -> 
     return all((entry.get("tool"), str(entry.get("args"))) == first for entry in recent)
 
 
+def _tool_log_is_stuck_on_refusals(
+    tool_log: list[dict], *, window: int = 10, threshold: int = 6
+) -> bool:
+    """Whether the recent tool log is mostly the policy saying no.
+
+    Identical-call detection misses the common shape: the model varies the call slightly
+    each time and gets refused for the same reason, so no three in a row ever match. One
+    run spent ~30 minutes cycling ``cd X && pytest``, ``pytest 2>&1 | head``, ``ls``, ``cp``
+    against the shell-operator and allowlist rules. Refusals are not progress, however
+    they are spelled.
+    """
+    if len(tool_log) < threshold:
+        return False
+    recent = tool_log[-window:]
+    return sum(1 for entry in recent if not entry.get("ok", True)) >= threshold
+
+
+def _tool_log_should_stop(tool_log: list[dict]) -> bool:
+    """Loop shapes that will not become progress no matter how many turns are left."""
+    return _tool_log_has_repeated_call(tool_log) or _tool_log_is_stuck_on_refusals(tool_log)
+
+
 def _turn_budget_per_step(task_plan: TaskPlan) -> int:
     settings = get_settings()
     total = _effective_coder_turn_limit(settings.max_coder_turns)
@@ -146,7 +168,7 @@ async def run_coder_loop(
             async for _ in run:
                 if deps.early_exit_handoff:
                     break
-                if tool_log and _tool_log_has_repeated_call(tool_log):
+                if tool_log and _tool_log_should_stop(tool_log):
                     break
                 if _deadline_reached(deadline_epoch):
                     break

@@ -84,7 +84,9 @@ async def test_reviewer_acceptance_tests_do_not_freeze_event_loop(
         patch.object(rv, "structured_completion", return_value=review),
     ):
         ticker = asyncio.create_task(_tick())
-        outcome = await rv.run_reviewer(task_plan, code_change, tmp_path, tests_already_run=False)
+        outcome = await rv.run_reviewer(
+            task_plan, code_change, tmp_path, prior_tests_verified=False
+        )
         ticker.cancel()
 
     assert outcome.tests_passed is True

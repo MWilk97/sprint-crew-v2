@@ -149,10 +149,27 @@ class Settings(BaseSettings):
     coder_request_timeout_s: float = Field(default=600.0, alias="CODER_REQUEST_TIMEOUT_S")
     coder_thinking_timeout_s: float = Field(default=1800.0, alias="CODER_THINKING_TIMEOUT_S")
 
+    # Work lane (TechLead/Tester/Reviewer/Explainer) request deadline. Only the Coder ever
+    # set one explicitly; everything else inherited pydantic-ai's provider default of a
+    # 600 s read with 2 SDK retries, so a single logical request could burn 30 min before
+    # raising. A 3-story trap run spent 1h53m in TechLead planning that way, against a
+    # measured 144-154 s for the stories that planned successfully.
+    work_request_timeout_s: float = Field(default=900.0, alias="WORK_REQUEST_TIMEOUT_S")
+    # Applies to both lanes: the SDK-level retry multiplies whatever deadline is in force.
+    model_max_retries: int = Field(default=1, alias="MODEL_MAX_RETRIES")
+
     # Wall-clock caps on the two subprocess.run calls that previously ran unbounded
     # (acceptance test commands, git). A hung child otherwise blocks the event loop forever.
     acceptance_test_timeout_s: float = Field(default=900.0, alias="ACCEPTANCE_TEST_TIMEOUT_S")
     git_timeout_s: float = Field(default=120.0, alias="GIT_TIMEOUT_S")
+
+    # Wall-clock budgets for a batched story and for its planning node. ``deadline_epoch``
+    # has been threaded through the graph since M0 but nothing ever armed it — backlog runs
+    # now do, so one wedged story cannot consume a whole multi-story run. Sized off measured
+    # runs: planning 144-154 s, a story 1342-1878 s clean and 4001 s with one retry — so
+    # 3600 s killed a story that had already been accepted. Zero disables, as elsewhere.
+    plan_wall_seconds: float = Field(default=900.0, alias="PLAN_WALL_SECONDS")
+    story_wall_seconds: float = Field(default=7200.0, alias="STORY_WALL_SECONDS")
 
     # How long a cancelled run may keep going cooperatively before the RunRegistry
     # hard-cancels its task (M5). A body blocked inside subprocess.run cannot see the
