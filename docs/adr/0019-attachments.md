@@ -97,11 +97,19 @@ capability is not a contract, so the annotation is now explicit and documented a
 Interpreter-only.
 
 Whether an image survives `response_format: json_schema, strict: true` on this lane was
-never exercised: the existing vision probe uses a raw client and free text. That is now a
-probe of its own (`--image` runs both), and it is the one open empirical question in this
-milestone. If guided JSON and vision turn out to be incompatible on vLLM, the fallback is a
-free-text describe call whose output feeds the normal text-only `IntentAnalysis` — which is
-arguably the better design anyway, since the derived text becomes inspectable.
+never exercised: the existing vision probe uses a raw client and free text, which answers a
+different question. `probe_interpreter.py --image` now runs both.
+
+**Measured 2026-07-29 on the GX10, `qwen3.6-35b-a3b-nvfp4`: it works.** The raw vision
+round-trip returned in 1.3 s, and the same image through `run_interpreter` — fenced block,
+content parts, `IntentAnalysis` schema, `strict: true` — returned valid structured output in
+26.6 s having correctly read the picture ("three colored blocks (red, green, blue)"). No
+fallback is needed. Had it failed, the design would have been a free-text describe call
+feeding the normal text-only `IntentAnalysis`, which is worth remembering as the escape
+hatch if a future lane swap breaks the combination.
+
+26.6 s against 24.8 s for the text-only vague probe: on this lane an image is close to free
+next to the reasoning the Interpreter was already doing.
 
 When the lane has no vision tower — the documented `qwen3-30b-a3b-thinking` rollback —
 image data is dropped and the attachment stays announced by name. Clarify degrades, never
