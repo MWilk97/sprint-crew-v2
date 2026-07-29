@@ -11,6 +11,8 @@
 | [0016](0016-durable-repo-index.md) | Accepted | A durable per-repo vector index with a per-run overlay for uncommitted work |
 | [0017](0017-codebase-chat.md) | Accepted | Read-only codebase chat streaming on the session timeline; holds the run slot, refused during a run, no warm lane |
 | [0018](0018-real-plan-mode.md) | Accepted | Plan mode becomes a real queued run with user-chosen depth; Promote spawns a child code session running the stored backlog |
+| [0019](0019-attachments.md) | Accepted | Attachments stored outside the checkout and shown only to the Interpreter; only derived text crosses into a run |
+| [0020](0020-local-repo-bridge.md) | Accepted | The local repo bridge is backend-as-library — move the process to the files rather than remoting the filesystem |
 
 **Why the numbering starts at 0010.** It does not continue an earlier series — 0001–0009 were
 never written. The practice began when the console work started, and the first record was

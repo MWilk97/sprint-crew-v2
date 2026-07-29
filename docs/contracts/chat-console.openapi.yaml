@@ -808,6 +808,123 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConsoleError"
+  /v1/console/sessions/{id}/attachments:
+    post:
+      operationId: uploadConsoleAttachment
+      summary: Upload one file or image to a session (M11)
+      description: |
+        Only the Interpreter is ever shown an attachment (ADR 0013): it looks at images and
+        reads text, and derives clarify questions from them. No other agent receives one,
+        and the attachment itself never reaches a run — only the Interpreter's derived text
+        does.
+
+        Storage is content-addressed, so re-uploading identical content returns the existing
+        attachment rather than a second copy. Allowed in any non-terminal state, including
+        while a run holds the lane: storing bytes needs no model.
+
+        The declared content type must match what the bytes actually are — an image is
+        sniffed by signature, and a mismatch is a 415.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Stored (or the existing attachment for identical content)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attachment"
+        "400":
+          description: The upload is empty
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "404":
+          description: Unknown session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "409":
+          description: Session is terminal, or already holds the maximum attachments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "413":
+          description: Larger than CONSOLE_ATTACHMENT_MAX_BYTES
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "415":
+          description: Media type not allowed, or content does not match the declared type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+        "503":
+          description: Attachments are disabled (CONSOLE_ATTACHMENTS_ENABLED=false)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+    get:
+      operationId: listConsoleAttachments
+      summary: Everything uploaded to this session (M11)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Attachment metadata, oldest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentList"
+        "404":
+          description: Unknown session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
+  /v1/console/sessions/{id}/attachments/{attachment_id}:
+    get:
+      operationId: getConsoleAttachment
+      summary: Fetch an attachment's bytes (M11)
+      description: |
+        Served with the verified media type, so a client can render a thumbnail it did not
+        keep. Scoped to the session in the URL — one session can never read another's.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: attachment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: The stored bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Unknown session or attachment, or the blob is no longer stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleError"
 components:
   securitySchemes:
     bearerAuth:
@@ -898,6 +1015,56 @@ components:
           failed,
           cancelled,
         ]
+    Attachment:
+      type: object
+      additionalProperties: false
+      required: [attachment_id, session_id, filename, media_type, kind, size_bytes, sha256]
+      description: |
+        An uploaded file or image (M11). Metadata only — fetch the bytes from
+        `GET /sessions/{id}/attachments/{attachment_id}`.
+      properties:
+        attachment_id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+        filename:
+          type: string
+          minLength: 1
+        media_type:
+          type: string
+          minLength: 1
+          description: |
+            The *verified* type, which for an image is what the bytes are rather than what
+            the client declared. The two must agree or the upload is a 415.
+        kind:
+          type: string
+          enum: [image, text]
+          description: |
+            How the Interpreter consumes it: an image becomes a vision content part, text
+            becomes a fenced excerpt capped at CONSOLE_ATTACHMENT_EXCERPT_BYTES.
+        size_bytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          minLength: 64
+          maxLength: 64
+          description: |
+            Content address. Two uploads of identical content into one session share this
+            and resolve to a single attachment_id.
+        created_at:
+          type: string
+    AttachmentList:
+      type: object
+      additionalProperties: false
+      required: [attachments]
+      properties:
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Attachment"
     ConsoleMessage:
       type: object
       additionalProperties: false
@@ -921,6 +1088,13 @@ components:
           items:
             $ref: "#/components/schemas/AnswerCitation"
           description: Only ever populated on an assistant turn produced by an ask (M9).
+        attachment_ids:
+          type: array
+          items:
+            type: string
+          description: |
+            Uploads this turn carries (M11). Ids only — fetch the bytes from
+            `GET /sessions/{id}/attachments/{attachment_id}`.
         timestamp:
           type: string
     AnswerCitation:
@@ -1211,6 +1385,15 @@ components:
         content:
           type: string
           minLength: 1
+        attachment_ids:
+          type: array
+          items:
+            type: string
+          description: |
+            Attachments to send with this turn (M11). Upload them first via
+            `POST /sessions/{id}/attachments`; an id this session does not own is a 400.
+            There is deliberately no equivalent field on CreateConsoleSessionRequest —
+            uploads are session-scoped, so nothing could populate it.
     ClarifyRequest:
       type: object
       additionalProperties: false
@@ -1470,6 +1653,8 @@ components:
         - plan_complete
         - plan_failed
         - promoted
+        - attachment_uploaded
+        - attachment_rejected
     AgentEvent:
       type: object
       additionalProperties: false

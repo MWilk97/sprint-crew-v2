@@ -4,6 +4,7 @@ from __future__ import annotations
 
 # Imported for their route-registration side effect; the router is fully populated here.
 from sprint_crew.api.console import ask as _ask  # noqa: F401
+from sprint_crew.api.console import attachments as _attachments  # noqa: F401
 from sprint_crew.api.console import diffs as _diffs  # noqa: F401
 from sprint_crew.api.console import events as _events  # noqa: F401
 from sprint_crew.api.console import plan as _plan  # noqa: F401

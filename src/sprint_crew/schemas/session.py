@@ -99,6 +99,10 @@ class EventType(StrEnum):
     PLAN_COMPLETE = "plan_complete"
     PLAN_FAILED = "plan_failed"
     PROMOTED = "promoted"
+    # M11 attachments. A rejection is an event rather than only a 4xx because the upload
+    # that got refused is exactly the one worth seeing in the timeline afterwards.
+    ATTACHMENT_UPLOADED = "attachment_uploaded"
+    ATTACHMENT_REJECTED = "attachment_rejected"
 
 
 EventLevel = Literal["debug", "info", "warning", "error"]

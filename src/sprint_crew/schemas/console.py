@@ -125,6 +125,9 @@ class ConsoleMessage(BaseModel):
     message_id: str = Field(default_factory=_message_id, min_length=1)
     # Only ever on an assistant turn produced by an ask.
     citations: list[AnswerCitation] = Field(default_factory=list)
+    # Uploads this turn carries (roadmap M11). Ids only: the bytes live in the attachment
+    # store, and a session's message list is loaded on every read.
+    attachment_ids: list[str] = Field(default_factory=list)
     timestamp: str = Field(default_factory=_utc_now_iso)
 
 
@@ -249,6 +252,11 @@ class PostMessageRequest(BaseModel):
     model_config = STRICT
 
     content: str = Field(..., min_length=1)
+    # Attachments are uploaded to an existing session, so there is deliberately no
+    # equivalent field on ``CreateConsoleSessionRequest``: nothing could populate it. A
+    # client pasting an image into an empty composer creates the session first, which is
+    # one fast round-trip (roadmap M11).
+    attachment_ids: list[str] = Field(default_factory=list)
 
 
 class ClarifyRequest(BaseModel):

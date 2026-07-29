@@ -12,6 +12,9 @@ from sprint_crew.config import Role, lane_for_role
 
 T = TypeVar("T", bound=BaseModel)
 
+#: What a user turn may carry: plain text, or OpenAI content parts for a multimodal turn.
+UserContent = str | list[dict[str, object]]
+
 _MAX_RETRIES = 3
 _RAW_FRAGMENT_CHARS = 2000
 
@@ -37,7 +40,7 @@ def structured_completion(
     role: Role,
     *,
     system_prompt: str,
-    user_prompt: str,
+    user_prompt: UserContent,
     output_type: type[T],
     temperature: float = 0,
     timeout_seconds: float = 600,
@@ -49,6 +52,12 @@ def structured_completion(
 
     ``extra_body`` reaches vLLM verbatim — used to carry ``chat_template_kwargs`` such as
     ``enable_thinking`` for models whose template gates reasoning on it.
+
+    ``user_prompt`` may be a list of OpenAI content parts rather than a string, which is
+    how the Interpreter sends images (ADR 0019). Widening the annotation is deliberate:
+    the list already flowed through untouched, and an accidental capability is not a
+    contract anyone can rely on. Only the Interpreter passes one — every other role is
+    text-only forever (ADR 0013).
     """
     lane = lane_for_role(role)
     client = _client(lane.base_url, timeout_seconds)
@@ -57,7 +66,7 @@ def structured_completion(
     last_error: Exception | None = None
 
     for attempt in range(max_retries):
-        messages: list[dict[str, str]] = [
+        messages: list[dict[str, object]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
